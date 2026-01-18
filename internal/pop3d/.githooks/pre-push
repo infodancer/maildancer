@@ -1,0 +1,24 @@
+#!/bin/bash
+#
+# Pre-push hook to run all checks before pushing.
+# This hook runs: build, lint, govulncheck, and tests.
+#
+# To install this hook, run: task hooks:install
+#
+# Related issue: https://github.com/infodancer/gotemplate/issues/4
+
+set -e
+
+echo "Running pre-push checks..."
+
+# Check if task is installed
+if ! command -v task &> /dev/null; then
+    echo "Error: 'task' is not installed."
+    echo "Please install Task from https://taskfile.dev/installation/"
+    exit 1
+fi
+
+# Run all checks
+task all
+
+echo "All pre-push checks passed!"

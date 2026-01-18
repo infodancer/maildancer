@@ -11,11 +11,11 @@ A production-ready, high-performance SMTP server written in idiomatic Go.
 - **Modular** - Clean interfaces allow plugging in custom authentication, filtering, and delivery backends
 - **Embeddable** - Use as a standalone daemon or embed the library in your own applications
 
-This module is part of a mail server suite alongside [pop3d](https://github.com/infodancer/maildancer/internal/pop3d), [imapd](https://github.com/infodancer/maildancer/internal/imapd), and [messagestore](https://github.com/infodancer/messagestore). The `smtpd` handles SMTP protocol concerns only; message storage and delivery are delegated to the `messagestore` module via well-defined interfaces.
+This module is part of a mail server suite alongside [pop3d](https://github.com/infodancer/maildancer/internal/pop3d), [imapd](https://github.com/infodancer/maildancer/internal/imapd), and [msgstore](https://github.com/infodancer/maildancer/msgstore). The `smtpd` handles SMTP protocol concerns only; message storage and delivery are delegated to the `msgstore` module via well-defined interfaces.
 
 ## Design Philosophy
 
-**Reject early, never bounce.** The smtpd validates all messages during the SMTP conversation and rejects invalid mail with appropriate 5xx response codes before accepting. Once a message is accepted (250 response to DATA), it is handed off to the delivery agent. The smtpd never generates bounce messages - if a bounce is needed after acceptance, that responsibility belongs to the messagestore.
+**Reject early, never bounce.** The smtpd validates all messages during the SMTP conversation and rejects invalid mail with appropriate 5xx response codes before accepting. Once a message is accepted (250 response to DATA), it is handed off to the delivery agent. The smtpd never generates bounce messages - if a bounce is needed after acceptance, that responsibility belongs to the msgstore.
 
 This design:
 - Reduces backscatter spam (bounces to forged addresses)
@@ -95,7 +95,7 @@ This design:
 │                         │                      │                 │
 │                         ▼                      ▼                 │
 │                  ┌─────────────┐       ┌──────────────┐         │
-│                  │    Auth     │       │   Delivery   │─────────┼──▶ messagestore
+│                  │    Auth     │       │   Delivery   │─────────┼──▶ msgstore
 │                  │  Provider   │       │    Agent     │         │
 │                  │ (interface) │       │  (interface) │         │
 │                  └─────────────┘       └──────────────┘         │
@@ -105,7 +105,7 @@ This design:
 
 ### Key Interfaces
 
-**DeliveryAgent** - Receives accepted messages after filtering. Implementations handle local mailbox delivery or queue for relay. The `messagestore` module provides the reference implementation.
+**DeliveryAgent** - Receives accepted messages after filtering. Implementations handle local mailbox delivery or queue for relay. The `msgstore` module provides the reference implementation.
 
 **AuthProvider** - Validates user credentials during SMTP AUTH. Can integrate with various backends (database, LDAP, PAM, etc.).
 
@@ -120,7 +120,7 @@ The smtpd can be deployed in two modes:
 
 ## Configuration
 
-Configuration uses TOML format with section support, allowing a single configuration file to be shared across the mail server suite (smtpd, pop3d, imapd, messagestore).
+Configuration uses TOML format with section support, allowing a single configuration file to be shared across the mail server suite (smtpd, pop3d, imapd, msgstore).
 
 ```toml
 [smtpd]
@@ -152,7 +152,7 @@ min_version = "TLS1.2"
 [imapd]
 # imapd-specific settings (separate daemon)
 
-[messagestore]
+[msgstore]
 # shared message storage settings
 ```
 
@@ -215,11 +215,11 @@ package main
 
 import (
     "github.com/infodancer/maildancer/internal/smtpd"
-    "github.com/infodancer/messagestore"
+    "github.com/infodancer/maildancer/msgstore"
 )
 
 func main() {
-    store := messagestore.New(...)
+    store := msgstore.New(...)
 
     server := smtpd.New(
         smtpd.WithAddress(":25"),
@@ -236,7 +236,7 @@ func main() {
 
 - [pop3d](https://github.com/infodancer/maildancer/internal/pop3d) - POP3 server
 - [imapd](https://github.com/infodancer/maildancer/internal/imapd) - IMAP server
-- [messagestore](https://github.com/infodancer/messagestore) - Message storage backend
+- [msgstore](https://github.com/infodancer/maildancer/msgstore) - Message storage backend
 
 ## Development
 

@@ -1,0 +1,35 @@
+# Mail Server Configuration
+# Shared by smtpd, pop3d, msgstore
+
+[smtpd]
+hostname = "mail.example.com"
+log_level = "info"
+
+[smtpd.tls]
+cert_file = "/etc/ssl/certs/mail.pem"
+key_file = "/etc/ssl/private/mail.key"
+min_version = "1.2"
+
+[smtpd.limits]
+max_message_size = 26214400  # 25 MB
+max_recipients = 100
+
+[smtpd.timeouts]
+connection = "5m"
+command = "1m"
+
+[[smtpd.listeners]]
+address = ":25"
+mode = "smtp"
+
+[[smtpd.listeners]]
+address = ":587"
+mode = "submission"
+
+[[smtpd.listeners]]
+address = ":465"
+mode = "smtps"
+
+# Future sections:
+# [pop3d]
+# [msgstore]

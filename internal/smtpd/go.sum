@@ -1,2 +1,4 @@
+github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk=
+github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/infodancer/maildancer/msgstore v0.0.0-20260118175617-5fc41afaac0b h1:NYpmx6N556oV3pkysTbWPjFrDsCoadAyIMnf0BePyOA=
 github.com/infodancer/maildancer/msgstore v0.0.0-20260118175617-5fc41afaac0b/go.mod h1:l8ooXfpt+UDDNSrg4IKQYglqRqIjp2Ei3GgOKdJVk00=

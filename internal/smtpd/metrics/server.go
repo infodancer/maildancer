@@ -1,6 +1,10 @@
 package metrics
 
-import "context"
+import (
+	"context"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 // Config holds the configuration for the metrics server.
 type Config struct {
@@ -24,8 +28,15 @@ func (n *NoopServer) Shutdown(ctx context.Context) error {
 }
 
 // New creates a new Collector and Server based on the provided configuration.
-// Currently returns no-op implementations. When Prometheus support is added,
-// this function will return real implementations when cfg.Enabled is true.
+// When cfg.Enabled is true, returns Prometheus implementations.
+// When cfg.Enabled is false, returns no-op implementations.
 func New(cfg Config) (Collector, Server) {
-	return &NoopCollector{}, &NoopServer{}
+	if !cfg.Enabled {
+		return &NoopCollector{}, &NoopServer{}
+	}
+
+	collector := NewPrometheusCollector(prometheus.DefaultRegisterer)
+	server := NewPrometheusServer(cfg.Address, cfg.Path)
+
+	return collector, server
 }

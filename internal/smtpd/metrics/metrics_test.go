@@ -54,53 +54,41 @@ func TestNoopServerShutdown(t *testing.T) {
 	}
 }
 
-func TestNew(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  Config
-	}{
-		{
-			name: "disabled metrics",
-			cfg: Config{
-				Enabled: false,
-				Address: ":9100",
-				Path:    "/metrics",
-			},
-		},
-		{
-			name: "enabled metrics returns noop for now",
-			cfg: Config{
-				Enabled: true,
-				Address: ":9100",
-				Path:    "/metrics",
-			},
-		},
+func TestNewDisabledMetrics(t *testing.T) {
+	cfg := Config{
+		Enabled: false,
+		Address: ":9100",
+		Path:    "/metrics",
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			collector, server := New(tt.cfg)
+	collector, server := New(cfg)
 
-			if collector == nil {
-				t.Error("New() returned nil collector")
-			}
+	if collector == nil {
+		t.Error("New() returned nil collector")
+	}
 
-			if server == nil {
-				t.Error("New() returned nil server")
-			}
+	if server == nil {
+		t.Error("New() returned nil server")
+	}
 
-			// Verify the collector works
-			collector.ConnectionOpened()
-			collector.ConnectionClosed()
+	// Verify we got noop implementations
+	if _, ok := collector.(*NoopCollector); !ok {
+		t.Errorf("expected *NoopCollector, got %T", collector)
+	}
+	if _, ok := server.(*NoopServer); !ok {
+		t.Errorf("expected *NoopServer, got %T", server)
+	}
 
-			// Verify the server works
-			ctx := context.Background()
-			if err := server.Start(ctx); err != nil {
-				t.Errorf("server.Start() error = %v", err)
-			}
-			if err := server.Shutdown(ctx); err != nil {
-				t.Errorf("server.Shutdown() error = %v", err)
-			}
-		})
+	// Verify the collector works
+	collector.ConnectionOpened()
+	collector.ConnectionClosed()
+
+	// Verify the server works (noop returns immediately)
+	ctx := context.Background()
+	if err := server.Start(ctx); err != nil {
+		t.Errorf("server.Start() error = %v", err)
+	}
+	if err := server.Shutdown(ctx); err != nil {
+		t.Errorf("server.Shutdown() error = %v", err)
 	}
 }

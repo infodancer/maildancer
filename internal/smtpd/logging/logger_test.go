@@ -40,14 +40,14 @@ func TestWithConnection(t *testing.T) {
 	handler := slog.NewTextHandler(&buf, nil)
 	logger := slog.New(handler)
 
-	connLogger := WithConnection(logger, "192.168.1.1:12345")
+	connLogger := WithConnection(logger, "127.0.0.1:12345")
 	connLogger.Info("test message")
 
 	output := buf.String()
 	if !strings.Contains(output, "conn_id=") {
 		t.Error("expected conn_id in log output")
 	}
-	if !strings.Contains(output, "remote_addr=192.168.1.1:12345") {
+	if !strings.Contains(output, "remote_addr=127.0.0.1:12345") {
 		t.Error("expected remote_addr in log output")
 	}
 }
@@ -58,8 +58,8 @@ func TestWithConnectionIncrementsID(t *testing.T) {
 	logger := slog.New(handler)
 
 	// Get two connection loggers
-	conn1 := WithConnection(logger, "192.168.1.1:1")
-	conn2 := WithConnection(logger, "192.168.1.1:2")
+	conn1 := WithConnection(logger, "127.0.0.1:1")
+	conn2 := WithConnection(logger, "127.0.0.1:2")
 
 	// Log from both
 	conn1.Info("first")

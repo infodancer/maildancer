@@ -24,7 +24,7 @@ type mockConn struct {
 func newMockConn() *mockConn {
 	return &mockConn{
 		localAddr:  &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 25},
-		remoteAddr: &net.TCPAddr{IP: net.ParseIP("192.168.1.100"), Port: 54321},
+		remoteAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 54321},
 	}
 }
 

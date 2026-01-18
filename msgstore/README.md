@@ -55,6 +55,72 @@ type MessageStore interface {
 }
 ```
 
+### KeyProvider
+
+Provides public keys for encrypting messages before storage.
+
+```go
+type KeyProvider interface {
+    GetPublicKey(ctx context.Context, mailbox string) ([]byte, error)
+}
+```
+
+### DecryptingStore
+
+Wraps MessageStore to provide transparent decryption during authenticated sessions.
+
+```go
+type DecryptingStore interface {
+    MessageStore
+    SetSessionKey(key []byte)
+    ClearSessionKey()
+}
+```
+
+## Encryption
+
+msgstore supports encrypted message storage where messages are encrypted in memory before being written to disk. This ensures no decrypted message content is ever persisted to storage.
+
+### Design Principles
+
+- **Encryption at rest**: Messages encrypted before any disk write
+- **No plaintext on disk**: Decryption happens only in memory during authenticated sessions
+- **Standard client compatibility**: Server-side decryption allows standard POP3 clients to work unchanged
+
+### Data Flow
+
+**Delivery (encryption):**
+```
+smtpd → DeliveryAgent.Deliver(plaintext) → msgstore encrypts in memory → writes ciphertext
+```
+
+**Retrieval (decryption):**
+```
+pop3d auth → SetSessionKey() → MessageStore.Retrieve() → decrypt in memory → return plaintext
+```
+
+### Protocol Support
+
+| Protocol | Status | Notes |
+|----------|--------|-------|
+| POP3 | Supported | Full message retrieval works naturally |
+| IMAP | Deferred | SEARCH/SORT require server-side content access |
+
+### Encryption Metadata
+
+The `Envelope.Encryption` field tracks encryption state:
+
+```go
+type EncryptionInfo struct {
+    Algorithm string  // e.g., "x25519-xsalsa20-poly1305"
+    Encrypted bool
+}
+```
+
+### Recommended Algorithm
+
+X25519 key exchange with XSalsa20-Poly1305 authenticated encryption (NaCl/libsodium box).
+
 ## Planned Storage Backends
 
 - Maildir (initial implementation)

@@ -38,3 +38,19 @@ type MessageInfo struct {
 	// Flags contains message flags (e.g., "\Seen", "\Deleted", "\Answered").
 	Flags []string
 }
+
+// DecryptingStore wraps MessageStore to provide transparent decryption.
+// Used by pop3d to decrypt messages during an authenticated session.
+// The session key must be set after successful authentication.
+type DecryptingStore interface {
+	MessageStore
+
+	// SetSessionKey provides the user's decrypted private key for this session.
+	// Called after successful authentication to enable message decryption.
+	// The key is held in memory only for the duration of the session.
+	SetSessionKey(key []byte)
+
+	// ClearSessionKey removes the session key from memory.
+	// Called when the session ends to ensure key material is not retained.
+	ClearSessionKey()
+}

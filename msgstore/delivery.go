@@ -35,5 +35,6 @@ type Envelope struct {
 
 	// Encryption contains metadata about message encryption.
 	// nil indicates plaintext (unencrypted) message.
+	// Note: smtpd encrypts before delivery, msgstore only stores the blob.
 	Encryption *EncryptionInfo
 }

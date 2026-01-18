@@ -55,56 +55,34 @@ type MessageStore interface {
 }
 ```
 
-### KeyProvider
-
-Provides public keys for encrypting messages before storage.
-
-```go
-type KeyProvider interface {
-    GetPublicKey(ctx context.Context, mailbox string) ([]byte, error)
-}
-```
-
-### DecryptingStore
-
-Wraps MessageStore to provide transparent decryption during authenticated sessions.
-
-```go
-type DecryptingStore interface {
-    MessageStore
-    SetSessionKey(key []byte)
-    ClearSessionKey()
-}
-```
-
 ## Encryption
 
-msgstore supports encrypted message storage where messages are encrypted in memory before being written to disk. This ensures no decrypted message content is ever persisted to storage.
+msgstore supports encrypted message storage as a pure blob store. **msgstore never sees decrypted data** - encryption and decryption are the responsibility of the protocol daemons.
 
-### Design Principles
+### Security Boundaries
 
-- **Encryption at rest**: Messages encrypted before any disk write
-- **No plaintext on disk**: Decryption happens only in memory during authenticated sessions
-- **Standard client compatibility**: Server-side decryption allows standard POP3 clients to work unchanged
+| Component | Responsibility |
+|-----------|---------------|
+| smtpd | Encrypts messages using recipient's public key before delivery |
+| msgstore | Stores and retrieves encrypted blobs only |
+| pop3d | Decrypts messages using user's private key after retrieval |
+| automation | Connects as a client with its own keypair |
 
 ### Data Flow
 
-**Delivery (encryption):**
 ```
-smtpd → DeliveryAgent.Deliver(plaintext) → msgstore encrypts in memory → writes ciphertext
-```
+┌────────────────────────────────────────────────────────────────┐
+│                         DELIVERY                               │
+│  [plaintext] → smtpd encrypts → DeliveryAgent → msgstore       │
+│                                                  (ciphertext)  │
+└────────────────────────────────────────────────────────────────┘
 
-**Retrieval (decryption):**
+┌────────────────────────────────────────────────────────────────┐
+│                         RETRIEVAL                              │
+│  msgstore → MessageStore.Retrieve() → pop3d decrypts → [plain] │
+│  (ciphertext)                                                  │
+└────────────────────────────────────────────────────────────────┘
 ```
-pop3d auth → SetSessionKey() → MessageStore.Retrieve() → decrypt in memory → return plaintext
-```
-
-### Protocol Support
-
-| Protocol | Status | Notes |
-|----------|--------|-------|
-| POP3 | Supported | Full message retrieval works naturally |
-| IMAP | Deferred | SEARCH/SORT require server-side content access |
 
 ### Encryption Metadata
 
@@ -116,6 +94,17 @@ type EncryptionInfo struct {
     Encrypted bool
 }
 ```
+
+### Protocol Support
+
+| Protocol | Status | Notes |
+|----------|--------|-------|
+| POP3 | Supported | Full message retrieval, client decrypts |
+| IMAP | Deferred | SEARCH/SORT require plaintext access |
+
+### Automation Services
+
+Automation services (mailing lists, etc.) operate as clients with their own keypairs. They retrieve encrypted messages, decrypt with their service key, process, re-encrypt for each recipient, and deliver back through msgstore.
 
 ### Recommended Algorithm
 

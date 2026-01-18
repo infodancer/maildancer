@@ -7,29 +7,30 @@ import "context"
 
 // Collector defines the interface for recording SMTP server metrics.
 type Collector interface {
-	// Connection metrics
+	// Connection metrics (no domain - happens before HELO)
 	ConnectionOpened()
 	ConnectionClosed()
 	TLSConnectionEstablished()
 
-	// Message metrics
-	MessageReceived(sizeBytes int64)
-	MessageRejected(reason string)
+	// Message metrics (recipient domain first)
+	MessageReceived(recipientDomain string, sizeBytes int64)
+	MessageRejected(recipientDomain string, reason string)
 
-	// Authentication metrics
-	AuthAttempt(success bool)
+	// Authentication metrics (authenticated user's domain)
+	AuthAttempt(authDomain string, success bool)
 
-	// Command metrics
+	// Command metrics (no domain - too granular)
 	CommandProcessed(command string)
 
-	// Delivery metrics
-	DeliveryCompleted(success bool)
+	// Delivery metrics (recipient domain first)
+	// result should be "success", "temp_failure", or "perm_failure"
+	DeliveryCompleted(recipientDomain string, result string)
 
-	// Anti-spam metrics
-	SPFCheckCompleted(result string)
-	DKIMCheckCompleted(result string)
-	DMARCCheckCompleted(result string)
-	RBLHit(listName string)
+	// Anti-spam metrics (sender domain first - these validate the sender)
+	SPFCheckCompleted(senderDomain string, result string)
+	DKIMCheckCompleted(senderDomain string, result string)
+	DMARCCheckCompleted(senderDomain string, result string)
+	RBLHit(listName string) // IP-based, no domain
 }
 
 // Server defines the interface for a metrics HTTP server.

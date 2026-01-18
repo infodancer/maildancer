@@ -14,28 +14,28 @@ func (n *NoopCollector) ConnectionClosed() {}
 func (n *NoopCollector) TLSConnectionEstablished() {}
 
 // MessageReceived is a no-op.
-func (n *NoopCollector) MessageReceived(sizeBytes int64) {}
+func (n *NoopCollector) MessageReceived(recipientDomain string, sizeBytes int64) {}
 
 // MessageRejected is a no-op.
-func (n *NoopCollector) MessageRejected(reason string) {}
+func (n *NoopCollector) MessageRejected(recipientDomain string, reason string) {}
 
 // AuthAttempt is a no-op.
-func (n *NoopCollector) AuthAttempt(success bool) {}
+func (n *NoopCollector) AuthAttempt(authDomain string, success bool) {}
 
 // CommandProcessed is a no-op.
 func (n *NoopCollector) CommandProcessed(command string) {}
 
 // DeliveryCompleted is a no-op.
-func (n *NoopCollector) DeliveryCompleted(success bool) {}
+func (n *NoopCollector) DeliveryCompleted(recipientDomain string, result string) {}
 
 // SPFCheckCompleted is a no-op.
-func (n *NoopCollector) SPFCheckCompleted(result string) {}
+func (n *NoopCollector) SPFCheckCompleted(senderDomain string, result string) {}
 
 // DKIMCheckCompleted is a no-op.
-func (n *NoopCollector) DKIMCheckCompleted(result string) {}
+func (n *NoopCollector) DKIMCheckCompleted(senderDomain string, result string) {}
 
 // DMARCCheckCompleted is a no-op.
-func (n *NoopCollector) DMARCCheckCompleted(result string) {}
+func (n *NoopCollector) DMARCCheckCompleted(senderDomain string, result string) {}
 
 // RBLHit is a no-op.
 func (n *NoopCollector) RBLHit(listName string) {}

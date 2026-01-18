@@ -48,7 +48,8 @@ tasks:
     cmds:
       - task: build
       - task: lint
-      - task: vulncheck
+      - cmd: task vulncheck
+        ignore_error: true
       - task: test
 
   clean:

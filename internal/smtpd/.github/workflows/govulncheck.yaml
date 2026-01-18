@@ -21,7 +21,7 @@ jobs:
         with:
           go-version: stable
       - name: Configure git for private modules
-        run: git config --global url."https://${{ github.token }}@github.com/".insteadOf "https://github.com/"
+        run: git config --global url."https://x-access-token:${{ github.token }}@github.com/".insteadOf "https://github.com/"
       - id: govulncheck
         uses: golang/govulncheck-action@v1
         with:

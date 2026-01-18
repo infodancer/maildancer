@@ -211,6 +211,24 @@ address = ":9100"
 path = "/metrics"
 ```
 
+### Fetching Metrics Manually
+
+Metrics can be fetched directly with curl for debugging or monitoring without Prometheus:
+
+```bash
+# Fetch all metrics
+curl http://localhost:9100/metrics
+
+# Silent mode (no progress bar)
+curl -s http://localhost:9100/metrics
+
+# Filter specific metrics
+curl -s http://localhost:9100/metrics | grep smtpd_connections
+
+# Watch metrics in real-time (every 2 seconds)
+watch -n2 'curl -s http://localhost:9100/metrics | grep smtpd_connections'
+```
+
 ### Available Metrics
 
 **Connection Metrics**

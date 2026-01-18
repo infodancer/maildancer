@@ -414,7 +414,7 @@ func TestRCPTCommand(t *testing.T) {
 		matches1 := rcptPattern.FindStringSubmatch("RCPT TO:<user1@example.com>")
 		matches2 := rcptPattern.FindStringSubmatch("RCPT TO:<user2@example.com>")
 
-		cmd.Execute(ctx, session, matches1)
+		_, _ = cmd.Execute(ctx, session, matches1)
 		result, _ := cmd.Execute(ctx, session, matches2)
 
 		if result.Code != 250 {

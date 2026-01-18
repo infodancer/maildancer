@@ -46,6 +46,17 @@ A POP3 server implementation in idiomatic Go, focused solely on the POP3 protoco
 - **STARTTLS** (port 110) - Upgrade plaintext to TLS per RFC 2595
 - **SASL Authentication** - Extensible authentication framework per RFC 5034
 
+### Observability
+
+Prometheus metrics endpoint for monitoring:
+
+- Connection counts (active, total)
+- Command counters (by command type)
+- Authentication success/failure rates
+- Message retrieval statistics
+- Error rates
+- TLS/plaintext connection ratios
+
 ## Architecture
 
 ### Scope Boundaries

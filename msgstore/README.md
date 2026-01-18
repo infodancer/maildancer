@@ -1,6 +1,70 @@
-# gotemplate
+# msgstore
 
-A golang project template with actions already set up.
+Message storage library for the infodancer mail server suite. Provides a centralized storage layer used by smtpd, pop3d, and imapd.
+
+## Architecture
+
+```
+┌─────────┐     ┌─────────┐     ┌─────────┐
+│  smtpd  │     │  pop3d  │     │  imapd  │
+└────┬────┘     └────┬────┘     └────┬────┘
+     │               │               │
+     │ DeliveryAgent │ MessageStore  │ MessageStore
+     │ AuthProvider  │ AuthProvider  │ AuthProvider
+     │               │               │
+     └───────────────┴───────────────┘
+                     │
+              ┌──────┴──────┐
+              │  msgstore   │
+              └─────────────┘
+```
+
+## Interfaces
+
+### DeliveryAgent
+
+Used by smtpd to deliver accepted messages to storage after filtering.
+
+```go
+type DeliveryAgent interface {
+    Deliver(ctx context.Context, envelope Envelope, message io.Reader) error
+}
+```
+
+### AuthProvider
+
+Shared authentication interface for all mail daemons.
+
+```go
+type AuthProvider interface {
+    Authenticate(ctx context.Context, username, password string) (*User, error)
+}
+```
+
+### MessageStore
+
+Read-access interface for pop3d and imapd to retrieve messages.
+
+```go
+type MessageStore interface {
+    List(ctx context.Context, mailbox string) ([]MessageInfo, error)
+    Retrieve(ctx context.Context, mailbox string, uid string) (io.ReadCloser, error)
+    Delete(ctx context.Context, mailbox string, uid string) error
+    Expunge(ctx context.Context, mailbox string) error
+    Stat(ctx context.Context, mailbox string) (count int, totalBytes int64, err error)
+}
+```
+
+## Planned Storage Backends
+
+- Maildir (initial implementation)
+- Database-backed storage (future)
+
+## Related Projects
+
+- [smtpd](https://github.com/infodancer/smtpd) - SMTP daemon
+- [pop3d](https://github.com/infodancer/pop3d) - POP3 daemon
+- [imapd](https://github.com/infodancer/imapd) - IMAP daemon
 
 ## Prerequisites
 

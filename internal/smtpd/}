@@ -1,0 +1,201 @@
+
+internal/smtp/command.go
+``
+package smtp
+
+import (
+	"context"
+	"fmt"
+	"strings"
+)
+
+// SMTPCommand interface defines the contract for SMTP commands
+type SMTPCommand interface {
+	// Parse parses the command line and returns the command name and arguments
+	Parse(line string) (string, []string, error)
+	
+	// Execute processes the command with the given session and returns a result
+	Execute(ctx context.Context, session *SMTPSession, args []string) (SMTPResult, error)
+}
+
+// SMTPResult represents the result of processing an SMTP command
+type SMTPResult struct {
+	Code    int
+	Message string
+}
+
+// CommandFactory creates command instances
+type CommandFactory struct{}
+
+// NewCommandFactory creates a new command factory
+func NewCommandFactory() *CommandFactory {
+	return &CommandFactory{}
+}
+
+// CreateCommand creates a command instance based on the command name
+func (cf *CommandFactory) CreateCommand(cmdName string) (SMTPCommand, error) {
+	switch strings.ToUpper(cmdName) {
+	case "EHLO":
+		return &EHLOCommand{}, nil
+	case "HELO":
+		return &HELOCommand{}, nil
+	case "MAIL":
+		return &MAILCommand{}, nil
+	case "RCPT":
+		return &RCPTCommand{}, nil
+	case "DATA":
+		return &DATACommand{}, nil
+	case "RSET":
+		return &RSETCommand{}, nil
+	case "NOOP":
+		return &NOOPCommand{}, nil
+	case "QUIT":
+		return &QUITCommand{}, nil
+	default:
+		return nil, fmt.Errorf("unknown command: %s", cmdName)
+	}
+}
+
+// EHLOCommand implements the EHLO command
+type EHLOCommand struct{}
+
+func (c *EHLOCommand) Parse(line string) (string, []string, error) {
+	parts := strings.SplitN(strings.TrimSpace(line), " ", 2)
+	cmd := strings.ToUpper(parts[0])
+	var args []string
+	if len(parts) > 1 {
+		args = []string{parts[1]}
+	}
+	return cmd, args, nil
+}
+
+func (c *EHLOCommand) Execute(ctx context.Context, session *SMTPSession, args []string) (SMTPResult, error) {
+	session.SetHelo(args[0])
+	return SMTPResult{Code: 250, Message: "Hello " + args[0] + " [127.0.0.1]"}, nil
+}
+
+// HELOCommand implements the HELO command
+type HELOCommand struct{}
+
+func (c *HELOCommand) Parse(line string) (string, []string, error) {
+	parts := strings.SplitN(strings.TrimSpace(line), " ", 2)
+	cmd := strings.ToUpper(parts[0])
+	var args []string
+	if len(parts) > 1 {
+		args = []string{parts[1]}
+	}
+	return cmd, args, nil
+}
+
+func (c *HELOCommand) Execute(ctx context.Context, session *SMTPSession, args []string) (SMTPResult, error) {
+	session.SetHelo(args[0])
+	return SMTPResult{Code: 250, Message: "Hello " + args[0] + " [127.0.0.1]"}, nil
+}
+
+// MAILCommand implements the MAIL command
+type MAILCommand struct{}
+
+func (c *MAILCommand) Parse(line string) (string, []string, error) {
+	parts := strings.Split(line, " ")
+	cmd := strings.ToUpper(parts[0])
+	var args []string
+	for i := 1; i < len(parts); i++ {
+		if strings.TrimSpace(parts[i]) != "" {
+			args = append(args, strings.TrimSpace(parts[i]))
+		}
+	}
+	return cmd, args, nil
+}
+
+func (c *MAILCommand) Execute(ctx context.Context, session *SMTPSession, args []string) (SMTPResult, error) {
+	// Parse MAIL FROM
+	if len(args) == 0 {
+		return SMTPResult{Code: 501, Message: "Syntax error in parameters or arguments"}, nil
+	}
+	
+	// Simple validation
+	from := strings.Trim(args[0], "<>")
+	session.SetSender(from)
+	
+	return SMTPResult{Code: 250, Message: "OK"}, nil
+}
+
+// RCPTCommand implements the RCPT command
+type RCPTCommand struct{}
+
+func (c *RCPTCommand) Parse(line string) (string, []string, error) {
+	parts := strings.Split(line, " ")
+	cmd := strings.ToUpper(parts[0])
+	var args []string
+	for i := 1; i < len(parts); i++ {
+		if strings.TrimSpace(parts[i]) != "" {
+			args = append(args, strings.TrimSpace(parts[i]))
+		}
+	}
+	return cmd, args, nil
+}
+
+func (c *RCPTCommand) Execute(ctx context.Context, session *SMTPSession, args []string) (SMTPResult, error) {
+	// Parse RCPT TO
+	if len(args) == 0 {
+		return SMTPResult{Code: 501, Message: "Syntax error in parameters or arguments"}, nil
+	}
+	
+	// Simple validation
+	to := strings.Trim(args[0], "<>")
+	session.AddRecipient(to)
+	
+	return SMTPResult{Code: 250, Message: "OK"}, nil
+}
+
+// DATACommand implements the DATA command
+type DATACommand struct{}
+
+func (c *DATACommand) Parse(line string) (string, []string, error) {
+	cmd := strings.ToUpper(strings.TrimSpace(line))
+	return cmd, []string{}, nil
+}
+
+func (c *DATACommand) Execute(ctx context.Context, session *SMTPSession, args []string) (SMTPResult, error) {
+	// Prepare for data
+	session.SetInData(true)
+	
+	return SMTPResult{Code: 354, Message: "Start mail input; end with <CRLF>.<CRLF>"}, nil
+}
+
+// RSETCommand implements the RSET command
+type RSETCommand struct{}
+
+func (c *RSETCommand) Parse(line string) (string, []string, error) {
+	cmd := strings.ToUpper(strings.TrimSpace(line))
+	return cmd, []string{}, nil
+}
+
+func (c *RSETCommand) Execute(ctx context.Context, session *SMTPSession, args []string) (SMTPResult, error) {
+	session.Reset()
+	return SMTPResult{Code: 250, Message: "OK"}, nil
+}
+
+// NOOPCommand implements the NOOP command
+type NOOPCommand struct{}
+
+func (c *NOOPCommand) Parse(line string) (string, []string, error) {
+	cmd := strings.ToUpper(strings.TrimSpace(line))
+	return cmd, []string{}, nil
+}
+
+func (c *NOOPCommand) Execute(ctx context.Context, session *SMTPSession, args []string) (SMTPResult, error) {
+	return SMTPResult{Code: 250, Message: "OK"}, nil
+}
+
+// QUITCommand implements the QUIT command
+type QUITCommand struct{}
+
+func (c *QUITCommand) Parse(line string) (string, []string, error) {
+	cmd := strings.ToUpper(strings.TrimSpace(line))
+	return cmd, []string{}, nil
+}
+
+func (c *QUITCommand) Execute(ctx context.Context, session *SMTPSession, args []string) (SMTPResult, error) {
+	return SMTPResult{Code: 221, Message: "Goodbye"}, nil
+}

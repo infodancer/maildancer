@@ -1,2 +1,21 @@
 read: CONVENTIONS.md
 
+## Model Configuration
+# The prefix "ollama/" tells Aider to check your local Ollama instance
+model: ollama/qwen3-coder:latest
+
+## Connection Settings
+# Default Ollama port. Change this if running remotely (e.g. from your Strix to the 5090)
+openai-api-base: http://localhost:11434/v1
+openai-api-key: ollama  # Placeholder key required by some clients
+
+## Appearance & Behavior
+dark-mode: true
+show-diffs: true
+auto-commits: true      # Set to false if you want to review git changes manually
+
+## Performance & Context
+# Qwen3 usually handles 32k-128k well. 
+# Lower this if your Strix Halo RAM fills up, raise it for your 5090 if VRAM permits.
+map-tokens: 4096      # Size of the "repo map" (context about your whole codebase)
+cache-prompts: true     # Speeds up repeated queries

@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  BINARY_NAME: gotemplate
+  BINARY_NAME: pop3d
   BUILD_DIR: ./bin
 
 tasks:
@@ -14,7 +14,7 @@ tasks:
     desc: Build the Go binary
     cmds:
       - mkdir -p {{.BUILD_DIR}}
-      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/gotemplate
+      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/pop3d
     sources:
       - ./**/*.go
       - go.mod

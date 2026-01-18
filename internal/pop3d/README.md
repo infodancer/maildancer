@@ -56,52 +56,11 @@ This module is responsible for:
 - TLS/SSL handling (both implicit and STARTTLS)
 - Session management
 
-This module delegates to external interfaces:
-- **Message Storage** - Retrieving, listing, and deleting messages
-- **Authentication** - Validating user credentials
+This module imports interfaces from external modules:
+- **Message Storage** - Mailbox interface for retrieving, listing, and deleting messages
+- **Authentication** - Authenticator interface for validating user credentials
 
-### Interface Design
-
-```go
-// Mailbox provides access to a user's messages
-type Mailbox interface {
-    // Stat returns the number of messages and total size in octets
-    Stat() (count int, size int64, err error)
-
-    // List returns the size of message n (1-indexed), or all messages if n is 0
-    List(n int) ([]MessageInfo, error)
-
-    // Retr retrieves the full message content
-    Retr(n int) (io.ReadCloser, error)
-
-    // Dele marks a message for deletion
-    Dele(n int) error
-
-    // Rset unmarks all messages marked for deletion
-    Rset() error
-
-    // Top retrieves headers plus n lines of body
-    Top(msg int, lines int) (io.ReadCloser, error)
-
-    // Uidl returns unique IDs for messages
-    Uidl(n int) ([]UidlInfo, error)
-
-    // Commit finalizes deletions (called on QUIT from TRANSACTION state)
-    Commit() error
-
-    // Close releases resources without committing
-    Close() error
-}
-
-// Authenticator validates user credentials and returns a Mailbox
-type Authenticator interface {
-    // Authenticate validates credentials and returns a mailbox on success
-    Authenticate(username, password string) (Mailbox, error)
-
-    // AuthenticateAPOP validates APOP credentials (username, digest, timestamp)
-    AuthenticateAPOP(username, digest, timestamp string) (Mailbox, error)
-}
-```
+Interface definitions and implementations live in separate repositories, keeping this module focused purely on the POP3 protocol.
 
 ## Prerequisites
 

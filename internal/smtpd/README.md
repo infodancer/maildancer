@@ -198,6 +198,60 @@ The smtpd supports multiple listening modes with different security and authenti
 - Behaves like submission mode after TLS established
 - Reinstated as standard by RFC 8314
 
+## Observability
+
+The smtpd exposes metrics via Prometheus. A metrics endpoint is available for scraping by Prometheus or compatible collectors.
+
+### Metrics Endpoint
+
+```toml
+[smtpd.metrics]
+enabled = true
+address = ":9100"
+path = "/metrics"
+```
+
+### Available Metrics
+
+**Connection Metrics**
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `smtpd_connections_total` | Counter | `listener`, `ip` | Total connections by source IP |
+| `smtpd_connections_active` | Gauge | `listener` | Currently active connections |
+| `smtpd_tls_connections_total` | Counter | `listener`, `version` | TLS connections by protocol version |
+
+**Message Metrics**
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `smtpd_messages_received_total` | Counter | `listener`, `recipient_domain` | Messages received by recipient domain |
+| `smtpd_messages_rejected_total` | Counter | `listener`, `reason`, `recipient_domain` | Messages rejected by reason and domain |
+| `smtpd_messages_size_bytes` | Histogram | `listener` | Message size distribution |
+
+**Authentication Metrics**
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `smtpd_auth_attempts_total` | Counter | `listener`, `mechanism`, `result` | Auth attempts by mechanism and result |
+
+**Anti-Spam Metrics**
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `smtpd_spf_checks_total` | Counter | `result` | SPF check results (pass, fail, softfail, none) |
+| `smtpd_dkim_checks_total` | Counter | `result` | DKIM verification results |
+| `smtpd_dmarc_checks_total` | Counter | `result` | DMARC policy check results |
+| `smtpd_rbl_hits_total` | Counter | `list` | RBL/DNSBL hits by blocklist |
+| `smtpd_spam_score` | Histogram | `recipient_domain` | Spam score distribution by recipient domain |
+| `smtpd_spam_rejected_total` | Counter | `recipient_domain` | Messages rejected as spam by recipient domain |
+
+**Performance Metrics**
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `smtpd_command_duration_seconds` | Histogram | `command` | Command processing time |
+| `smtpd_delivery_duration_seconds` | Histogram | `result` | DeliveryAgent processing time |
+
+### Privacy Considerations
+
+Metrics are aggregated by **recipient domain** rather than individual recipient addresses to respect user privacy. Source IPs are tracked for connection metrics to support operational security monitoring (identifying abusive sources), but message-level metrics do not include sender-identifying information.
+
 ## Installation
 
 ### Standalone Server

@@ -48,6 +48,18 @@ func TestDefault(t *testing.T) {
 	if cfg.Timeouts.Command != "1m" {
 		t.Errorf("expected command timeout '1m', got %q", cfg.Timeouts.Command)
 	}
+
+	if cfg.Metrics.Enabled != false {
+		t.Errorf("expected metrics enabled 'false', got %v", cfg.Metrics.Enabled)
+	}
+
+	if cfg.Metrics.Address != ":9100" {
+		t.Errorf("expected metrics address ':9100', got %q", cfg.Metrics.Address)
+	}
+
+	if cfg.Metrics.Path != "/metrics" {
+		t.Errorf("expected metrics path '/metrics', got %q", cfg.Metrics.Path)
+	}
 }
 
 func TestValidate(t *testing.T) {
@@ -133,6 +145,42 @@ func TestValidate(t *testing.T) {
 			name: "valid alt mode",
 			modify: func(c *Config) {
 				c.Listeners = []ListenerConfig{{Address: ":2525", Mode: ModeAlt}}
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid metrics config enabled",
+			modify: func(c *Config) {
+				c.Metrics.Enabled = true
+				c.Metrics.Address = ":9100"
+				c.Metrics.Path = "/metrics"
+			},
+			wantErr: false,
+		},
+		{
+			name: "metrics enabled with empty address",
+			modify: func(c *Config) {
+				c.Metrics.Enabled = true
+				c.Metrics.Address = ""
+				c.Metrics.Path = "/metrics"
+			},
+			wantErr: true,
+		},
+		{
+			name: "metrics enabled with empty path",
+			modify: func(c *Config) {
+				c.Metrics.Enabled = true
+				c.Metrics.Address = ":9100"
+				c.Metrics.Path = ""
+			},
+			wantErr: true,
+		},
+		{
+			name: "metrics disabled allows empty address",
+			modify: func(c *Config) {
+				c.Metrics.Enabled = false
+				c.Metrics.Address = ""
+				c.Metrics.Path = ""
 			},
 			wantErr: false,
 		},

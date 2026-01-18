@@ -246,6 +246,69 @@ func TestApplyFlagsListenReplacesAllListeners(t *testing.T) {
 	}
 }
 
+func TestLoadMetricsConfig(t *testing.T) {
+	content := `
+[smtpd]
+hostname = "mail.example.com"
+
+[smtpd.metrics]
+enabled = true
+address = ":9200"
+path = "/custom-metrics"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.Metrics.Enabled {
+		t.Errorf("metrics.enabled = %v, want true", cfg.Metrics.Enabled)
+	}
+
+	if cfg.Metrics.Address != ":9200" {
+		t.Errorf("metrics.address = %q, want ':9200'", cfg.Metrics.Address)
+	}
+
+	if cfg.Metrics.Path != "/custom-metrics" {
+		t.Errorf("metrics.path = %q, want '/custom-metrics'", cfg.Metrics.Path)
+	}
+}
+
+func TestLoadMetricsConfigPartial(t *testing.T) {
+	content := `
+[smtpd]
+hostname = "mail.example.com"
+
+[smtpd.metrics]
+enabled = true
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// enabled should be set from file
+	if !cfg.Metrics.Enabled {
+		t.Errorf("metrics.enabled = %v, want true", cfg.Metrics.Enabled)
+	}
+
+	// address and path should use defaults
+	defaults := Default()
+	if cfg.Metrics.Address != defaults.Metrics.Address {
+		t.Errorf("metrics.address = %q, want default %q", cfg.Metrics.Address, defaults.Metrics.Address)
+	}
+
+	if cfg.Metrics.Path != defaults.Metrics.Path {
+		t.Errorf("metrics.path = %q, want default %q", cfg.Metrics.Path, defaults.Metrics.Path)
+	}
+}
+
 func TestFlagPriorityOverConfig(t *testing.T) {
 	content := `
 [smtpd]

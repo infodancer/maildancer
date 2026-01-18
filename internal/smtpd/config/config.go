@@ -36,6 +36,7 @@ type Config struct {
 	TLS       TLSConfig        `toml:"tls"`
 	Limits    LimitsConfig     `toml:"limits"`
 	Timeouts  TimeoutsConfig   `toml:"timeouts"`
+	Metrics   MetricsConfig    `toml:"metrics"`
 }
 
 // ListenerConfig defines settings for a single listener.
@@ -63,6 +64,13 @@ type TimeoutsConfig struct {
 	Command    string `toml:"command"`
 }
 
+// MetricsConfig holds configuration for Prometheus metrics.
+type MetricsConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Address string `toml:"address"`
+	Path    string `toml:"path"`
+}
+
 // Default returns a Config with sensible default values.
 func Default() Config {
 	return Config{
@@ -81,6 +89,11 @@ func Default() Config {
 		Timeouts: TimeoutsConfig{
 			Connection: "5m",
 			Command:    "1m",
+		},
+		Metrics: MetricsConfig{
+			Enabled: false,
+			Address: ":9100",
+			Path:    "/metrics",
 		},
 	}
 }
@@ -127,6 +140,15 @@ func (c *Config) Validate() error {
 	if c.TLS.MinVersion != "" {
 		if _, ok := minTLSVersions[c.TLS.MinVersion]; !ok {
 			return fmt.Errorf("invalid TLS min_version %q (valid: 1.0, 1.1, 1.2, 1.3)", c.TLS.MinVersion)
+		}
+	}
+
+	if c.Metrics.Enabled {
+		if c.Metrics.Address == "" {
+			return errors.New("metrics address is required when metrics are enabled")
+		}
+		if c.Metrics.Path == "" {
+			return errors.New("metrics path is required when metrics are enabled")
 		}
 	}
 

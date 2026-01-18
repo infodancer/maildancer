@@ -150,5 +150,18 @@ func mergeConfig(dst, src Config) Config {
 		dst.Timeouts.Command = src.Timeouts.Command
 	}
 
+	// Metrics: enabled is explicitly set (boolean), so we merge if source has any non-zero value
+	if src.Metrics.Enabled {
+		dst.Metrics.Enabled = src.Metrics.Enabled
+	}
+
+	if src.Metrics.Address != "" {
+		dst.Metrics.Address = src.Metrics.Address
+	}
+
+	if src.Metrics.Path != "" {
+		dst.Metrics.Path = src.Metrics.Path
+	}
+
 	return dst
 }

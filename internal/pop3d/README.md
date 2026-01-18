@@ -1,6 +1,66 @@
-# gotemplate
+# pop3d
 
-A golang project template with actions already set up.
+A POP3 server implementation in idiomatic Go, focused solely on the POP3 protocol with SSL/TLS support. Message storage and authentication are delegated to external modules via interfaces.
+
+## Relevant RFCs
+
+| RFC | Title | Description |
+|-----|-------|-------------|
+| [RFC 1939](https://datatracker.ietf.org/doc/html/rfc1939) | Post Office Protocol - Version 3 | Core POP3 specification defining commands, states, and responses |
+| [RFC 2449](https://datatracker.ietf.org/doc/html/rfc2449) | POP3 Extension Mechanism | CAPA command and extension framework (TOP, UIDL, etc.) |
+| [RFC 2595](https://datatracker.ietf.org/doc/html/rfc2595) | Using TLS with IMAP, POP3 and ACAP | STARTTLS extension for upgrading connections |
+| [RFC 8314](https://datatracker.ietf.org/doc/html/rfc8314) | Cleartext Considered Obsolete | Implicit TLS on port 995, modern security requirements |
+| [RFC 5034](https://datatracker.ietf.org/doc/html/rfc5034) | POP3 SASL Authentication | SASL authentication mechanism for POP3 |
+| [RFC 1734](https://datatracker.ietf.org/doc/html/rfc1734) | POP3 AUTHentication command | Original AUTH command (superseded by RFC 5034) |
+
+## Intended Features
+
+### Core POP3 Commands (RFC 1939)
+
+**AUTHORIZATION State:**
+- `USER` - Specify username
+- `PASS` - Specify password
+- `APOP` - APOP authentication (MD5-based challenge-response)
+- `QUIT` - End session
+
+**TRANSACTION State:**
+- `STAT` - Get mailbox status (message count and size)
+- `LIST` - List message sizes
+- `RETR` - Retrieve a message
+- `DELE` - Mark message for deletion
+- `NOOP` - No operation (keep-alive)
+- `RSET` - Reset deletion marks
+
+**UPDATE State:**
+- `QUIT` - Commit deletions and close connection
+
+### Extensions (RFC 2449)
+
+- `CAPA` - Capability advertisement
+- `TOP` - Retrieve message headers plus n lines of body
+- `UIDL` - Unique-ID listing for message tracking
+
+### Security
+
+- **Implicit TLS** (port 995) - Direct TLS connection per RFC 8314
+- **STARTTLS** (port 110) - Upgrade plaintext to TLS per RFC 2595
+- **SASL Authentication** - Extensible authentication framework per RFC 5034
+
+## Architecture
+
+### Scope Boundaries
+
+This module is responsible for:
+- POP3 protocol parsing and response generation
+- Connection state management (AUTHORIZATION, TRANSACTION, UPDATE)
+- TLS/SSL handling (both implicit and STARTTLS)
+- Session management
+
+This module imports interfaces from external modules:
+- **Message Storage** - Mailbox interface for retrieving, listing, and deleting messages
+- **Authentication** - Authenticator interface for validating user credentials
+
+Interface definitions and implementations live in separate repositories, keeping this module focused purely on the POP3 protocol.
 
 ## Prerequisites
 
@@ -46,3 +106,7 @@ task hooks:install
 ```
 
 This configures git to use the `.githooks` directory for hooks.
+
+## License
+
+See [LICENSE](LICENSE) for details.

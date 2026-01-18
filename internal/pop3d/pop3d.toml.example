@@ -1,0 +1,30 @@
+# POP3 Server Configuration
+# Shared by smtpd, pop3d, msgstore
+
+[pop3d]
+hostname = "mail.example.com"
+log_level = "info"
+
+[pop3d.tls]
+cert_file = "/etc/ssl/certs/mail.pem"
+key_file = "/etc/ssl/private/mail.key"
+min_version = "1.2"
+
+[pop3d.limits]
+max_connections = 100
+
+[pop3d.timeouts]
+connection = "10m"
+idle = "5m"
+
+[[pop3d.listeners]]
+address = ":110"
+mode = "pop3"
+
+[[pop3d.listeners]]
+address = ":995"
+mode = "pop3s"
+
+# Future sections:
+# [smtpd]
+# [msgstore]

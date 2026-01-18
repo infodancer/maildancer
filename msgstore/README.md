@@ -55,6 +55,61 @@ type MessageStore interface {
 }
 ```
 
+## Encryption
+
+msgstore supports encrypted message storage as a pure blob store. **msgstore never sees decrypted data** - encryption and decryption are the responsibility of the protocol daemons.
+
+### Security Boundaries
+
+| Component | Responsibility |
+|-----------|---------------|
+| smtpd | Encrypts messages using recipient's public key before delivery |
+| msgstore | Stores and retrieves encrypted blobs only |
+| pop3d | Decrypts messages using user's private key after retrieval |
+| automation | Connects as a client with its own keypair |
+
+### Data Flow
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                         DELIVERY                               │
+│  [plaintext] → smtpd encrypts → DeliveryAgent → msgstore       │
+│                                                  (ciphertext)  │
+└────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────┐
+│                         RETRIEVAL                              │
+│  msgstore → MessageStore.Retrieve() → pop3d decrypts → [plain] │
+│  (ciphertext)                                                  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Encryption Metadata
+
+The `Envelope.Encryption` field tracks encryption state:
+
+```go
+type EncryptionInfo struct {
+    Algorithm string  // e.g., "x25519-xsalsa20-poly1305"
+    Encrypted bool
+}
+```
+
+### Protocol Support
+
+| Protocol | Status | Notes |
+|----------|--------|-------|
+| POP3 | Supported | Full message retrieval, client decrypts |
+| IMAP | Deferred | SEARCH/SORT require plaintext access |
+
+### Automation Services
+
+Automation services (mailing lists, etc.) operate as clients with their own keypairs. They retrieve encrypted messages, decrypt with their service key, process, re-encrypt for each recipient, and deliver back through msgstore.
+
+### Recommended Algorithm
+
+X25519 key exchange with XSalsa20-Poly1305 authenticated encryption (NaCl/libsodium box).
+
 ## Planned Storage Backends
 
 - Maildir (initial implementation)

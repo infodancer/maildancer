@@ -60,6 +60,26 @@ type MessageStore interface {
 - Maildir (initial implementation)
 - Database-backed storage (future)
 
+## Observability
+
+Prometheus metrics support for monitoring, aggregated at the domain level to respect user privacy.
+
+### Delivery Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `msgstore_deliveries_total` | Counter | domain, status | Total message deliveries |
+| `msgstore_delivery_duration_seconds` | Histogram | domain | Delivery latency |
+| `msgstore_delivery_size_bytes` | Histogram | domain | Message sizes |
+
+### Authentication Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `msgstore_auth_attempts_total` | Counter | domain, status | Authentication attempts |
+
+The `status` label indicates success or failure (e.g., `success`, `failed`).
+
 ## Related Projects
 
 - [smtpd](https://github.com/infodancer/smtpd) - SMTP daemon

@@ -15,13 +15,25 @@ This module is part of a mail server suite alongside [pop3d](https://github.com/
 
 ## Design Philosophy
 
-**Reject early, never bounce.** The smtpd validates all messages during the SMTP conversation and rejects invalid mail with appropriate 5xx response codes before accepting. Once a message is accepted (250 response to DATA), it is handed off to the delivery agent. The smtpd never generates bounce messages - if a bounce is needed after acceptance, that responsibility belongs to the msgstore.
+**Reject early, never bounce.** The smtpd validates messages during the SMTP conversation and rejects invalid mail with appropriate response codes. Validation occurs at multiple stages:
+
+1. **Connection phase** - IP-based checks (RBL, rate limits)
+2. **MAIL FROM** - Sender validation (SPF, domain checks)
+3. **RCPT TO** - Recipient validation (local user verification)
+4. **DATA content** - Message inspection (DKIM, DMARC, content filtering)
+
+After the client sends message content, the smtpd passes the message to the DeliveryAgent. The final response to the client reflects the DeliveryAgent's status:
+- `250` - Message accepted for delivery
+- `4xx` - Temporary failure (client should retry)
+- `5xx` - Permanent failure (message rejected)
+
+The smtpd never generates bounce messages after the SMTP conversation ends. All success, temporary failure, and permanent failure conditions are reported synchronously to the sending MTA.
 
 This design:
-- Reduces backscatter spam (bounces to forged addresses)
+- Reduces backscatter spam (no bounces to forged addresses)
 - Provides immediate feedback to legitimate senders
+- Ensures delivery failures are reported synchronously
 - Keeps the smtpd focused on protocol handling
-- Simplifies error handling and message flow
 
 ## Features
 

@@ -59,7 +59,7 @@ This design:
 ### Operational
 - [ ] Structured logging (slog)
 - [ ] Metrics export (Prometheus-compatible)
-- [ ] Configuration via YAML/TOML and environment variables
+- [ ] Configuration via TOML and environment variables
 - [ ] Hot configuration reload (SIGHUP)
 
 ## RFC Compliance
@@ -79,6 +79,8 @@ This design:
 | [RFC 7208](https://datatracker.ietf.org/doc/html/rfc7208) | Sender Policy Framework (SPF) | Planned |
 | [RFC 6376](https://datatracker.ietf.org/doc/html/rfc6376) | DomainKeys Identified Mail (DKIM) Signatures | Planned |
 | [RFC 7489](https://datatracker.ietf.org/doc/html/rfc7489) | Domain-based Message Authentication (DMARC) | Planned |
+| [RFC 6409](https://datatracker.ietf.org/doc/html/rfc6409) | Message Submission for Mail | Planned |
+| [RFC 8314](https://datatracker.ietf.org/doc/html/rfc8314) | Cleartext Considered Obsolete: Use of TLS for Email | Planned |
 
 ## Architecture
 
@@ -109,6 +111,81 @@ This design:
 
 **Filter** - Pluggable message inspection. Built-in filters for SPF, DKIM, DMARC, RBL. External integration via Milter protocol and spamc.
 
+## Deployment
+
+The smtpd can be deployed in two modes:
+
+- **Standalone** - Run directly as a system daemon, managed by systemd or similar
+- **Docker** - Run within a container, suitable for orchestrated environments
+
+## Configuration
+
+Configuration uses TOML format with section support, allowing a single configuration file to be shared across the mail server suite (smtpd, pop3d, imapd, messagestore).
+
+```toml
+[smtpd]
+hostname = "mail.example.com"
+max_message_size = 26214400  # 25 MB
+max_recipients = 100
+
+[smtpd.listeners]
+  [smtpd.listeners.smtp]
+  address = ":25"
+  mode = "smtp"
+
+  [smtpd.listeners.submission]
+  address = ":587"
+  mode = "submission"
+
+  [smtpd.listeners.smtps]
+  address = ":465"
+  mode = "smtps"
+
+[smtpd.tls]
+cert_file = "/etc/smtpd/certs/mail.crt"
+key_file = "/etc/smtpd/certs/mail.key"
+min_version = "TLS1.2"
+
+[pop3d]
+# pop3d-specific settings (separate daemon)
+
+[imapd]
+# imapd-specific settings (separate daemon)
+
+[messagestore]
+# shared message storage settings
+```
+
+## Listening Modes
+
+The smtpd supports multiple listening modes with different security and authentication requirements:
+
+| Port | Mode | TLS | AUTH | Description |
+|------|------|-----|------|-------------|
+| 25 | SMTP | STARTTLS optional | Optional | MTA-to-MTA mail transfer |
+| 465 | SMTPS | Implicit TLS | Required | Secure submission (RFC 8314) |
+| 587 | Submission | STARTTLS required | Required | Mail submission from MUAs (RFC 6409) |
+| 2525 | Alt SMTP | STARTTLS optional | Optional | Alternative for blocked port 25 |
+
+### Mode Behaviors
+
+**SMTP (Port 25)**
+- Accepts mail from other mail servers
+- STARTTLS offered but not required
+- AUTH typically not required for delivery to local domains
+- Full anti-spam filtering (SPF, DKIM, DMARC, RBL)
+
+**Submission (Port 587)**
+- For authenticated users submitting outbound mail
+- STARTTLS required before AUTH (per RFC 6409)
+- AUTH required for all operations
+- Reduced anti-spam checks for authenticated users
+
+**SMTPS (Port 465)**
+- Implicit TLS - TLS handshake occurs immediately upon connection
+- Behaves like submission mode after TLS established
+- Reinstated as standard by RFC 8314
+
 ## Installation
 
 ### Standalone Server
@@ -128,7 +205,7 @@ go get github.com/infodancer/maildancer/internal/smtpd
 ### Standalone
 
 ```bash
-smtpd -config /etc/smtpd/config.yaml
+smtpd -config /etc/smtpd/config.toml
 ```
 
 ### Embedded

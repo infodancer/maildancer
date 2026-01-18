@@ -32,4 +32,8 @@ type Envelope struct {
 
 	// ClientHostname is the hostname provided in EHLO/HELO.
 	ClientHostname string
+
+	// Encryption contains metadata about message encryption.
+	// nil indicates plaintext (unencrypted) message.
+	Encryption *EncryptionInfo
 }

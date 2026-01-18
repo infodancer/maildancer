@@ -15,8 +15,12 @@ jobs:
   golangci:
     name: lint
     runs-on: ubuntu-latest
+    env:
+      GOPRIVATE: github.com/infodancer/*
     steps:
       - uses: actions/checkout@v4
+      - name: Configure git for private modules
+        run: git config --global url."https://${{ github.token }}@github.com/".insteadOf "https://github.com/"
       - uses: actions/setup-go@v5
         with:
           go-version: stable

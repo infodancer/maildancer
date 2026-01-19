@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/crypto/nacl/box"
 
-	"github.com/infodancer/maildancer/msgstore/errors"
+	autherrors "github.com/infodancer/auth/errors"
 )
 
 // mockDeliveryAgent records deliveries for testing.
@@ -42,7 +42,7 @@ type mockKeyProvider struct {
 func (m *mockKeyProvider) GetPublicKey(ctx context.Context, username string) ([]byte, error) {
 	key, ok := m.keys[username]
 	if !ok {
-		return nil, errors.ErrKeyNotFound
+		return nil, autherrors.ErrKeyNotFound
 	}
 	return key, nil
 }

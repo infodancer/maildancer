@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/infodancer/auth"
 	"golang.org/x/crypto/nacl/box"
 )
 
@@ -29,13 +30,13 @@ type EncryptingDeliveryAgent struct {
 	underlying DeliveryAgent
 
 	// keyProvider provides recipient public keys.
-	keyProvider KeyProvider
+	keyProvider auth.KeyProvider
 }
 
 // NewEncryptingDeliveryAgent creates a new encrypting delivery agent.
 // underlying is the delivery agent to wrap.
 // keyProvider is used to look up recipient public keys.
-func NewEncryptingDeliveryAgent(underlying DeliveryAgent, keyProvider KeyProvider) *EncryptingDeliveryAgent {
+func NewEncryptingDeliveryAgent(underlying DeliveryAgent, keyProvider auth.KeyProvider) *EncryptingDeliveryAgent {
 	return &EncryptingDeliveryAgent{
 		underlying:  underlying,
 		keyProvider: keyProvider,

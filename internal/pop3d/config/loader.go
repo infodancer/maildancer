@@ -197,5 +197,24 @@ func mergeConfig(dst, src Config) Config {
 		dst.Maildir = src.Maildir
 	}
 
+	// Merge auth config
+	if src.Auth.Type != "" {
+		dst.Auth.Type = src.Auth.Type
+	}
+	if src.Auth.CredentialBackend != "" {
+		dst.Auth.CredentialBackend = src.Auth.CredentialBackend
+	}
+	if src.Auth.KeyBackend != "" {
+		dst.Auth.KeyBackend = src.Auth.KeyBackend
+	}
+	if src.Auth.Options != nil {
+		if dst.Auth.Options == nil {
+			dst.Auth.Options = make(map[string]string)
+		}
+		for k, v := range src.Auth.Options {
+			dst.Auth.Options[k] = v
+		}
+	}
+
 	return dst
 }

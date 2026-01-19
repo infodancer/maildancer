@@ -77,6 +77,14 @@ type SMTPSession struct {
 	helo       string
 	sender     string
 	recipients []string
+
+	// Authentication state
+	authenticated bool
+	authUser      string
+	authMech      string
+
+	// TLS state
+	tlsActive bool
 }
 
 // NewSMTPSession creates a new SMTP session with the given connection info and config
@@ -151,13 +159,45 @@ func (s *SMTPSession) InData() bool {
 	return s.state == StateData
 }
 
-// Reset resets the session state for a new transaction (keeps HELO)
+// Reset resets the session state for a new transaction (keeps HELO and auth)
 func (s *SMTPSession) Reset() {
 	s.sender = ""
 	s.recipients = make([]string, 0)
 	if s.state != StateInit {
 		s.state = StateGreeted
 	}
+}
+
+// SetAuthenticated marks the session as authenticated with the given user and mechanism
+func (s *SMTPSession) SetAuthenticated(user, mechanism string) {
+	s.authenticated = true
+	s.authUser = user
+	s.authMech = mechanism
+}
+
+// IsAuthenticated returns whether the session is authenticated
+func (s *SMTPSession) IsAuthenticated() bool {
+	return s.authenticated
+}
+
+// GetAuthUser returns the authenticated username (empty if not authenticated)
+func (s *SMTPSession) GetAuthUser() string {
+	return s.authUser
+}
+
+// GetAuthMech returns the authentication mechanism used (empty if not authenticated)
+func (s *SMTPSession) GetAuthMech() string {
+	return s.authMech
+}
+
+// SetTLSActive marks the session as TLS-encrypted
+func (s *SMTPSession) SetTLSActive(active bool) {
+	s.tlsActive = active
+}
+
+// IsTLSActive returns whether the connection is TLS-encrypted
+func (s *SMTPSession) IsTLSActive() bool {
+	return s.tlsActive
 }
 
 // SMTPCommand interface defines the contract for SMTP commands using regexp patterns
@@ -172,7 +212,8 @@ type SMTPCommand interface {
 // SMTPResult represents the result of processing an SMTP command
 type SMTPResult struct {
 	Code    int
-	Message string
+	Message string   // Single-line message (backward compatible)
+	Lines   []string // Multi-line response (optional, overrides Message if present)
 }
 
 // CommandRegistry holds registered commands and matches input against them
@@ -181,18 +222,25 @@ type CommandRegistry struct {
 }
 
 // NewCommandRegistry creates a new command registry with all standard SMTP commands
-func NewCommandRegistry() *CommandRegistry {
+func NewCommandRegistry(hostname string, authAgent interface{}) *CommandRegistry {
+	commands := []SMTPCommand{
+		&EHLOCommand{hostname: hostname, authAgent: authAgent},
+		&HELOCommand{},
+		&MAILCommand{},
+		&RCPTCommand{},
+		&DATACommand{},
+		&RSETCommand{},
+		&NOOPCommand{},
+		&QUITCommand{},
+	}
+
+	// Add AUTH command if authentication agent is configured
+	if authAgent != nil {
+		commands = append([]SMTPCommand{&AUTHCommand{authAgent: authAgent}}, commands...)
+	}
+
 	return &CommandRegistry{
-		commands: []SMTPCommand{
-			&EHLOCommand{},
-			&HELOCommand{},
-			&MAILCommand{},
-			&RCPTCommand{},
-			&DATACommand{},
-			&RSETCommand{},
-			&NOOPCommand{},
-			&QUITCommand{},
-		},
+		commands: commands,
 	}
 }
 
@@ -219,7 +267,10 @@ var (
 )
 
 // EHLOCommand implements the EHLO command
-type EHLOCommand struct{}
+type EHLOCommand struct {
+	hostname  string
+	authAgent interface{} // auth.AuthenticationAgent (using interface{} to avoid import cycle)
+}
 
 func (c *EHLOCommand) Pattern() *regexp.Regexp {
 	return ehloPattern
@@ -241,7 +292,27 @@ func (c *EHLOCommand) Execute(ctx context.Context, session *SMTPSession, matches
 		clientIP = "unknown"
 	}
 
-	return SMTPResult{Code: 250, Message: "Hello " + domain + " [" + clientIP + "]"}, nil
+	// Build multi-line response with capabilities
+	hostname := c.hostname
+	if hostname == "" {
+		hostname = "localhost"
+	}
+
+	lines := []string{
+		hostname + " Hello " + domain + " [" + clientIP + "]",
+		"SIZE 26214400",
+		"8BITMIME",
+	}
+
+	// Add AUTH capability if auth agent is configured and conditions are met
+	if c.authAgent != nil {
+		// Only advertise AUTH if TLS is active or connection is from localhost
+		if session.IsTLSActive() || isLocalhost(clientIP) {
+			lines = append(lines, "AUTH PLAIN LOGIN")
+		}
+	}
+
+	return SMTPResult{Code: 250, Lines: lines}, nil
 }
 
 // HELOCommand implements the HELO command
@@ -381,4 +452,10 @@ func (c *QUITCommand) Pattern() *regexp.Regexp {
 
 func (c *QUITCommand) Execute(ctx context.Context, session *SMTPSession, matches []string) (SMTPResult, error) {
 	return SMTPResult{Code: 221, Message: "Goodbye"}, nil
+}
+
+// isLocalhost checks if the given IP address is a localhost address
+func isLocalhost(ip string) bool {
+	return ip == "127.0.0.1" || ip == "::1" ||
+		len(ip) > 4 && ip[:4] == "127." || ip == "localhost"
 }

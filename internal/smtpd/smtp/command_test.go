@@ -155,7 +155,7 @@ func TestSessionReset_FromInit(t *testing.T) {
 
 // TestCommandRegistry_Match tests the command registry matching
 func TestCommandRegistry_Match(t *testing.T) {
-	registry := NewCommandRegistry()
+	registry := NewCommandRegistry("test.example.com", nil)
 
 	tests := []struct {
 		name        string
@@ -250,8 +250,13 @@ func TestEHLOCommand(t *testing.T) {
 		if session.GetHelo() != "mail.example.com" {
 			t.Errorf("helo = %v, want mail.example.com", session.GetHelo())
 		}
-		if !strings.Contains(result.Message, "192.168.1.100") {
-			t.Errorf("response should contain client IP, got: %s", result.Message)
+		// EHLO returns multi-line response, check Lines instead of Message
+		if len(result.Lines) == 0 {
+			t.Errorf("expected multi-line response, got empty Lines")
+		}
+		allLines := strings.Join(result.Lines, " ")
+		if !strings.Contains(allLines, "192.168.1.100") {
+			t.Errorf("response should contain client IP, got: %v", result.Lines)
 		}
 	})
 
@@ -276,8 +281,10 @@ func TestEHLOCommand(t *testing.T) {
 
 		result, _ := cmd.Execute(ctx, session, matches)
 
-		if !strings.Contains(result.Message, "[unknown]") {
-			t.Errorf("response should contain [unknown], got: %s", result.Message)
+		// EHLO returns multi-line response, check Lines
+		allLines := strings.Join(result.Lines, " ")
+		if !strings.Contains(allLines, "[unknown]") {
+			t.Errorf("response should contain [unknown], got: %v", result.Lines)
 		}
 	})
 }
@@ -673,7 +680,7 @@ func TestPatternMatching(t *testing.T) {
 // TestFullSMTPConversation tests a complete SMTP conversation flow
 func TestFullSMTPConversation(t *testing.T) {
 	ctx := context.Background()
-	registry := NewCommandRegistry()
+	registry := NewCommandRegistry("test.example.com", nil)
 	session := newTestSession()
 
 	// Simulate a full SMTP conversation
@@ -705,8 +712,13 @@ func TestFullSMTPConversation(t *testing.T) {
 			if result.Code != c.expectedCode {
 				t.Errorf("Code = %d, want %d", result.Code, c.expectedCode)
 			}
-			if !strings.Contains(result.Message, c.expectedMsg) {
-				t.Errorf("Message = %q, want to contain %q", result.Message, c.expectedMsg)
+			// For multi-line responses (EHLO), check Lines; for single-line, check Message
+			responseText := result.Message
+			if len(result.Lines) > 0 {
+				responseText = strings.Join(result.Lines, " ")
+			}
+			if !strings.Contains(responseText, c.expectedMsg) {
+				t.Errorf("Response = %q, want to contain %q", responseText, c.expectedMsg)
 			}
 		})
 	}
@@ -723,7 +735,7 @@ func TestFullSMTPConversation(t *testing.T) {
 // TestRSETMidConversation tests RSET in the middle of a conversation
 func TestRSETMidConversation(t *testing.T) {
 	ctx := context.Background()
-	registry := NewCommandRegistry()
+	registry := NewCommandRegistry("test.example.com", nil)
 	session := newTestSession()
 
 	// Start a conversation

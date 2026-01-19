@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/logging"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
@@ -19,8 +20,9 @@ import (
 // hostname is the server's hostname for the greeting banner.
 // collector is used for recording metrics (can be nil for no-op).
 // delivery is used for storing messages after DATA (can be nil to reject all mail).
-func Handler(hostname string, collector metrics.Collector, delivery msgstore.DeliveryAgent) server.ConnectionHandler {
-	registry := NewCommandRegistry()
+// authAgent is used for SMTP authentication (can be nil to disable AUTH).
+func Handler(hostname string, collector metrics.Collector, delivery msgstore.DeliveryAgent, authAgent auth.AuthenticationAgent) server.ConnectionHandler {
+	registry := NewCommandRegistry(hostname, authAgent)
 
 	return func(ctx context.Context, conn *server.Connection) {
 		logger := logging.FromContext(ctx)
@@ -39,6 +41,9 @@ func Handler(hostname string, collector metrics.Collector, delivery msgstore.Del
 			ClientIP: clientIP,
 		}
 		session := NewSMTPSession(connInfo, DefaultSessionConfig())
+
+		// Initialize TLS state
+		session.SetTLSActive(conn.IsTLS())
 
 		// Send greeting
 		if err := writeResponse(conn, 220, hostname+" ESMTP ready"); err != nil {
@@ -172,7 +177,7 @@ func Handler(hostname string, collector metrics.Collector, delivery msgstore.Del
 			}
 
 			// Write response
-			if err := writeResponse(conn, result.Code, result.Message); err != nil {
+			if err := writeResult(conn, result); err != nil {
 				logger.Debug("failed to write response", "error", err.Error())
 				return
 			}
@@ -191,12 +196,37 @@ func Handler(hostname string, collector metrics.Collector, delivery msgstore.Del
 }
 
 // writeResponse writes an SMTP response to the connection.
+// For backward compatibility, accepts code and message parameters.
 func writeResponse(conn *server.Connection, code int, message string) error {
 	_, err := fmt.Fprintf(conn.Writer(), "%d %s\r\n", code, message)
 	if err != nil {
 		return err
 	}
 	return conn.Flush()
+}
+
+// writeResult writes an SMTP result to the connection, supporting multi-line responses.
+func writeResult(conn *server.Connection, result SMTPResult) error {
+	// If Lines is present, use multi-line format
+	if len(result.Lines) > 0 {
+		for i, line := range result.Lines {
+			var err error
+			if i < len(result.Lines)-1 {
+				// Continuation line
+				_, err = fmt.Fprintf(conn.Writer(), "%d-%s\r\n", result.Code, line)
+			} else {
+				// Last line
+				_, err = fmt.Fprintf(conn.Writer(), "%d %s\r\n", result.Code, line)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		return conn.Flush()
+	}
+
+	// Single-line format (backward compatible)
+	return writeResponse(conn, result.Code, result.Message)
 }
 
 // collectMessageData reads message content until the terminating dot.

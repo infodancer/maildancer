@@ -46,7 +46,7 @@ func startTestServer(t *testing.T, delivery *smtpd.MockDeliveryAgent) (string, f
 		t.Fatalf("failed to create server: %v", err)
 	}
 
-	handler := smtp.Handler("test.example.com", nil, delivery)
+	handler := smtp.Handler("test.example.com", nil, delivery, nil)
 	srv.SetHandler(handler)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -107,6 +107,28 @@ func (c *smtpClient) readResponse(t *testing.T) string {
 	return strings.TrimRight(line, "\r\n")
 }
 
+// readMultilineResponse reads a multi-line SMTP response and returns all lines
+func (c *smtpClient) readMultilineResponse(t *testing.T) []string {
+	t.Helper()
+
+	var lines []string
+	for {
+		_ = c.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		line, err := c.reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("failed to read response: %v", err)
+		}
+		line = strings.TrimRight(line, "\r\n")
+		lines = append(lines, line)
+
+		// Check if this is the last line (has space after code, not dash)
+		if len(line) >= 4 && line[3] == ' ' {
+			break
+		}
+	}
+	return lines
+}
+
 func (c *smtpClient) sendCommand(t *testing.T, cmd string) string {
 	t.Helper()
 
@@ -116,6 +138,17 @@ func (c *smtpClient) sendCommand(t *testing.T, cmd string) string {
 		t.Fatalf("failed to send command: %v", err)
 	}
 	return c.readResponse(t)
+}
+
+func (c *smtpClient) sendCommandMultiline(t *testing.T, cmd string) []string {
+	t.Helper()
+
+	_ = c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	_, err := fmt.Fprintf(c.conn, "%s\r\n", cmd)
+	if err != nil {
+		t.Fatalf("failed to send command: %v", err)
+	}
+	return c.readMultilineResponse(t)
 }
 
 func (c *smtpClient) sendData(t *testing.T, data string) {
@@ -142,14 +175,14 @@ func TestE2ESingleRecipientDelivery(t *testing.T) {
 		t.Fatalf("expected 220 greeting, got %q", greeting)
 	}
 
-	// EHLO
-	resp := client.sendCommand(t, "EHLO client.example.com")
-	if !strings.HasPrefix(resp, "250 ") {
-		t.Fatalf("expected 250 response to EHLO, got %q", resp)
+	// EHLO (multi-line response)
+	ehloResp := client.sendCommandMultiline(t, "EHLO client.example.com")
+	if len(ehloResp) == 0 || !strings.HasPrefix(ehloResp[0], "250") {
+		t.Fatalf("expected 250 response to EHLO, got %q", ehloResp)
 	}
 
 	// MAIL FROM
-	resp = client.sendCommand(t, "MAIL FROM:<sender@example.com>")
+	resp := client.sendCommand(t, "MAIL FROM:<sender@example.com>")
 	if !strings.HasPrefix(resp, "250 ") {
 		t.Fatalf("expected 250 response to MAIL FROM, got %q", resp)
 	}
@@ -230,7 +263,7 @@ func TestE2EMultipleRecipientDelivery(t *testing.T) {
 	_ = client.readResponse(t)
 
 	// EHLO
-	_ = client.sendCommand(t, "EHLO client.example.com")
+	_ = client.sendCommandMultiline(t, "EHLO client.example.com")
 
 	// MAIL FROM
 	_ = client.sendCommand(t, "MAIL FROM:<sender@example.com>")
@@ -292,7 +325,7 @@ func TestE2EDeliveryError(t *testing.T) {
 	_ = client.readResponse(t)
 
 	// Complete transaction
-	_ = client.sendCommand(t, "EHLO client.example.com")
+	_ = client.sendCommandMultiline(t, "EHLO client.example.com")
 	_ = client.sendCommand(t, "MAIL FROM:<sender@example.com>")
 	_ = client.sendCommand(t, "RCPT TO:<recipient@example.com>")
 	_ = client.sendCommand(t, "DATA")
@@ -323,7 +356,7 @@ func TestE2EDotStuffingRemoval(t *testing.T) {
 	_ = client.readResponse(t)
 
 	// Complete transaction setup
-	_ = client.sendCommand(t, "EHLO client.example.com")
+	_ = client.sendCommandMultiline(t, "EHLO client.example.com")
 	_ = client.sendCommand(t, "MAIL FROM:<sender@example.com>")
 	_ = client.sendCommand(t, "RCPT TO:<recipient@example.com>")
 	_ = client.sendCommand(t, "DATA")
@@ -365,7 +398,7 @@ func TestE2EMessageContentIntegrity(t *testing.T) {
 	_ = client.readResponse(t)
 
 	// Complete transaction setup
-	_ = client.sendCommand(t, "EHLO client.example.com")
+	_ = client.sendCommandMultiline(t, "EHLO client.example.com")
 	_ = client.sendCommand(t, "MAIL FROM:<sender@example.com>")
 	_ = client.sendCommand(t, "RCPT TO:<recipient@example.com>")
 	_ = client.sendCommand(t, "DATA")
@@ -423,7 +456,7 @@ func TestE2EMultipleTransactions(t *testing.T) {
 
 	// Read greeting
 	_ = client.readResponse(t)
-	_ = client.sendCommand(t, "EHLO client.example.com")
+	_ = client.sendCommandMultiline(t, "EHLO client.example.com")
 
 	// First transaction
 	_ = client.sendCommand(t, "MAIL FROM:<first@example.com>")

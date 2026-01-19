@@ -163,7 +163,7 @@ func TestHandlerGreeting(t *testing.T) {
 	mc, conn := createTestConnection("QUIT\r\n")
 	ctx := createTestContext()
 
-	handler := Handler("mail.example.com", nil, nil)
+	handler := Handler("mail.example.com", nil, nil, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
@@ -176,7 +176,7 @@ func TestHandlerEHLO(t *testing.T) {
 	mc, conn := createTestConnection("EHLO client.example.com\r\nQUIT\r\n")
 	ctx := createTestContext()
 
-	handler := Handler("mail.example.com", nil, nil)
+	handler := Handler("mail.example.com", nil, nil, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
@@ -187,8 +187,8 @@ func TestHandlerEHLO(t *testing.T) {
 		t.Errorf("expected 220 greeting, got %q", lines[0])
 	}
 
-	// Should have EHLO response with client IP
-	if !strings.HasPrefix(lines[1], "250 ") {
+	// Should have EHLO response with client IP (multi-line, so 250- prefix)
+	if !strings.HasPrefix(lines[1], "250-") && !strings.HasPrefix(lines[1], "250 ") {
 		t.Errorf("expected 250 response to EHLO, got %q", lines[1])
 	}
 	if !strings.Contains(lines[1], "client.example.com") {
@@ -203,7 +203,7 @@ func TestHandlerHELO(t *testing.T) {
 	mc, conn := createTestConnection("HELO client.example.com\r\nQUIT\r\n")
 	ctx := createTestContext()
 
-	handler := Handler("mail.example.com", nil, nil)
+	handler := Handler("mail.example.com", nil, nil, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
@@ -220,7 +220,7 @@ func TestHandlerBadSequence(t *testing.T) {
 	mc, conn := createTestConnection("MAIL FROM:<sender@example.com>\r\nQUIT\r\n")
 	ctx := createTestContext()
 
-	handler := Handler("mail.example.com", nil, nil)
+	handler := Handler("mail.example.com", nil, nil, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
@@ -236,15 +236,14 @@ func TestHandlerUnknownCommand(t *testing.T) {
 	mc, conn := createTestConnection("EHLO test.example\r\nFOOBAR\r\nQUIT\r\n")
 	ctx := createTestContext()
 
-	handler := Handler("mail.example.com", nil, nil)
+	handler := Handler("mail.example.com", nil, nil, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
-	lines := strings.Split(output, "\r\n")
 
 	// Should get 500 for unknown command
-	if !strings.HasPrefix(lines[2], "500 ") {
-		t.Errorf("expected 500 for unknown command, got %q", lines[2])
+	if !strings.Contains(output, "500 ") {
+		t.Errorf("expected 500 for unknown command in output, got %q", output)
 	}
 }
 
@@ -265,7 +264,7 @@ func TestHandlerFullTransaction(t *testing.T) {
 	ctx := createTestContext()
 
 	delivery := &mockDeliveryAgent{}
-	handler := Handler("mail.example.com", nil, delivery)
+	handler := Handler("mail.example.com", nil, delivery, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
@@ -327,7 +326,7 @@ func TestHandlerDotStuffing(t *testing.T) {
 	ctx := createTestContext()
 
 	delivery := &mockDeliveryAgent{}
-	handler := Handler("mail.example.com", nil, delivery)
+	handler := Handler("mail.example.com", nil, delivery, nil)
 	handler(ctx, conn)
 
 	_ = mc // suppress unused warning
@@ -354,7 +353,7 @@ func TestHandlerRSET(t *testing.T) {
 	mc, conn := createTestConnection(input)
 	ctx := createTestContext()
 
-	handler := Handler("mail.example.com", nil, nil)
+	handler := Handler("mail.example.com", nil, nil, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
@@ -369,7 +368,7 @@ func TestHandlerNOOP(t *testing.T) {
 	mc, conn := createTestConnection("EHLO test.example\r\nNOOP\r\nNOOP with params\r\nQUIT\r\n")
 	ctx := createTestContext()
 
-	handler := Handler("mail.example.com", nil, nil)
+	handler := Handler("mail.example.com", nil, nil, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
@@ -398,7 +397,7 @@ func TestHandlerMetrics(t *testing.T) {
 
 	collector := &mockCollector{}
 	delivery := &mockDeliveryAgent{}
-	handler := Handler("mail.example.com", collector, delivery)
+	handler := Handler("mail.example.com", collector, delivery, nil)
 	handler(ctx, conn)
 
 	if collector.connectionsOpened != 1 {
@@ -434,7 +433,7 @@ func TestHandlerNoDeliveryAgent(t *testing.T) {
 	mc, conn := createTestConnection(input)
 	ctx := createTestContext()
 
-	handler := Handler("mail.example.com", nil, nil)
+	handler := Handler("mail.example.com", nil, nil, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
@@ -463,7 +462,7 @@ func TestHandlerDeliveryError(t *testing.T) {
 
 	delivery := &mockDeliveryAgent{shouldError: true}
 	collector := &mockCollector{}
-	handler := Handler("mail.example.com", collector, delivery)
+	handler := Handler("mail.example.com", collector, delivery, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()
@@ -483,7 +482,7 @@ func TestHandlerQUITResponse(t *testing.T) {
 	mc, conn := createTestConnection("QUIT\r\n")
 	ctx := createTestContext()
 
-	handler := Handler("mail.example.com", nil, nil)
+	handler := Handler("mail.example.com", nil, nil, nil)
 	handler(ctx, conn)
 
 	output := mc.writeData.String()

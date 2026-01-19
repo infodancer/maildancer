@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"io"
 	"log/slog"
 	"net"
@@ -160,6 +161,12 @@ func (c *Connection) IsClosed() bool {
 // Use with caution; prefer the Connection methods.
 func (c *Connection) Underlying() net.Conn {
 	return c.conn
+}
+
+// IsTLS returns true if the connection is encrypted with TLS.
+func (c *Connection) IsTLS() bool {
+	_, ok := c.conn.(*tls.Conn)
+	return ok
 }
 
 // IdleMonitor runs in a goroutine to monitor for idle connections.

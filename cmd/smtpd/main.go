@@ -7,6 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/infodancer/maildancer/auth"
+	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd auth backend
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir storage backend
 	"github.com/infodancer/maildancer/internal/smtpd/config"
@@ -60,8 +62,26 @@ func main() {
 		srv.Logger().Info("delivery enabled", "type", cfg.Delivery.Type, "path", cfg.Delivery.BasePath)
 	}
 
+	// Create authentication agent if configured
+	var authAgent auth.AuthenticationAgent
+	if cfg.Auth.IsEnabled() {
+		agentConfig := auth.AuthAgentConfig{
+			Type:              cfg.Auth.AgentType,
+			CredentialBackend: cfg.Auth.CredentialBackend,
+			KeyBackend:        cfg.Auth.KeyBackend,
+			Options:           cfg.Auth.Options,
+		}
+		authAgent, err = auth.OpenAuthAgent(agentConfig)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error creating authentication agent: %v\n", err)
+			os.Exit(1)
+		}
+		defer authAgent.Close()
+		srv.Logger().Info("authentication enabled", "type", cfg.Auth.AgentType)
+	}
+
 	// Create and set the SMTP handler
-	handler := smtp.Handler(cfg.Hostname, collector, delivery)
+	handler := smtp.Handler(cfg.Hostname, collector, delivery, authAgent)
 	srv.SetHandler(handler)
 
 	// Set up context with signal handling for graceful shutdown

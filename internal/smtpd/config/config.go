@@ -47,6 +47,7 @@ type Config struct {
 	Metrics    MetricsConfig      `toml:"metrics"`
 	Delivery   DeliveryConfig     `toml:"delivery"`
 	Encryption EncryptionConfig   `toml:"encryption"`
+	Auth       AuthConfig         `toml:"auth"`
 }
 
 // EncryptionConfig holds configuration for message encryption.
@@ -113,6 +114,20 @@ type DeliveryConfig struct {
 	Type     string            `toml:"type"`      // Storage backend type (e.g., "maildir")
 	BasePath string            `toml:"base_path"` // Base path for storage
 	Options  map[string]string `toml:"options"`   // Backend-specific options
+}
+
+// AuthConfig holds configuration for SMTP authentication.
+type AuthConfig struct {
+	Enabled           bool              `toml:"enabled"`
+	AgentType         string            `toml:"agent_type"`          // Auth agent type (e.g., "passwd")
+	CredentialBackend string            `toml:"credential_backend"`  // Path to credential store
+	KeyBackend        string            `toml:"key_backend"`         // Path to key store
+	Options           map[string]string `toml:"options"`             // Backend-specific options
+}
+
+// IsEnabled returns true if authentication is enabled.
+func (c *AuthConfig) IsEnabled() bool {
+	return c.Enabled && c.AgentType != ""
 }
 
 // Default returns a Config with sensible default values.
@@ -203,6 +218,16 @@ func (c *Config) Validate() error {
 		}
 		if c.Encryption.KeyBackend == "" {
 			return errors.New("encryption.key_backend is required when encryption is enabled")
+		}
+	}
+
+	// Validate auth config
+	if c.Auth.Enabled {
+		if c.Auth.AgentType == "" {
+			return errors.New("auth.agent_type is required when authentication is enabled")
+		}
+		if c.Auth.CredentialBackend == "" {
+			return errors.New("auth.credential_backend is required when authentication is enabled")
 		}
 	}
 

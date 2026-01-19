@@ -31,6 +31,10 @@ type Collector interface {
 	DKIMCheckCompleted(senderDomain string, result string)
 	DMARCCheckCompleted(senderDomain string, result string)
 	RBLHit(listName string) // IP-based, no domain
+
+	// Rspamd metrics
+	// result should be "ham", "spam", "soft_reject", "greylist", or "error"
+	RspamdCheckCompleted(senderDomain string, result string, score float64)
 }
 
 // Server defines the interface for a metrics HTTP server.

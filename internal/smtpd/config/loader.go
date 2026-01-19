@@ -67,6 +67,9 @@ func Load(path string) (Config, error) {
 	// Then merge smtpd-specific config (takes precedence)
 	cfg = mergeConfig(cfg, fileConfig.Smtpd)
 
+	// Merge top-level spamcheck config (shared across services)
+	cfg = mergeSpamCheckConfig(cfg, fileConfig.SpamCheck)
+
 	return cfg, nil
 }
 
@@ -257,5 +260,34 @@ func mergeConfig(dst, src Config) Config {
 		}
 	}
 
+	// Merge spamcheck config (if defined in [smtpd.spamcheck])
+	dst = mergeSpamCheckConfig(dst, src.SpamCheck)
+
+	return dst
+}
+
+// mergeSpamCheckConfig merges spamcheck settings into the config.
+func mergeSpamCheckConfig(dst Config, src SpamCheckConfig) Config {
+	if src.Enabled {
+		dst.SpamCheck.Enabled = src.Enabled
+	}
+	if len(src.Checkers) > 0 {
+		dst.SpamCheck.Checkers = src.Checkers
+	}
+	if src.Mode != "" {
+		dst.SpamCheck.Mode = src.Mode
+	}
+	if src.FailMode != "" {
+		dst.SpamCheck.FailMode = src.FailMode
+	}
+	if src.RejectThreshold != 0 {
+		dst.SpamCheck.RejectThreshold = src.RejectThreshold
+	}
+	if src.TempFailThreshold != 0 {
+		dst.SpamCheck.TempFailThreshold = src.TempFailThreshold
+	}
+	if src.AddHeaders {
+		dst.SpamCheck.AddHeaders = src.AddHeaders
+	}
 	return dst
 }

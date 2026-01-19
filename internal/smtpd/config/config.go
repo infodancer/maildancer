@@ -25,8 +25,9 @@ const (
 // FileConfig is the top-level wrapper for the shared configuration file.
 // This allows smtpd, pop3d, and msgstore to share a single config file.
 type FileConfig struct {
-	Server ServerConfig `toml:"server"`
-	Smtpd  Config       `toml:"smtpd"`
+	Server    ServerConfig    `toml:"server"`
+	Smtpd     Config          `toml:"smtpd"`
+	SpamCheck SpamCheckConfig `toml:"spamcheck"`
 }
 
 // ServerConfig holds shared settings used by all mail services.
@@ -38,16 +39,17 @@ type ServerConfig struct {
 
 // Config holds the complete SMTP server configuration.
 type Config struct {
-	Hostname   string             `toml:"hostname"`
-	LogLevel   string             `toml:"log_level"`
-	Listeners  []ListenerConfig   `toml:"listeners"`
-	TLS        TLSConfig          `toml:"tls"`
-	Limits     LimitsConfig       `toml:"limits"`
-	Timeouts   TimeoutsConfig     `toml:"timeouts"`
-	Metrics    MetricsConfig      `toml:"metrics"`
-	Delivery   DeliveryConfig     `toml:"delivery"`
-	Encryption EncryptionConfig   `toml:"encryption"`
-	Auth       AuthConfig         `toml:"auth"`
+	Hostname   string           `toml:"hostname"`
+	LogLevel   string           `toml:"log_level"`
+	Listeners  []ListenerConfig `toml:"listeners"`
+	TLS        TLSConfig        `toml:"tls"`
+	Limits     LimitsConfig     `toml:"limits"`
+	Timeouts   TimeoutsConfig   `toml:"timeouts"`
+	Metrics    MetricsConfig    `toml:"metrics"`
+	Delivery   DeliveryConfig   `toml:"delivery"`
+	Encryption EncryptionConfig `toml:"encryption"`
+	Auth       AuthConfig       `toml:"auth"`
+	SpamCheck  SpamCheckConfig  `toml:"spamcheck"`
 }
 
 // EncryptionConfig holds configuration for message encryption.
@@ -123,6 +125,109 @@ type AuthConfig struct {
 	CredentialBackend string            `toml:"credential_backend"`  // Path to credential store
 	KeyBackend        string            `toml:"key_backend"`         // Path to key store
 	Options           map[string]string `toml:"options"`             // Backend-specific options
+}
+
+// SpamCheckFailMode defines the behavior when spam checkers are unavailable or error.
+type SpamCheckFailMode string
+
+const (
+	// SpamCheckFailOpen accepts the message when checkers are unavailable.
+	SpamCheckFailOpen SpamCheckFailMode = "open"
+	// SpamCheckFailTempFail returns a temporary failure (4xx) when checkers are unavailable.
+	SpamCheckFailTempFail SpamCheckFailMode = "tempfail"
+	// SpamCheckFailReject returns a permanent failure (5xx) when checkers are unavailable.
+	SpamCheckFailReject SpamCheckFailMode = "reject"
+)
+
+// SpamCheckConfig holds configuration for spam filtering.
+type SpamCheckConfig struct {
+	// Enabled indicates whether spam checking is enabled.
+	Enabled bool `toml:"enabled"`
+
+	// Checkers is the list of spam checkers to use.
+	Checkers []SpamCheckerConfig `toml:"checkers"`
+
+	// Mode determines how multiple checker results are aggregated.
+	// "first_reject" - reject if any checker says reject (default)
+	// "all_reject" - reject only if all checkers say reject
+	// "highest_score" - use the result with the highest score
+	Mode string `toml:"mode"`
+
+	// FailMode determines behavior when checkers are unavailable.
+	FailMode SpamCheckFailMode `toml:"fail_mode"`
+
+	// RejectThreshold is the score at or above which messages are rejected (5xx).
+	RejectThreshold float64 `toml:"reject_threshold"`
+
+	// TempFailThreshold is the score at or above which messages get temp failure (4xx).
+	TempFailThreshold float64 `toml:"tempfail_threshold"`
+
+	// AddHeaders indicates whether to add spam headers to messages.
+	AddHeaders bool `toml:"add_headers"`
+}
+
+// SpamCheckerConfig holds configuration for a single spam checker.
+type SpamCheckerConfig struct {
+	// Type is the checker type: "rspamd", "spamassassin", etc.
+	Type string `toml:"type"`
+
+	// Enabled indicates whether this checker is enabled (default true).
+	Enabled *bool `toml:"enabled"`
+
+	// URL is the endpoint for HTTP-based checkers.
+	URL string `toml:"url"`
+
+	// Password is the optional password/secret for the checker.
+	Password string `toml:"password"`
+
+	// Timeout is the request timeout (e.g., "10s").
+	Timeout string `toml:"timeout"`
+
+	// Options contains checker-specific options.
+	Options map[string]string `toml:"options"`
+}
+
+// IsEnabled returns true if spam checking is enabled and has at least one checker.
+func (c *SpamCheckConfig) IsEnabled() bool {
+	if !c.Enabled {
+		return false
+	}
+	for _, checker := range c.Checkers {
+		if checker.IsEnabled() {
+			return true
+		}
+	}
+	return false
+}
+
+// GetFailMode returns the fail mode, defaulting to tempfail if not set.
+func (c *SpamCheckConfig) GetFailMode() SpamCheckFailMode {
+	switch c.FailMode {
+	case SpamCheckFailOpen, SpamCheckFailTempFail, SpamCheckFailReject:
+		return c.FailMode
+	default:
+		return SpamCheckFailTempFail
+	}
+}
+
+// IsEnabled returns true if this checker is enabled.
+func (c *SpamCheckerConfig) IsEnabled() bool {
+	if c.Enabled == nil {
+		return true // default to enabled
+	}
+	return *c.Enabled
+}
+
+// GetTimeout returns the timeout as a time.Duration.
+func (c *SpamCheckerConfig) GetTimeout() time.Duration {
+	if c.Timeout == "" {
+		return 10 * time.Second
+	}
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil {
+		return 10 * time.Second
+	}
+	return d
 }
 
 // IsEnabled returns true if authentication is enabled.
@@ -228,6 +333,37 @@ func (c *Config) Validate() error {
 		}
 		if c.Auth.CredentialBackend == "" {
 			return errors.New("auth.credential_backend is required when authentication is enabled")
+		}
+	}
+
+	// Validate spamcheck config
+	if c.SpamCheck.Enabled {
+		for i, checker := range c.SpamCheck.Checkers {
+			if checker.Type == "" {
+				return fmt.Errorf("spamcheck.checkers[%d].type is required", i)
+			}
+			if checker.Timeout != "" {
+				if _, err := time.ParseDuration(checker.Timeout); err != nil {
+					return fmt.Errorf("invalid spamcheck.checkers[%d].timeout: %w", i, err)
+				}
+			}
+			// Validate checker-specific requirements
+			switch checker.Type {
+			case "rspamd":
+				if checker.URL == "" {
+					return fmt.Errorf("spamcheck.checkers[%d].url is required for rspamd", i)
+				}
+			case "spamassassin":
+				if checker.URL == "" {
+					return fmt.Errorf("spamcheck.checkers[%d].url is required for spamassassin", i)
+				}
+			}
+		}
+		switch c.SpamCheck.FailMode {
+		case "", SpamCheckFailOpen, SpamCheckFailTempFail, SpamCheckFailReject:
+			// valid
+		default:
+			return fmt.Errorf("invalid spamcheck.fail_mode %q (valid: open, tempfail, reject)", c.SpamCheck.FailMode)
 		}
 	}
 

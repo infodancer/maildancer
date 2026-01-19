@@ -13,8 +13,10 @@ import (
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir storage backend
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
+	"github.com/infodancer/maildancer/internal/smtpd/rspamd"
 	"github.com/infodancer/maildancer/internal/smtpd/server"
 	"github.com/infodancer/maildancer/internal/smtpd/smtp"
+	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -84,8 +86,22 @@ func main() {
 		srv.Logger().Info("authentication enabled", "type", cfg.Auth.AgentType)
 	}
 
+	// Create spam checker from config
+	spamChecker, spamCheckConfig := createSpamChecker(cfg, srv)
+	if spamChecker != nil {
+		defer func() {
+			if err := spamChecker.Close(); err != nil {
+				srv.Logger().Error("error closing spam checker", "error", err)
+			}
+		}()
+	}
+
 	// Create and set the SMTP handler
-	handler := smtp.Handler(cfg.Hostname, collector, delivery, authAgent, srv.TLSConfig())
+	handlerOpts := &smtp.HandlerOptions{
+		SpamChecker:     spamChecker,
+		SpamCheckConfig: spamCheckConfig,
+	}
+	handler := smtp.Handler(cfg.Hostname, collector, delivery, authAgent, srv.TLSConfig(), handlerOpts)
 	srv.SetHandler(handler)
 
 	// Set up context with signal handling for graceful shutdown
@@ -106,4 +122,67 @@ func main() {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// createSpamChecker creates a spam checker from the configuration.
+func createSpamChecker(cfg config.Config, srv *server.Server) (spamcheck.Checker, config.SpamCheckConfig) {
+	if !cfg.SpamCheck.IsEnabled() {
+		return nil, config.SpamCheckConfig{}
+	}
+
+	checkers, names := createCheckersFromConfig(cfg.SpamCheck, srv)
+	if len(checkers) == 0 {
+		return nil, config.SpamCheckConfig{}
+	}
+
+	srv.Logger().Info("spam checking enabled",
+		"checkers", names,
+		"mode", cfg.SpamCheck.Mode,
+		"fail_mode", cfg.SpamCheck.GetFailMode(),
+		"reject_threshold", cfg.SpamCheck.RejectThreshold)
+
+	if len(checkers) == 1 {
+		return checkers[0], cfg.SpamCheck
+	}
+
+	// Use multi-checker for multiple checkers
+	multiConfig := spamcheck.MultiConfig{
+		Mode:              cfg.SpamCheck.Mode,
+		FailMode:          spamcheck.FailMode(cfg.SpamCheck.FailMode),
+		RejectThreshold:   cfg.SpamCheck.RejectThreshold,
+		TempFailThreshold: cfg.SpamCheck.TempFailThreshold,
+		AddHeaders:        cfg.SpamCheck.AddHeaders,
+	}
+	return spamcheck.NewMultiChecker(checkers, multiConfig), cfg.SpamCheck
+}
+
+// createCheckersFromConfig creates spam checkers from the spamcheck config.
+func createCheckersFromConfig(cfg config.SpamCheckConfig, srv *server.Server) ([]spamcheck.Checker, []string) {
+	var checkers []spamcheck.Checker
+	var names []string
+
+	for _, checkerCfg := range cfg.Checkers {
+		if !checkerCfg.IsEnabled() {
+			continue
+		}
+
+		switch checkerCfg.Type {
+		case "rspamd":
+			checker := rspamd.NewChecker(checkerCfg.URL, checkerCfg.Password, checkerCfg.GetTimeout())
+			checkers = append(checkers, checker)
+			names = append(names, "rspamd")
+			srv.Logger().Debug("created rspamd checker", "url", checkerCfg.URL)
+
+		// Add more checker types here as they're implemented:
+		// case "spamassassin":
+		//     checker := spamassassin.NewChecker(checkerCfg.URL, checkerCfg.GetTimeout())
+		//     checkers = append(checkers, checker)
+		//     names = append(names, "spamassassin")
+
+		default:
+			srv.Logger().Warn("unknown spam checker type", "type", checkerCfg.Type)
+		}
+	}
+
+	return checkers, names
 }

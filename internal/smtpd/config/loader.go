@@ -173,5 +173,27 @@ func mergeConfig(dst, src Config) Config {
 		dst.Delivery.Maildir = src.Delivery.Maildir
 	}
 
+	// Merge encryption config
+	if src.Encryption.Enabled {
+		dst.Encryption.Enabled = src.Encryption.Enabled
+	}
+	if src.Encryption.KeyBackendType != "" {
+		dst.Encryption.KeyBackendType = src.Encryption.KeyBackendType
+	}
+	if src.Encryption.KeyBackend != "" {
+		dst.Encryption.KeyBackend = src.Encryption.KeyBackend
+	}
+	if src.Encryption.CredentialBackend != "" {
+		dst.Encryption.CredentialBackend = src.Encryption.CredentialBackend
+	}
+	if src.Encryption.Options != nil {
+		if dst.Encryption.Options == nil {
+			dst.Encryption.Options = make(map[string]string)
+		}
+		for k, v := range src.Encryption.Options {
+			dst.Encryption.Options[k] = v
+		}
+	}
+
 	return dst
 }

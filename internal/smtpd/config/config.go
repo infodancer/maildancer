@@ -30,14 +30,41 @@ type FileConfig struct {
 
 // Config holds the complete SMTP server configuration.
 type Config struct {
-	Hostname  string           `toml:"hostname"`
-	LogLevel  string           `toml:"log_level"`
-	Listeners []ListenerConfig `toml:"listeners"`
-	TLS       TLSConfig        `toml:"tls"`
-	Limits    LimitsConfig     `toml:"limits"`
-	Timeouts  TimeoutsConfig   `toml:"timeouts"`
-	Metrics   MetricsConfig    `toml:"metrics"`
-	Delivery  DeliveryConfig   `toml:"delivery"`
+	Hostname   string             `toml:"hostname"`
+	LogLevel   string             `toml:"log_level"`
+	Listeners  []ListenerConfig   `toml:"listeners"`
+	TLS        TLSConfig          `toml:"tls"`
+	Limits     LimitsConfig       `toml:"limits"`
+	Timeouts   TimeoutsConfig     `toml:"timeouts"`
+	Metrics    MetricsConfig      `toml:"metrics"`
+	Delivery   DeliveryConfig     `toml:"delivery"`
+	Encryption EncryptionConfig   `toml:"encryption"`
+}
+
+// EncryptionConfig holds configuration for message encryption.
+// When enabled, messages are encrypted for recipients that have keys configured.
+type EncryptionConfig struct {
+	// Enabled indicates whether message encryption is enabled.
+	Enabled bool `toml:"enabled"`
+
+	// KeyBackendType is the type of key provider (e.g., "passwd").
+	KeyBackendType string `toml:"key_backend_type"`
+
+	// KeyBackend is the path or connection string for key storage.
+	// For passwd: path to key directory (e.g., "/etc/mail/keys")
+	KeyBackend string `toml:"key_backend"`
+
+	// CredentialBackend is the path for credential storage (needed by some key providers).
+	// For passwd: path to passwd file (e.g., "/etc/mail/passwd")
+	CredentialBackend string `toml:"credential_backend"`
+
+	// Options contains implementation-specific settings.
+	Options map[string]string `toml:"options"`
+}
+
+// IsEnabled returns true if encryption is enabled.
+func (c *EncryptionConfig) IsEnabled() bool {
+	return c.Enabled && c.KeyBackendType != ""
 }
 
 // ListenerConfig defines settings for a single listener.
@@ -155,6 +182,16 @@ func (c *Config) Validate() error {
 		}
 		if c.Metrics.Path == "" {
 			return errors.New("metrics path is required when metrics are enabled")
+		}
+	}
+
+	// Validate encryption config
+	if c.Encryption.Enabled {
+		if c.Encryption.KeyBackendType == "" {
+			return errors.New("encryption.key_backend_type is required when encryption is enabled")
+		}
+		if c.Encryption.KeyBackend == "" {
+			return errors.New("encryption.key_backend is required when encryption is enabled")
 		}
 	}
 

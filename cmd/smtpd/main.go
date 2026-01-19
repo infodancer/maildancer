@@ -76,12 +76,16 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error creating authentication agent: %v\n", err)
 			os.Exit(1)
 		}
-		defer authAgent.Close()
+		defer func() {
+			if err := authAgent.Close(); err != nil {
+				srv.Logger().Error("error closing auth agent", "error", err)
+			}
+		}()
 		srv.Logger().Info("authentication enabled", "type", cfg.Auth.AgentType)
 	}
 
 	// Create and set the SMTP handler
-	handler := smtp.Handler(cfg.Hostname, collector, delivery, authAgent)
+	handler := smtp.Handler(cfg.Hostname, collector, delivery, authAgent, srv.TLSConfig())
 	srv.SetHandler(handler)
 
 	// Set up context with signal handling for graceful shutdown

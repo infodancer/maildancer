@@ -5,7 +5,7 @@ go 1.24.0
 toolchain go1.24.4
 
 require (
-	github.com/infodancer/maildancer/auth v0.0.0-00010101000000-000000000000
+	github.com/infodancer/maildancer/auth v0.0.0-20260119190831-f30a740fec24
 	github.com/infodancer/maildancer/msgstore v0.0.0-20260119122628-46a831f8f899
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/prometheus/client_golang v1.23.2
@@ -23,9 +23,4 @@ require (
 	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
-)
-
-replace (
-	github.com/infodancer/maildancer/auth => ../auth
-	github.com/infodancer/maildancer/msgstore => ../msgstore
 )

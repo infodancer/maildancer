@@ -50,7 +50,7 @@ This document tracks the implementation status of SMTP commands, extensions, and
 - [x] Submission with TLS (port 587)
 - [x] TLS configuration (cert/key loading)
 - [x] Configurable minimum TLS version (1.0-1.3)
-- [ ] STARTTLS command (RFC 3207) - infrastructure ready
+- [x] STARTTLS command (RFC 3207)
 
 ## Anti-Spam & Filtering
 

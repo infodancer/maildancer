@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -12,6 +13,9 @@ import (
 
 	"github.com/infodancer/maildancer/internal/smtpd/logging"
 )
+
+// ErrAlreadyTLS is returned when attempting to upgrade an already-TLS connection.
+var ErrAlreadyTLS = errors.New("connection is already TLS")
 
 // Connection wraps a net.Conn with timeout management and optional transaction logging.
 type Connection struct {
@@ -167,6 +171,46 @@ func (c *Connection) Underlying() net.Conn {
 func (c *Connection) IsTLS() bool {
 	_, ok := c.conn.(*tls.Conn)
 	return ok
+}
+
+// UpgradeToTLS upgrades the connection to TLS using the provided config.
+// This should only be called after sending the STARTTLS response.
+// Returns an error if the connection is already TLS or if the handshake fails.
+func (c *Connection) UpgradeToTLS(tlsConfig *tls.Config) error {
+	if c.IsTLS() {
+		return ErrAlreadyTLS
+	}
+
+	// Flush any pending writes before upgrading
+	if err := c.writer.Flush(); err != nil {
+		return err
+	}
+
+	// Wrap the connection with TLS
+	tlsConn := tls.Server(c.conn, tlsConfig)
+
+	// Perform the TLS handshake
+	if err := tlsConn.Handshake(); err != nil {
+		return err
+	}
+
+	// Replace the underlying connection
+	c.conn = tlsConn
+
+	// Reset reader/writer with the new TLS connection
+	var r io.Reader = tlsConn
+	var w io.Writer = tlsConn
+
+	if c.logTx {
+		r = logging.NewTransactionReader(tlsConn, c.logger, "recv")
+		w = logging.NewTransactionWriter(tlsConn, c.logger, "send")
+	}
+
+	c.reader = bufio.NewReader(r)
+	c.writer = bufio.NewWriter(w)
+
+	c.logger.Debug("connection upgraded to TLS")
+	return nil
 }
 
 // IdleMonitor runs in a goroutine to monitor for idle connections.

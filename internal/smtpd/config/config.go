@@ -31,9 +31,9 @@ type FileConfig struct {
 
 // ServerConfig holds shared settings used by all mail services.
 type ServerConfig struct {
-	Hostname string    `toml:"hostname"`
-	Maildir  string    `toml:"maildir"`
-	TLS      TLSConfig `toml:"tls"`
+	Hostname string         `toml:"hostname"`
+	Delivery DeliveryConfig `toml:"delivery"`
+	TLS      TLSConfig      `toml:"tls"`
 }
 
 // Config holds the complete SMTP server configuration.
@@ -81,8 +81,11 @@ type MetricsConfig struct {
 }
 
 // DeliveryConfig holds configuration for message delivery.
+// Uses the msgstore registry pattern for pluggable storage backends.
 type DeliveryConfig struct {
-	Maildir string `toml:"maildir"`
+	Type     string            `toml:"type"`      // Storage backend type (e.g., "maildir")
+	BasePath string            `toml:"base_path"` // Base path for storage
+	Options  map[string]string `toml:"options"`   // Backend-specific options
 }
 
 // Default returns a Config with sensible default values.

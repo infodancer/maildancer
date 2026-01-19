@@ -18,7 +18,8 @@ type Flags struct {
 	TLSKey         string
 	MaxMessageSize int
 	MaxRecipients  int
-	Maildir        string
+	DeliveryType   string
+	DeliveryPath   string
 }
 
 // ParseFlags parses command-line flags and returns a Flags struct.
@@ -33,7 +34,8 @@ func ParseFlags() *Flags {
 	flag.StringVar(&f.TLSKey, "tls-key", "", "TLS key file path")
 	flag.IntVar(&f.MaxMessageSize, "max-message-size", 0, "Maximum message size in bytes")
 	flag.IntVar(&f.MaxRecipients, "max-recipients", 0, "Maximum recipients per message")
-	flag.StringVar(&f.Maildir, "maildir", "", "Maildir path for message delivery")
+	flag.StringVar(&f.DeliveryType, "delivery-type", "", "Delivery storage type (e.g., maildir)")
+	flag.StringVar(&f.DeliveryPath, "delivery-path", "", "Delivery storage base path")
 
 	flag.Parse()
 	return f
@@ -102,8 +104,12 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 		cfg.Limits.MaxRecipients = f.MaxRecipients
 	}
 
-	if f.Maildir != "" {
-		cfg.Delivery.Maildir = f.Maildir
+	if f.DeliveryType != "" {
+		cfg.Delivery.Type = f.DeliveryType
+	}
+
+	if f.DeliveryPath != "" {
+		cfg.Delivery.BasePath = f.DeliveryPath
 	}
 
 	return cfg
@@ -125,8 +131,21 @@ func mergeServerConfig(dst Config, src ServerConfig) Config {
 		dst.Hostname = src.Hostname
 	}
 
-	if src.Maildir != "" {
-		dst.Delivery.Maildir = src.Maildir
+	if src.Delivery.Type != "" {
+		dst.Delivery.Type = src.Delivery.Type
+	}
+
+	if src.Delivery.BasePath != "" {
+		dst.Delivery.BasePath = src.Delivery.BasePath
+	}
+
+	if len(src.Delivery.Options) > 0 {
+		if dst.Delivery.Options == nil {
+			dst.Delivery.Options = make(map[string]string)
+		}
+		for k, v := range src.Delivery.Options {
+			dst.Delivery.Options[k] = v
+		}
 	}
 
 	if src.TLS.CertFile != "" {
@@ -199,8 +218,21 @@ func mergeConfig(dst, src Config) Config {
 		dst.Metrics.Path = src.Metrics.Path
 	}
 
-	if src.Delivery.Maildir != "" {
-		dst.Delivery.Maildir = src.Delivery.Maildir
+	if src.Delivery.Type != "" {
+		dst.Delivery.Type = src.Delivery.Type
+	}
+
+	if src.Delivery.BasePath != "" {
+		dst.Delivery.BasePath = src.Delivery.BasePath
+	}
+
+	if len(src.Delivery.Options) > 0 {
+		if dst.Delivery.Options == nil {
+			dst.Delivery.Options = make(map[string]string)
+		}
+		for k, v := range src.Delivery.Options {
+			dst.Delivery.Options[k] = v
+		}
 	}
 
 	return dst

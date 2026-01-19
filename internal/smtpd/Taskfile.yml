@@ -78,3 +78,19 @@ tasks:
     cmds:
       - 'echo "Delivery storage: {{.DELIVERY_PATH}}"'
       - go run ./cmd/smtpd -listen localhost:2525 -delivery-type maildir -delivery-path {{.DELIVERY_PATH}} -log-level debug
+
+  test:swaks:
+    desc: Run SMTP integration tests using swaks
+    cmds:
+      - ./test/swaks/run_tests.sh
+
+  test:swaks:tls:
+    desc: Run SMTP TLS integration tests using swaks
+    cmds:
+      - ./test/swaks/run_tls_tests.sh
+
+  test:swaks:all:
+    desc: Run all swaks integration tests (basic + TLS)
+    cmds:
+      - task: test:swaks
+      - task: test:swaks:tls

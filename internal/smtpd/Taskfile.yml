@@ -73,8 +73,8 @@ tasks:
   serve:
     desc: Start local SMTP server with maildir delivery to temp directory
     vars:
-      MAILDIR:
+      DELIVERY_PATH:
         sh: mktemp -d -t smtpd-maildir-XXXXXX
     cmds:
-      - 'echo "Maildir storage: {{.MAILDIR}}"'
-      - go run ./cmd/smtpd -listen localhost:2525 -maildir {{.MAILDIR}} -log-level debug
+      - 'echo "Delivery storage: {{.DELIVERY_PATH}}"'
+      - go run ./cmd/smtpd -listen localhost:2525 -delivery-type maildir -delivery-path {{.DELIVERY_PATH}} -log-level debug

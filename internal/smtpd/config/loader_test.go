@@ -358,7 +358,10 @@ func TestLoadSharedServerConfig(t *testing.T) {
 	content := `
 [server]
 hostname = "shared.example.com"
-maildir = "/var/mail"
+
+[server.delivery]
+type = "maildir"
+base_path = "/var/mail"
 
 [server.tls]
 cert_file = "/etc/ssl/shared-cert.pem"
@@ -381,8 +384,12 @@ log_level = "warn"
 		t.Errorf("hostname = %q, want 'shared.example.com'", cfg.Hostname)
 	}
 
-	if cfg.Delivery.Maildir != "/var/mail" {
-		t.Errorf("delivery.maildir = %q, want '/var/mail'", cfg.Delivery.Maildir)
+	if cfg.Delivery.Type != "maildir" {
+		t.Errorf("delivery.type = %q, want 'maildir'", cfg.Delivery.Type)
+	}
+
+	if cfg.Delivery.BasePath != "/var/mail" {
+		t.Errorf("delivery.base_path = %q, want '/var/mail'", cfg.Delivery.BasePath)
 	}
 
 	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
@@ -403,7 +410,10 @@ func TestLoadSmtpdOverridesServer(t *testing.T) {
 	content := `
 [server]
 hostname = "shared.example.com"
-maildir = "/var/mail"
+
+[server.delivery]
+type = "maildir"
+base_path = "/var/mail"
 
 [server.tls]
 cert_file = "/etc/ssl/shared-cert.pem"
@@ -416,7 +426,8 @@ hostname = "smtp.example.com"
 cert_file = "/etc/ssl/smtp-cert.pem"
 
 [smtpd.delivery]
-maildir = "/var/smtpmail"
+type = "maildir"
+base_path = "/var/smtpmail"
 `
 
 	path := createTempConfig(t, content)
@@ -431,8 +442,8 @@ maildir = "/var/smtpmail"
 		t.Errorf("hostname = %q, want 'smtp.example.com' (smtpd should override server)", cfg.Hostname)
 	}
 
-	if cfg.Delivery.Maildir != "/var/smtpmail" {
-		t.Errorf("delivery.maildir = %q, want '/var/smtpmail' (smtpd should override server)", cfg.Delivery.Maildir)
+	if cfg.Delivery.BasePath != "/var/smtpmail" {
+		t.Errorf("delivery.base_path = %q, want '/var/smtpmail' (smtpd should override server)", cfg.Delivery.BasePath)
 	}
 
 	if cfg.TLS.CertFile != "/etc/ssl/smtp-cert.pem" {

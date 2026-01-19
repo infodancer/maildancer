@@ -5,8 +5,7 @@ go 1.23.0
 toolchain go1.24.4
 
 require (
-	github.com/infodancer/maildir v0.0.0-20260119021101-d8a459a938d1
-	github.com/infodancer/maildancer/msgstore v0.0.0-20260118175617-5fc41afaac0b
+	github.com/infodancer/maildancer/msgstore v0.0.0-20260119122628-46a831f8f899
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/prometheus/client_golang v1.23.2
 )

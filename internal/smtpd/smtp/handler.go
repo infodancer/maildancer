@@ -3,6 +3,7 @@ package smtp
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -21,8 +22,9 @@ import (
 // collector is used for recording metrics (can be nil for no-op).
 // delivery is used for storing messages after DATA (can be nil to reject all mail).
 // authAgent is used for SMTP authentication (can be nil to disable AUTH).
-func Handler(hostname string, collector metrics.Collector, delivery msgstore.DeliveryAgent, authAgent auth.AuthenticationAgent) server.ConnectionHandler {
-	registry := NewCommandRegistry(hostname, authAgent)
+// tlsConfig is used for STARTTLS support (can be nil to disable STARTTLS).
+func Handler(hostname string, collector metrics.Collector, delivery msgstore.DeliveryAgent, authAgent auth.AuthenticationAgent, tlsConfig *tls.Config) server.ConnectionHandler {
+	registry := NewCommandRegistry(hostname, authAgent, tlsConfig)
 
 	return func(ctx context.Context, conn *server.Connection) {
 		logger := logging.FromContext(ctx)
@@ -180,6 +182,30 @@ func Handler(hostname string, collector metrics.Collector, delivery msgstore.Del
 			if err := writeResult(conn, result); err != nil {
 				logger.Debug("failed to write response", "error", err.Error())
 				return
+			}
+
+			// Handle STARTTLS upgrade after sending 220 response
+			if starttlsCmd, ok := cmd.(*STARTTLSCommand); ok && result.Code == 220 {
+				if err := conn.UpgradeToTLS(starttlsCmd.TLSConfig()); err != nil {
+					logger.Debug("TLS upgrade failed", "error", err.Error())
+					// Connection is likely broken, close it
+					return
+				}
+
+				// Record TLS established metric
+				if collector != nil {
+					collector.TLSConnectionEstablished()
+				}
+
+				// Update session TLS state
+				session.SetTLSActive(true)
+
+				// Per RFC 3207: Reset session state after STARTTLS
+				// Client must re-issue EHLO after successful upgrade
+				session.Reset()
+				session.SetState(StateInit)
+
+				logger.Debug("STARTTLS upgrade successful")
 			}
 
 			// Reset idle timeout after successful command

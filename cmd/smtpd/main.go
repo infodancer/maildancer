@@ -81,7 +81,7 @@ func main() {
 	}
 
 	// Create and set the SMTP handler
-	handler := smtp.Handler(cfg.Hostname, collector, delivery, authAgent)
+	handler := smtp.Handler(cfg.Hostname, collector, delivery, authAgent, srv.TLSConfig())
 	srv.SetHandler(handler)
 
 	// Set up context with signal handling for graceful shutdown

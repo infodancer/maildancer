@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"regexp"
 )
@@ -221,10 +222,11 @@ type CommandRegistry struct {
 	commands []SMTPCommand
 }
 
-// NewCommandRegistry creates a new command registry with all standard SMTP commands
-func NewCommandRegistry(hostname string, authAgent interface{}) *CommandRegistry {
+// NewCommandRegistry creates a new command registry with all standard SMTP commands.
+// tlsConfig is optional and enables STARTTLS support when provided.
+func NewCommandRegistry(hostname string, authAgent interface{}, tlsConfig *tls.Config) *CommandRegistry {
 	commands := []SMTPCommand{
-		&EHLOCommand{hostname: hostname, authAgent: authAgent},
+		&EHLOCommand{hostname: hostname, authAgent: authAgent, tlsConfig: tlsConfig},
 		&HELOCommand{},
 		&MAILCommand{},
 		&RCPTCommand{},
@@ -232,6 +234,11 @@ func NewCommandRegistry(hostname string, authAgent interface{}) *CommandRegistry
 		&RSETCommand{},
 		&NOOPCommand{},
 		&QUITCommand{},
+	}
+
+	// Add STARTTLS command if TLS configuration is available
+	if tlsConfig != nil {
+		commands = append([]SMTPCommand{&STARTTLSCommand{tlsConfig: tlsConfig}}, commands...)
 	}
 
 	// Add AUTH command if authentication agent is configured
@@ -269,7 +276,8 @@ var (
 // EHLOCommand implements the EHLO command
 type EHLOCommand struct {
 	hostname  string
-	authAgent interface{} // auth.AuthenticationAgent (using interface{} to avoid import cycle)
+	authAgent interface{}  // auth.AuthenticationAgent (using interface{} to avoid import cycle)
+	tlsConfig *tls.Config  // TLS configuration for STARTTLS support
 }
 
 func (c *EHLOCommand) Pattern() *regexp.Regexp {
@@ -302,6 +310,11 @@ func (c *EHLOCommand) Execute(ctx context.Context, session *SMTPSession, matches
 		hostname + " Hello " + domain + " [" + clientIP + "]",
 		"SIZE 26214400",
 		"8BITMIME",
+	}
+
+	// Advertise STARTTLS if TLS config is available and TLS is not already active
+	if c.tlsConfig != nil && !session.IsTLSActive() {
+		lines = append(lines, "STARTTLS")
 	}
 
 	// Add AUTH capability if auth agent is configured and conditions are met

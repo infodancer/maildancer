@@ -155,7 +155,7 @@ func TestSessionReset_FromInit(t *testing.T) {
 
 // TestCommandRegistry_Match tests the command registry matching
 func TestCommandRegistry_Match(t *testing.T) {
-	registry := NewCommandRegistry("test.example.com", nil)
+	registry := NewCommandRegistry("test.example.com", nil, nil)
 
 	tests := []struct {
 		name        string
@@ -680,7 +680,7 @@ func TestPatternMatching(t *testing.T) {
 // TestFullSMTPConversation tests a complete SMTP conversation flow
 func TestFullSMTPConversation(t *testing.T) {
 	ctx := context.Background()
-	registry := NewCommandRegistry("test.example.com", nil)
+	registry := NewCommandRegistry("test.example.com", nil, nil)
 	session := newTestSession()
 
 	// Simulate a full SMTP conversation
@@ -735,7 +735,7 @@ func TestFullSMTPConversation(t *testing.T) {
 // TestRSETMidConversation tests RSET in the middle of a conversation
 func TestRSETMidConversation(t *testing.T) {
 	ctx := context.Background()
-	registry := NewCommandRegistry("test.example.com", nil)
+	registry := NewCommandRegistry("test.example.com", nil, nil)
 	session := newTestSession()
 
 	// Start a conversation

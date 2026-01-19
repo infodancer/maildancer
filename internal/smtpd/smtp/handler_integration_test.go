@@ -46,7 +46,7 @@ func startTestServer(t *testing.T, delivery *smtpd.MockDeliveryAgent) (string, f
 		t.Fatalf("failed to create server: %v", err)
 	}
 
-	handler := smtp.Handler("test.example.com", nil, delivery, nil)
+	handler := smtp.Handler("test.example.com", nil, delivery, nil, nil)
 	srv.SetHandler(handler)
 
 	ctx, cancel := context.WithCancel(context.Background())

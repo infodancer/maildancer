@@ -37,6 +37,7 @@ type Config struct {
 	Limits    LimitsConfig     `toml:"limits"`
 	Timeouts  TimeoutsConfig   `toml:"timeouts"`
 	Metrics   MetricsConfig    `toml:"metrics"`
+	Delivery  DeliveryConfig   `toml:"delivery"`
 }
 
 // ListenerConfig defines settings for a single listener.
@@ -69,6 +70,11 @@ type MetricsConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Address string `toml:"address"`
 	Path    string `toml:"path"`
+}
+
+// DeliveryConfig holds configuration for message delivery.
+type DeliveryConfig struct {
+	Maildir string `toml:"maildir"`
 }
 
 // Default returns a Config with sensible default values.

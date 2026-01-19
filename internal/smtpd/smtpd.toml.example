@@ -18,6 +18,9 @@ max_recipients = 100
 connection = "5m"
 command = "1m"
 
+[smtpd.delivery]
+# maildir = "/var/mail"  # Path for maildir delivery (optional)
+
 [[smtpd.listeners]]
 address = ":25"
 mode = "smtp"

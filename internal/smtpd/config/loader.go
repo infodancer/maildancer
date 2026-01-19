@@ -18,6 +18,7 @@ type Flags struct {
 	TLSKey         string
 	MaxMessageSize int
 	MaxRecipients  int
+	Maildir        string
 }
 
 // ParseFlags parses command-line flags and returns a Flags struct.
@@ -32,6 +33,7 @@ func ParseFlags() *Flags {
 	flag.StringVar(&f.TLSKey, "tls-key", "", "TLS key file path")
 	flag.IntVar(&f.MaxMessageSize, "max-message-size", 0, "Maximum message size in bytes")
 	flag.IntVar(&f.MaxRecipients, "max-recipients", 0, "Maximum recipients per message")
+	flag.StringVar(&f.Maildir, "maildir", "", "Maildir path for message delivery")
 
 	flag.Parse()
 	return f
@@ -93,6 +95,10 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 
 	if f.MaxRecipients > 0 {
 		cfg.Limits.MaxRecipients = f.MaxRecipients
+	}
+
+	if f.Maildir != "" {
+		cfg.Delivery.Maildir = f.Maildir
 	}
 
 	return cfg
@@ -161,6 +167,10 @@ func mergeConfig(dst, src Config) Config {
 
 	if src.Metrics.Path != "" {
 		dst.Metrics.Path = src.Metrics.Path
+	}
+
+	if src.Delivery.Maildir != "" {
+		dst.Delivery.Maildir = src.Delivery.Maildir
 	}
 
 	return dst

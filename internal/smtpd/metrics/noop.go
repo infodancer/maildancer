@@ -39,3 +39,6 @@ func (n *NoopCollector) DMARCCheckCompleted(senderDomain string, result string) 
 
 // RBLHit is a no-op.
 func (n *NoopCollector) RBLHit(listName string) {}
+
+// RspamdCheckCompleted is a no-op.
+func (n *NoopCollector) RspamdCheckCompleted(senderDomain string, result string, score float64) {}

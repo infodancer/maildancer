@@ -35,6 +35,34 @@ mode = "submission"
 address = ":465"
 mode = "smtps"
 
+# Spam Check Configuration
+# Supports multiple spam checkers running in sequence
+# [spamcheck]
+# enabled = true
+# mode = "first_reject"          # "first_reject" | "all_reject" | "highest_score"
+#                                # first_reject = reject if any checker says reject
+#                                # all_reject = reject only if all checkers say reject
+#                                # highest_score = use result with highest score
+# fail_mode = "tempfail"         # "open" | "tempfail" | "reject"
+#                                # open = accept message if all checkers fail
+#                                # tempfail = 4xx error if all checkers fail
+#                                # reject = 5xx error if all checkers fail
+# reject_threshold = 15.0        # Score at or above which to reject (5xx)
+# tempfail_threshold = 0.0       # Score at or above which to defer (4xx), 0 = disabled
+# add_headers = false            # Add X-Spam-* headers to messages (default: false)
+#
+# [[spamcheck.checkers]]
+# type = "rspamd"
+# url = "http://localhost:11333"
+# password = ""                  # Optional controller password
+# timeout = "10s"
+#
+# # Example: add a second checker (when implemented)
+# # [[spamcheck.checkers]]
+# # type = "spamassassin"
+# # url = "localhost:783"
+# # timeout = "30s"
+
 # Future sections:
 # [pop3d]
 # [msgstore]

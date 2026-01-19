@@ -54,21 +54,24 @@ This document tracks the implementation status of SMTP commands, extensions, and
 
 ## Anti-Spam & Filtering
 
-### Email Authentication
-- [ ] SPF verification (RFC 7208)
-- [ ] DKIM verification (RFC 6376)
-- [ ] DMARC policy enforcement (RFC 7489)
-- [ ] ARC verification (RFC 8617)
-
-### Reputation Systems
-- [ ] RBL/DNSBL lookups
-- [ ] Greylisting
-- [ ] Sender reputation tracking
-
-### Content Filtering
-- [ ] Milter support (Sendmail milter protocol)
+### Spam Checker Integration
+- [x] Generic spam checker interface (pluggable backends)
+- [x] rspamd integration via HTTP API
 - [ ] SpamAssassin integration via spamc
-- [ ] ClamAV integration via clamd
+
+### Via rspamd (when rspamd is configured)
+The following are handled by rspamd when enabled:
+- [x] SPF verification (RFC 7208)
+- [x] DKIM verification (RFC 6376)
+- [x] DMARC policy enforcement (RFC 7489)
+- [x] ARC verification (RFC 8617)
+- [x] RBL/DNSBL lookups
+- [x] Greylisting
+- [x] Sender reputation tracking
+- [x] ClamAV/antivirus integration (via rspamd antivirus module)
+
+### Native Features (not yet implemented)
+- [ ] Milter support (Sendmail milter protocol)
 - [ ] Custom filter hooks
 
 ### Rate Limiting
@@ -103,7 +106,7 @@ This document tracks the implementation status of SMTP commands, extensions, and
 - [x] Message metrics (received, rejected by reason)
 - [x] Authentication metrics (attempts by mechanism/result)
 - [x] Command processing metrics
-- [x] Anti-spam metric hooks (SPF, DKIM, DMARC, RBL)
+- [x] Spam check metrics (score, result)
 - [x] Delivery metrics
 
 ### Logging (Implemented)
@@ -118,6 +121,7 @@ This document tracks the implementation status of SMTP commands, extensions, and
 - [x] DeliveryAgent interface for message delivery
 - [x] AuthenticationAgent interface for authentication
 - [x] Metrics interface with hooks for extensions
+- [x] SpamChecker interface for pluggable spam filtering
 
 ### Listener Modes (Implemented)
 - [x] SMTP mode (port 25)

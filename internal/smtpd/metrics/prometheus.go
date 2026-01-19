@@ -30,6 +30,10 @@ type PrometheusCollector struct {
 	dkimChecksTotal  *prometheus.CounterVec
 	dmarcChecksTotal *prometheus.CounterVec
 	rblHitsTotal     *prometheus.CounterVec
+
+	// Rspamd metrics
+	rspamdChecksTotal *prometheus.CounterVec
+	rspamdScores      prometheus.Histogram
 }
 
 // NewPrometheusCollector creates a new PrometheusCollector with all metrics registered.
@@ -93,6 +97,16 @@ func NewPrometheusCollector(reg prometheus.Registerer) *PrometheusCollector {
 			Name: "smtpd_rbl_hits_total",
 			Help: "Total number of RBL/DNSBL hits.",
 		}, []string{"list"}),
+
+		rspamdChecksTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "smtpd_rspamd_checks_total",
+			Help: "Total number of rspamd spam checks performed.",
+		}, []string{"sender_domain", "result"}),
+		rspamdScores: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "smtpd_rspamd_scores",
+			Help:    "Distribution of rspamd spam scores.",
+			Buckets: []float64{-5, 0, 1, 2, 3, 5, 7, 10, 15, 20, 30},
+		}),
 	}
 
 	// Register all metrics
@@ -110,6 +124,8 @@ func NewPrometheusCollector(reg prometheus.Registerer) *PrometheusCollector {
 		c.dkimChecksTotal,
 		c.dmarcChecksTotal,
 		c.rblHitsTotal,
+		c.rspamdChecksTotal,
+		c.rspamdScores,
 	)
 
 	return c
@@ -179,4 +195,10 @@ func (c *PrometheusCollector) DMARCCheckCompleted(senderDomain string, result st
 // RBLHit increments the RBL hits counter.
 func (c *PrometheusCollector) RBLHit(listName string) {
 	c.rblHitsTotal.WithLabelValues(listName).Inc()
+}
+
+// RspamdCheckCompleted increments the rspamd check counter and observes the score.
+func (c *PrometheusCollector) RspamdCheckCompleted(senderDomain string, result string, score float64) {
+	c.rspamdChecksTotal.WithLabelValues(senderDomain, result).Inc()
+	c.rspamdScores.Observe(score)
 }

@@ -12,10 +12,21 @@ import (
 
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/msgstore"
+	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/logging"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/server"
+	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
+
+// HandlerOptions contains optional configuration for the SMTP handler.
+type HandlerOptions struct {
+	// SpamChecker is the spam checker for filtering (can be nil to disable).
+	SpamChecker spamcheck.Checker
+
+	// SpamCheckConfig is the spam check configuration.
+	SpamCheckConfig config.SpamCheckConfig
+}
 
 // Handler returns a ConnectionHandler that processes SMTP commands.
 // hostname is the server's hostname for the greeting banner.
@@ -23,7 +34,11 @@ import (
 // delivery is used for storing messages after DATA (can be nil to reject all mail).
 // authAgent is used for SMTP authentication (can be nil to disable AUTH).
 // tlsConfig is used for STARTTLS support (can be nil to disable STARTTLS).
-func Handler(hostname string, collector metrics.Collector, delivery msgstore.DeliveryAgent, authAgent auth.AuthenticationAgent, tlsConfig *tls.Config) server.ConnectionHandler {
+// opts contains optional configuration (can be nil for defaults).
+func Handler(hostname string, collector metrics.Collector, delivery msgstore.DeliveryAgent, authAgent auth.AuthenticationAgent, tlsConfig *tls.Config, opts *HandlerOptions) server.ConnectionHandler {
+	if opts == nil {
+		opts = &HandlerOptions{}
+	}
 	registry := NewCommandRegistry(hostname, authAgent, tlsConfig)
 
 	return func(ctx context.Context, conn *server.Connection) {
@@ -98,6 +113,123 @@ func Handler(hostname string, collector metrics.Collector, delivery msgstore.Del
 				fullMessage.WriteString(line)
 				fullMessage.WriteString("\r\n")
 				fullMessage.Write(messageData)
+
+				// Spam check (if enabled)
+				if opts.SpamChecker != nil && opts.SpamCheckConfig.IsEnabled() {
+					checkResult, checkErr := opts.SpamChecker.Check(ctx, bytes.NewReader(fullMessage.Bytes()), spamcheck.CheckOptions{
+						From:       session.GetSender(),
+						Recipients: session.GetRecipients(),
+						IP:         clientIP,
+						Helo:       session.GetHelo(),
+						Hostname:   hostname,
+					})
+
+					senderDomain := extractSenderDomain(session.GetSender())
+
+					if checkErr != nil {
+						// Spam check error - handle according to fail mode
+						logger.Debug("spam check failed",
+							"checker", opts.SpamChecker.Name(),
+							"error", checkErr.Error())
+						if collector != nil {
+							collector.RspamdCheckCompleted(senderDomain, "error", 0)
+						}
+
+						switch opts.SpamCheckConfig.GetFailMode() {
+						case config.SpamCheckFailReject:
+							if collector != nil {
+								domain := extractDomain(session.GetRecipients())
+								collector.MessageRejected(domain, "spamcheck_error")
+							}
+							if err := writeResponse(conn, 550, "Spam check failed"); err != nil {
+								logger.Debug("failed to write error response", "error", err.Error())
+							}
+							session.Reset()
+							if err := conn.ResetIdleTimeout(); err != nil {
+								logger.Debug("failed to reset idle timeout", "error", err.Error())
+							}
+							continue
+						case config.SpamCheckFailTempFail:
+							if collector != nil {
+								domain := extractDomain(session.GetRecipients())
+								collector.MessageRejected(domain, "spamcheck_error")
+							}
+							if err := writeResponse(conn, 451, "Temporary spam check failure, try again later"); err != nil {
+								logger.Debug("failed to write error response", "error", err.Error())
+							}
+							session.Reset()
+							if err := conn.ResetIdleTimeout(); err != nil {
+								logger.Debug("failed to reset idle timeout", "error", err.Error())
+							}
+							continue
+						default:
+							// SpamCheckFailOpen - continue with delivery
+							logger.Debug("spam check failed, continuing (fail open mode)")
+						}
+					} else {
+						// Determine result for metrics
+						metricResult := "ham"
+						if checkResult.ShouldReject(opts.SpamCheckConfig.RejectThreshold) {
+							metricResult = "spam"
+						} else if checkResult.ShouldTempFail(opts.SpamCheckConfig.TempFailThreshold) {
+							metricResult = "soft_reject"
+						}
+						if collector != nil {
+							collector.RspamdCheckCompleted(senderDomain, metricResult, checkResult.Score)
+						}
+
+						logger.Debug("spam check completed",
+							"checker", checkResult.CheckerName,
+							"score", checkResult.Score,
+							"action", checkResult.Action,
+							"result", metricResult)
+
+						// Check if message should be rejected
+						if checkResult.ShouldReject(opts.SpamCheckConfig.RejectThreshold) {
+							if collector != nil {
+								domain := extractDomain(session.GetRecipients())
+								collector.MessageRejected(domain, "spam")
+							}
+							rejectMsg := checkResult.RejectMessage
+							if rejectMsg == "" {
+								rejectMsg = fmt.Sprintf("Message rejected as spam (score %.1f)", checkResult.Score)
+							}
+							if err := writeResponse(conn, 550, rejectMsg); err != nil {
+								logger.Debug("failed to write error response", "error", err.Error())
+							}
+							session.Reset()
+							if err := conn.ResetIdleTimeout(); err != nil {
+								logger.Debug("failed to reset idle timeout", "error", err.Error())
+							}
+							continue
+						}
+
+						// Check if message should be temp-failed
+						if opts.SpamCheckConfig.TempFailThreshold > 0 && checkResult.ShouldTempFail(opts.SpamCheckConfig.TempFailThreshold) {
+							if collector != nil {
+								domain := extractDomain(session.GetRecipients())
+								collector.MessageRejected(domain, "soft_reject")
+							}
+							rejectMsg := checkResult.RejectMessage
+							if rejectMsg == "" {
+								rejectMsg = "Message deferred, please try again later"
+							}
+							if err := writeResponse(conn, 451, rejectMsg); err != nil {
+								logger.Debug("failed to write error response", "error", err.Error())
+							}
+							session.Reset()
+							if err := conn.ResetIdleTimeout(); err != nil {
+								logger.Debug("failed to reset idle timeout", "error", err.Error())
+							}
+							continue
+						}
+
+						// Add spam headers if configured
+						if opts.SpamCheckConfig.AddHeaders && len(checkResult.Headers) > 0 {
+							fullMessage = prependHeaders(fullMessage.Bytes(), checkResult.Headers)
+						}
+					}
+				}
 
 				// Deliver the message
 				if delivery != nil {
@@ -336,4 +468,45 @@ func extractCommandName(line string) string {
 		return line[:idx]
 	}
 	return line
+}
+
+// extractSenderDomain extracts the domain from a sender email address.
+func extractSenderDomain(sender string) string {
+	if sender == "" {
+		return "unknown"
+	}
+	if idx := strings.LastIndex(sender, "@"); idx >= 0 {
+		return sender[idx+1:]
+	}
+	return "unknown"
+}
+
+// prependHeaders prepends headers to a message.
+func prependHeaders(message []byte, headers map[string]string) bytes.Buffer {
+	var result bytes.Buffer
+
+	// Find the end of existing headers (first blank line)
+	headerEnd := bytes.Index(message, []byte("\r\n\r\n"))
+	if headerEnd == -1 {
+		// No body separator found, treat entire message as headers
+		headerEnd = len(message)
+	}
+
+	// Write existing headers
+	result.Write(message[:headerEnd])
+
+	// Add new headers before the blank line
+	for name, value := range headers {
+		result.WriteString("\r\n")
+		result.WriteString(name)
+		result.WriteString(": ")
+		result.WriteString(value)
+	}
+
+	// Write the rest of the message (blank line + body)
+	if headerEnd < len(message) {
+		result.Write(message[headerEnd:])
+	}
+
+	return result
 }

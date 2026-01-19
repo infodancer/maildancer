@@ -12,7 +12,7 @@ import (
 type ListenerMode string
 
 const (
-	// ModePop3 is standard POP3 on port 110 with optional STARTTLS (STLS command).
+	// ModePop3 is standard POP3 on port 110 with optional STLS.
 	ModePop3 ListenerMode = "pop3"
 	// ModePop3s is implicit TLS on port 995.
 	ModePop3s ListenerMode = "pop3s"
@@ -21,17 +21,27 @@ const (
 // FileConfig is the top-level wrapper for the shared configuration file.
 // This allows smtpd, pop3d, and msgstore to share a single config file.
 type FileConfig struct {
-	Pop3d Config `toml:"pop3d"`
+	Server ServerConfig `toml:"server"`
+	Pop3d  Config       `toml:"pop3d"`
 }
 
-// Config holds the complete POP3 server configuration.
+// ServerConfig holds shared settings used by all mail services.
+type ServerConfig struct {
+	Hostname string    `toml:"hostname"`
+	Maildir  string    `toml:"maildir"`
+	TLS      TLSConfig `toml:"tls"`
+}
+
+// Config holds the POP3-specific server configuration.
 type Config struct {
 	Hostname  string           `toml:"hostname"`
 	LogLevel  string           `toml:"log_level"`
 	Listeners []ListenerConfig `toml:"listeners"`
 	TLS       TLSConfig        `toml:"tls"`
-	Limits    LimitsConfig     `toml:"limits"`
 	Timeouts  TimeoutsConfig   `toml:"timeouts"`
+	Limits    LimitsConfig     `toml:"limits"`
+	Metrics   MetricsConfig    `toml:"metrics"`
+	Maildir   string           `toml:"maildir"`
 }
 
 // ListenerConfig defines settings for a single listener.
@@ -47,15 +57,23 @@ type TLSConfig struct {
 	MinVersion string `toml:"min_version"`
 }
 
+// TimeoutsConfig defines timeout durations.
+type TimeoutsConfig struct {
+	Connection string `toml:"connection"`
+	Command    string `toml:"command"`
+	Idle       string `toml:"idle"`
+}
+
 // LimitsConfig defines resource limits for the server.
 type LimitsConfig struct {
 	MaxConnections int `toml:"max_connections"`
 }
 
-// TimeoutsConfig defines timeout durations.
-type TimeoutsConfig struct {
-	Connection string `toml:"connection"`
-	Idle       string `toml:"idle"`
+// MetricsConfig holds configuration for Prometheus metrics.
+type MetricsConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Address string `toml:"address"`
+	Path    string `toml:"path"`
 }
 
 // Default returns a Config with sensible default values.
@@ -69,12 +87,18 @@ func Default() Config {
 		TLS: TLSConfig{
 			MinVersion: "1.2",
 		},
+		Timeouts: TimeoutsConfig{
+			Connection: "10m",
+			Command:    "1m",
+			Idle:       "30m",
+		},
 		Limits: LimitsConfig{
 			MaxConnections: 100,
 		},
-		Timeouts: TimeoutsConfig{
-			Connection: "10m",
-			Idle:       "5m",
+		Metrics: MetricsConfig{
+			Enabled: false,
+			Address: ":9101",
+			Path:    "/metrics",
 		},
 	}
 }
@@ -108,6 +132,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Timeouts.Command != "" {
+		if _, err := time.ParseDuration(c.Timeouts.Command); err != nil {
+			return fmt.Errorf("invalid command timeout: %w", err)
+		}
+	}
+
 	if c.Timeouts.Idle != "" {
 		if _, err := time.ParseDuration(c.Timeouts.Idle); err != nil {
 			return fmt.Errorf("invalid idle timeout: %w", err)
@@ -117,6 +147,15 @@ func (c *Config) Validate() error {
 	if c.TLS.MinVersion != "" {
 		if _, ok := minTLSVersions[c.TLS.MinVersion]; !ok {
 			return fmt.Errorf("invalid TLS min_version %q (valid: 1.0, 1.1, 1.2, 1.3)", c.TLS.MinVersion)
+		}
+	}
+
+	if c.Metrics.Enabled {
+		if c.Metrics.Address == "" {
+			return errors.New("metrics address is required when metrics are enabled")
+		}
+		if c.Metrics.Path == "" {
+			return errors.New("metrics path is required when metrics are enabled")
 		}
 	}
 
@@ -145,15 +184,28 @@ func (c *TimeoutsConfig) ConnectionTimeout() time.Duration {
 	return d
 }
 
+// CommandTimeout returns the command timeout as a time.Duration.
+// Returns 1 minute if not configured or invalid.
+func (c *TimeoutsConfig) CommandTimeout() time.Duration {
+	if c.Command == "" {
+		return 1 * time.Minute
+	}
+	d, err := time.ParseDuration(c.Command)
+	if err != nil {
+		return 1 * time.Minute
+	}
+	return d
+}
+
 // IdleTimeout returns the idle timeout as a time.Duration.
-// Returns 5 minutes if not configured or invalid.
+// Returns 30 minutes if not configured or invalid.
 func (c *TimeoutsConfig) IdleTimeout() time.Duration {
 	if c.Idle == "" {
-		return 5 * time.Minute
+		return 30 * time.Minute
 	}
 	d, err := time.ParseDuration(c.Idle)
 	if err != nil {
-		return 5 * time.Minute
+		return 30 * time.Minute
 	}
 	return d
 }

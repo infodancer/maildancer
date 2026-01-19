@@ -41,8 +41,24 @@ func TestDefault(t *testing.T) {
 		t.Errorf("expected connection timeout '10m', got %q", cfg.Timeouts.Connection)
 	}
 
-	if cfg.Timeouts.Idle != "5m" {
-		t.Errorf("expected idle timeout '5m', got %q", cfg.Timeouts.Idle)
+	if cfg.Timeouts.Command != "1m" {
+		t.Errorf("expected command timeout '1m', got %q", cfg.Timeouts.Command)
+	}
+
+	if cfg.Timeouts.Idle != "30m" {
+		t.Errorf("expected idle timeout '30m', got %q", cfg.Timeouts.Idle)
+	}
+
+	if cfg.Metrics.Enabled != false {
+		t.Errorf("expected metrics enabled 'false', got %v", cfg.Metrics.Enabled)
+	}
+
+	if cfg.Metrics.Address != ":9101" {
+		t.Errorf("expected metrics address ':9101', got %q", cfg.Metrics.Address)
+	}
+
+	if cfg.Metrics.Path != "/metrics" {
+		t.Errorf("expected metrics path '/metrics', got %q", cfg.Metrics.Path)
 	}
 }
 
@@ -97,6 +113,11 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "invalid command timeout",
+			modify:  func(c *Config) { c.Timeouts.Command = "invalid" },
+			wantErr: true,
+		},
+		{
 			name:    "invalid idle timeout",
 			modify:  func(c *Config) { c.Timeouts.Idle = "invalid" },
 			wantErr: true,
@@ -117,6 +138,42 @@ func TestValidate(t *testing.T) {
 			name: "valid pop3s mode",
 			modify: func(c *Config) {
 				c.Listeners = []ListenerConfig{{Address: ":995", Mode: ModePop3s}}
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid metrics config enabled",
+			modify: func(c *Config) {
+				c.Metrics.Enabled = true
+				c.Metrics.Address = ":9101"
+				c.Metrics.Path = "/metrics"
+			},
+			wantErr: false,
+		},
+		{
+			name: "metrics enabled with empty address",
+			modify: func(c *Config) {
+				c.Metrics.Enabled = true
+				c.Metrics.Address = ""
+				c.Metrics.Path = "/metrics"
+			},
+			wantErr: true,
+		},
+		{
+			name: "metrics enabled with empty path",
+			modify: func(c *Config) {
+				c.Metrics.Enabled = true
+				c.Metrics.Address = ":9101"
+				c.Metrics.Path = ""
+			},
+			wantErr: true,
+		},
+		{
+			name: "metrics disabled allows empty address",
+			modify: func(c *Config) {
+				c.Metrics.Enabled = false
+				c.Metrics.Address = ""
+				c.Metrics.Path = ""
 			},
 			wantErr: false,
 		},
@@ -179,16 +236,38 @@ func TestConnectionTimeout(t *testing.T) {
 	}
 }
 
+func TestCommandTimeout(t *testing.T) {
+	tests := []struct {
+		value    string
+		expected time.Duration
+	}{
+		{"1m", 1 * time.Minute},
+		{"30s", 30 * time.Second},
+		{"2m", 2 * time.Minute},
+		{"", 1 * time.Minute},        // default
+		{"invalid", 1 * time.Minute}, // invalid falls back to default
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			cfg := TimeoutsConfig{Command: tt.value}
+			if got := cfg.CommandTimeout(); got != tt.expected {
+				t.Errorf("CommandTimeout() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestIdleTimeout(t *testing.T) {
 	tests := []struct {
 		value    string
 		expected time.Duration
 	}{
-		{"5m", 5 * time.Minute},
-		{"30s", 30 * time.Second},
-		{"2m", 2 * time.Minute},
-		{"", 5 * time.Minute},        // default
-		{"invalid", 5 * time.Minute}, // invalid falls back to default
+		{"30m", 30 * time.Minute},
+		{"1h", 1 * time.Hour},
+		{"10m", 10 * time.Minute},
+		{"", 30 * time.Minute},        // default
+		{"invalid", 30 * time.Minute}, // invalid falls back to default
 	}
 
 	for _, tt := range tests {

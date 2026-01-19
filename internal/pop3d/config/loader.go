@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/BurntSushi/toml"
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 // Flags holds command-line flag values.
@@ -17,6 +17,7 @@ type Flags struct {
 	TLSCert        string
 	TLSKey         string
 	MaxConnections int
+	Maildir        string
 }
 
 // ParseFlags parses command-line flags and returns a Flags struct.
@@ -30,6 +31,7 @@ func ParseFlags() *Flags {
 	flag.StringVar(&f.TLSCert, "tls-cert", "", "TLS certificate file path")
 	flag.StringVar(&f.TLSKey, "tls-key", "", "TLS key file path")
 	flag.IntVar(&f.MaxConnections, "max-connections", 0, "Maximum concurrent connections")
+	flag.StringVar(&f.Maildir, "maildir", "", "Maildir path for message storage")
 
 	flag.Parse()
 	return f
@@ -37,6 +39,8 @@ func ParseFlags() *Flags {
 
 // Load parses a TOML configuration file and returns the Config.
 // If the file does not exist, returns the default configuration.
+// The loader reads from both [server] (shared settings) and [pop3d] (specific settings),
+// with [pop3d] values taking precedence over [server] values.
 func Load(path string) (Config, error) {
 	cfg := Default()
 
@@ -49,11 +53,14 @@ func Load(path string) (Config, error) {
 	}
 
 	var fileConfig FileConfig
-	if _, err := toml.Decode(string(data), &fileConfig); err != nil {
+	if err := toml.Unmarshal(data, &fileConfig); err != nil {
 		return cfg, fmt.Errorf("parsing config file: %w", err)
 	}
 
-	// Merge file config into defaults
+	// First merge shared server config into defaults
+	cfg = mergeServerConfig(cfg, fileConfig.Server)
+
+	// Then merge pop3d-specific config (takes precedence)
 	cfg = mergeConfig(cfg, fileConfig.Pop3d)
 
 	return cfg, nil
@@ -89,6 +96,10 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 		cfg.Limits.MaxConnections = f.MaxConnections
 	}
 
+	if f.Maildir != "" {
+		cfg.Maildir = f.Maildir
+	}
+
 	return cfg
 }
 
@@ -100,6 +111,31 @@ func LoadWithFlags(f *Flags) (Config, error) {
 		return cfg, err
 	}
 	return ApplyFlags(cfg, f), nil
+}
+
+// mergeServerConfig merges shared server settings into the config.
+func mergeServerConfig(dst Config, src ServerConfig) Config {
+	if src.Hostname != "" {
+		dst.Hostname = src.Hostname
+	}
+
+	if src.Maildir != "" {
+		dst.Maildir = src.Maildir
+	}
+
+	if src.TLS.CertFile != "" {
+		dst.TLS.CertFile = src.TLS.CertFile
+	}
+
+	if src.TLS.KeyFile != "" {
+		dst.TLS.KeyFile = src.TLS.KeyFile
+	}
+
+	if src.TLS.MinVersion != "" {
+		dst.TLS.MinVersion = src.TLS.MinVersion
+	}
+
+	return dst
 }
 
 // mergeConfig merges non-zero values from src into dst.
@@ -128,16 +164,37 @@ func mergeConfig(dst, src Config) Config {
 		dst.TLS.MinVersion = src.TLS.MinVersion
 	}
 
-	if src.Limits.MaxConnections > 0 {
-		dst.Limits.MaxConnections = src.Limits.MaxConnections
-	}
-
 	if src.Timeouts.Connection != "" {
 		dst.Timeouts.Connection = src.Timeouts.Connection
 	}
 
+	if src.Timeouts.Command != "" {
+		dst.Timeouts.Command = src.Timeouts.Command
+	}
+
 	if src.Timeouts.Idle != "" {
 		dst.Timeouts.Idle = src.Timeouts.Idle
+	}
+
+	if src.Limits.MaxConnections > 0 {
+		dst.Limits.MaxConnections = src.Limits.MaxConnections
+	}
+
+	// Metrics: enabled is explicitly set (boolean), so we merge if source has any non-zero value
+	if src.Metrics.Enabled {
+		dst.Metrics.Enabled = src.Metrics.Enabled
+	}
+
+	if src.Metrics.Address != "" {
+		dst.Metrics.Address = src.Metrics.Address
+	}
+
+	if src.Metrics.Path != "" {
+		dst.Metrics.Path = src.Metrics.Path
+	}
+
+	if src.Maildir != "" {
+		dst.Maildir = src.Maildir
 	}
 
 	return dst

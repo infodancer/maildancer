@@ -35,7 +35,8 @@ max_connections = 50
 
 [pop3d.timeouts]
 connection = "15m"
-idle = "10m"
+command = "2m"
+idle = "45m"
 
 [[pop3d.listeners]]
 address = ":110"
@@ -81,8 +82,12 @@ mode = "pop3s"
 		t.Errorf("timeouts.connection = %q, want '15m'", cfg.Timeouts.Connection)
 	}
 
-	if cfg.Timeouts.Idle != "10m" {
-		t.Errorf("timeouts.idle = %q, want '10m'", cfg.Timeouts.Idle)
+	if cfg.Timeouts.Command != "2m" {
+		t.Errorf("timeouts.command = %q, want '2m'", cfg.Timeouts.Command)
+	}
+
+	if cfg.Timeouts.Idle != "45m" {
+		t.Errorf("timeouts.idle = %q, want '45m'", cfg.Timeouts.Idle)
 	}
 
 	if len(cfg.Listeners) != 2 {
@@ -141,6 +146,95 @@ hostname = "partial.example.com"
 	}
 }
 
+func TestLoadSharedServerConfig(t *testing.T) {
+	content := `
+[server]
+hostname = "shared.example.com"
+maildir = "/var/mail"
+
+[server.tls]
+cert_file = "/etc/ssl/shared-cert.pem"
+key_file = "/etc/ssl/shared-key.pem"
+min_version = "1.2"
+
+[pop3d]
+log_level = "warn"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// Server settings should be inherited
+	if cfg.Hostname != "shared.example.com" {
+		t.Errorf("hostname = %q, want 'shared.example.com'", cfg.Hostname)
+	}
+
+	if cfg.Maildir != "/var/mail" {
+		t.Errorf("maildir = %q, want '/var/mail'", cfg.Maildir)
+	}
+
+	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want '/etc/ssl/shared-cert.pem'", cfg.TLS.CertFile)
+	}
+
+	if cfg.TLS.KeyFile != "/etc/ssl/shared-key.pem" {
+		t.Errorf("tls.key_file = %q, want '/etc/ssl/shared-key.pem'", cfg.TLS.KeyFile)
+	}
+
+	// Pop3d-specific settings should be applied
+	if cfg.LogLevel != "warn" {
+		t.Errorf("log_level = %q, want 'warn'", cfg.LogLevel)
+	}
+}
+
+func TestLoadPop3dOverridesServer(t *testing.T) {
+	content := `
+[server]
+hostname = "shared.example.com"
+maildir = "/var/mail"
+
+[server.tls]
+cert_file = "/etc/ssl/shared-cert.pem"
+key_file = "/etc/ssl/shared-key.pem"
+
+[pop3d]
+hostname = "pop3.example.com"
+maildir = "/var/pop3mail"
+
+[pop3d.tls]
+cert_file = "/etc/ssl/pop3-cert.pem"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// Pop3d values should override server values
+	if cfg.Hostname != "pop3.example.com" {
+		t.Errorf("hostname = %q, want 'pop3.example.com' (pop3d should override server)", cfg.Hostname)
+	}
+
+	if cfg.Maildir != "/var/pop3mail" {
+		t.Errorf("maildir = %q, want '/var/pop3mail' (pop3d should override server)", cfg.Maildir)
+	}
+
+	if cfg.TLS.CertFile != "/etc/ssl/pop3-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want '/etc/ssl/pop3-cert.pem' (pop3d should override server)", cfg.TLS.CertFile)
+	}
+
+	// Server value should be used when pop3d doesn't override
+	if cfg.TLS.KeyFile != "/etc/ssl/shared-key.pem" {
+		t.Errorf("tls.key_file = %q, want '/etc/ssl/shared-key.pem' (server value should be inherited)", cfg.TLS.KeyFile)
+	}
+}
+
 func TestApplyFlags(t *testing.T) {
 	cfg := Default()
 
@@ -150,6 +244,7 @@ func TestApplyFlags(t *testing.T) {
 		TLSCert:        "/flag/cert.pem",
 		TLSKey:         "/flag/key.pem",
 		MaxConnections: 25,
+		Maildir:        "/flag/maildir",
 	}
 
 	result := ApplyFlags(cfg, flags)
@@ -172,6 +267,10 @@ func TestApplyFlags(t *testing.T) {
 
 	if result.Limits.MaxConnections != 25 {
 		t.Errorf("max_connections = %d, want 25", result.Limits.MaxConnections)
+	}
+
+	if result.Maildir != "/flag/maildir" {
+		t.Errorf("maildir = %q, want '/flag/maildir'", result.Maildir)
 	}
 }
 
@@ -211,7 +310,7 @@ func TestApplyFlagsListenReplacesAllListeners(t *testing.T) {
 	}
 
 	flags := &Flags{
-		Listen: ":1110",
+		Listen: ":1100",
 	}
 
 	result := ApplyFlags(cfg, flags)
@@ -220,12 +319,75 @@ func TestApplyFlagsListenReplacesAllListeners(t *testing.T) {
 		t.Fatalf("expected 1 listener, got %d", len(result.Listeners))
 	}
 
-	if result.Listeners[0].Address != ":1110" {
-		t.Errorf("listener address = %q, want ':1110'", result.Listeners[0].Address)
+	if result.Listeners[0].Address != ":1100" {
+		t.Errorf("listener address = %q, want ':1100'", result.Listeners[0].Address)
 	}
 
 	if result.Listeners[0].Mode != ModePop3 {
 		t.Errorf("listener mode = %q, want 'pop3'", result.Listeners[0].Mode)
+	}
+}
+
+func TestLoadMetricsConfig(t *testing.T) {
+	content := `
+[pop3d]
+hostname = "mail.example.com"
+
+[pop3d.metrics]
+enabled = true
+address = ":9200"
+path = "/custom-metrics"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if !cfg.Metrics.Enabled {
+		t.Errorf("metrics.enabled = %v, want true", cfg.Metrics.Enabled)
+	}
+
+	if cfg.Metrics.Address != ":9200" {
+		t.Errorf("metrics.address = %q, want ':9200'", cfg.Metrics.Address)
+	}
+
+	if cfg.Metrics.Path != "/custom-metrics" {
+		t.Errorf("metrics.path = %q, want '/custom-metrics'", cfg.Metrics.Path)
+	}
+}
+
+func TestLoadMetricsConfigPartial(t *testing.T) {
+	content := `
+[pop3d]
+hostname = "mail.example.com"
+
+[pop3d.metrics]
+enabled = true
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// enabled should be set from file
+	if !cfg.Metrics.Enabled {
+		t.Errorf("metrics.enabled = %v, want true", cfg.Metrics.Enabled)
+	}
+
+	// address and path should use defaults
+	defaults := Default()
+	if cfg.Metrics.Address != defaults.Metrics.Address {
+		t.Errorf("metrics.address = %q, want default %q", cfg.Metrics.Address, defaults.Metrics.Address)
+	}
+
+	if cfg.Metrics.Path != defaults.Metrics.Path {
+		t.Errorf("metrics.path = %q, want default %q", cfg.Metrics.Path, defaults.Metrics.Path)
 	}
 }
 

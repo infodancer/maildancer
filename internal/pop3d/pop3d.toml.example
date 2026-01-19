@@ -1,30 +1,42 @@
-# POP3 Server Configuration
+# Mail Server Configuration
 # Shared by smtpd, pop3d, msgstore
 
-[pop3d]
+# Shared configuration used by all mail services
+[server]
 hostname = "mail.example.com"
-log_level = "info"
+maildir = "/var/mail"
 
-[pop3d.tls]
+[server.tls]
 cert_file = "/etc/ssl/certs/mail.pem"
 key_file = "/etc/ssl/private/mail.key"
 min_version = "1.2"
 
-[pop3d.limits]
-max_connections = 100
+# POP3 Server Configuration
+[pop3d]
+log_level = "info"
 
 [pop3d.timeouts]
-connection = "10m"
-idle = "5m"
+connection = "10m"      # POP3 sessions tend to be longer than SMTP
+command = "1m"
+idle = "30m"            # Auto-logout after inactivity (RFC 1939 recommends 10min minimum)
+
+[pop3d.limits]
+max_connections = 100   # Concurrent connections limit
+
+[pop3d.metrics]
+enabled = false
+address = ":9101"
+path = "/metrics"
 
 [[pop3d.listeners]]
 address = ":110"
-mode = "pop3"
+mode = "pop3"           # Plain POP3 with optional STLS
 
 [[pop3d.listeners]]
 address = ":995"
-mode = "pop3s"
+mode = "pop3s"          # Implicit TLS (POP3S)
 
 # Future sections:
 # [smtpd]
 # [msgstore]
+# [imap]

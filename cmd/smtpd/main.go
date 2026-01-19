@@ -76,7 +76,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error creating authentication agent: %v\n", err)
 			os.Exit(1)
 		}
-		defer authAgent.Close()
+		defer func() {
+			if err := authAgent.Close(); err != nil {
+				srv.Logger().Error("error closing auth agent", "error", err)
+			}
+		}()
 		srv.Logger().Info("authentication enabled", "type", cfg.Auth.AgentType)
 	}
 

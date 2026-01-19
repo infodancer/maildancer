@@ -41,3 +41,24 @@ var (
 	// ErrQuotaExceeded indicates the mailbox quota has been exceeded.
 	ErrQuotaExceeded = errors.New("quota exceeded")
 )
+
+// Store errors.
+var (
+	// ErrStoreNotRegistered indicates the requested store type is not registered.
+	ErrStoreNotRegistered = errors.New("store type not registered")
+
+	// ErrStoreConfigInvalid indicates the store configuration is invalid.
+	ErrStoreConfigInvalid = errors.New("invalid store configuration")
+)
+
+// Maildir errors.
+var (
+	// ErrMaildirNotFound indicates the maildir directory does not exist.
+	ErrMaildirNotFound = errors.New("maildir not found")
+
+	// ErrDeliveryFailed indicates message delivery failed.
+	ErrDeliveryFailed = errors.New("delivery failed")
+
+	// ErrInvalidPath indicates an invalid maildir path.
+	ErrInvalidPath = errors.New("invalid maildir path")
+)

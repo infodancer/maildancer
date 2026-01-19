@@ -221,9 +221,7 @@ func collectMessageData(conn *server.Connection, maxSize int64) ([]byte, error) 
 		}
 
 		// Handle dot-stuffing: lines starting with "." have it removed
-		if strings.HasPrefix(line, ".") {
-			line = line[1:]
-		}
+		line = strings.TrimPrefix(line, ".")
 
 		// Check size limit
 		if maxSize > 0 {

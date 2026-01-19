@@ -76,5 +76,5 @@ tasks:
       MAILDIR:
         sh: mktemp -d -t smtpd-maildir-XXXXXX
     cmds:
-      - echo "Maildir storage: {{.MAILDIR}}"
+      - 'echo "Maildir storage: {{.MAILDIR}}"'
       - go run ./cmd/smtpd -listen localhost:2525 -maildir {{.MAILDIR}} -log-level debug

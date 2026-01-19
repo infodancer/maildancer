@@ -1,14 +1,19 @@
 # Mail Server Configuration
 # Shared by smtpd, pop3d, msgstore
 
-[smtpd]
+# Shared configuration used by all mail services
+[server]
 hostname = "mail.example.com"
-log_level = "info"
+maildir = "/var/mail"
 
-[smtpd.tls]
+[server.tls]
 cert_file = "/etc/ssl/certs/mail.pem"
 key_file = "/etc/ssl/private/mail.key"
 min_version = "1.2"
+
+# SMTP Server Configuration
+[smtpd]
+log_level = "info"
 
 [smtpd.limits]
 max_message_size = 26214400  # 25 MB
@@ -17,9 +22,6 @@ max_recipients = 100
 [smtpd.timeouts]
 connection = "5m"
 command = "1m"
-
-[smtpd.delivery]
-# maildir = "/var/mail"  # Path for maildir delivery (optional)
 
 [[smtpd.listeners]]
 address = ":25"
@@ -36,3 +38,4 @@ mode = "smtps"
 # Future sections:
 # [pop3d]
 # [msgstore]
+# [imap]

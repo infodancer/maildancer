@@ -354,6 +354,97 @@ max_recipients = 100
 	}
 }
 
+func TestLoadSharedServerConfig(t *testing.T) {
+	content := `
+[server]
+hostname = "shared.example.com"
+maildir = "/var/mail"
+
+[server.tls]
+cert_file = "/etc/ssl/shared-cert.pem"
+key_file = "/etc/ssl/shared-key.pem"
+min_version = "1.2"
+
+[smtpd]
+log_level = "warn"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// Server settings should be inherited
+	if cfg.Hostname != "shared.example.com" {
+		t.Errorf("hostname = %q, want 'shared.example.com'", cfg.Hostname)
+	}
+
+	if cfg.Delivery.Maildir != "/var/mail" {
+		t.Errorf("delivery.maildir = %q, want '/var/mail'", cfg.Delivery.Maildir)
+	}
+
+	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want '/etc/ssl/shared-cert.pem'", cfg.TLS.CertFile)
+	}
+
+	if cfg.TLS.KeyFile != "/etc/ssl/shared-key.pem" {
+		t.Errorf("tls.key_file = %q, want '/etc/ssl/shared-key.pem'", cfg.TLS.KeyFile)
+	}
+
+	// Smtpd-specific settings should be applied
+	if cfg.LogLevel != "warn" {
+		t.Errorf("log_level = %q, want 'warn'", cfg.LogLevel)
+	}
+}
+
+func TestLoadSmtpdOverridesServer(t *testing.T) {
+	content := `
+[server]
+hostname = "shared.example.com"
+maildir = "/var/mail"
+
+[server.tls]
+cert_file = "/etc/ssl/shared-cert.pem"
+key_file = "/etc/ssl/shared-key.pem"
+
+[smtpd]
+hostname = "smtp.example.com"
+
+[smtpd.tls]
+cert_file = "/etc/ssl/smtp-cert.pem"
+
+[smtpd.delivery]
+maildir = "/var/smtpmail"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// Smtpd values should override server values
+	if cfg.Hostname != "smtp.example.com" {
+		t.Errorf("hostname = %q, want 'smtp.example.com' (smtpd should override server)", cfg.Hostname)
+	}
+
+	if cfg.Delivery.Maildir != "/var/smtpmail" {
+		t.Errorf("delivery.maildir = %q, want '/var/smtpmail' (smtpd should override server)", cfg.Delivery.Maildir)
+	}
+
+	if cfg.TLS.CertFile != "/etc/ssl/smtp-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want '/etc/ssl/smtp-cert.pem' (smtpd should override server)", cfg.TLS.CertFile)
+	}
+
+	// Server value should be used when smtpd doesn't override
+	if cfg.TLS.KeyFile != "/etc/ssl/shared-key.pem" {
+		t.Errorf("tls.key_file = %q, want '/etc/ssl/shared-key.pem' (server value should be inherited)", cfg.TLS.KeyFile)
+	}
+}
+
 func createTempConfig(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()

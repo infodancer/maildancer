@@ -41,6 +41,8 @@ func ParseFlags() *Flags {
 
 // Load parses a TOML configuration file and returns the Config.
 // If the file does not exist, returns the default configuration.
+// The loader reads from both [server] (shared settings) and [smtpd] (specific settings),
+// with [smtpd] values taking precedence over [server] values.
 func Load(path string) (Config, error) {
 	cfg := Default()
 
@@ -57,7 +59,10 @@ func Load(path string) (Config, error) {
 		return cfg, fmt.Errorf("parsing config file: %w", err)
 	}
 
-	// Merge file config into defaults
+	// First merge shared server config into defaults
+	cfg = mergeServerConfig(cfg, fileConfig.Server)
+
+	// Then merge smtpd-specific config (takes precedence)
 	cfg = mergeConfig(cfg, fileConfig.Smtpd)
 
 	return cfg, nil
@@ -112,6 +117,31 @@ func LoadWithFlags(f *Flags) (Config, error) {
 		return cfg, err
 	}
 	return ApplyFlags(cfg, f), nil
+}
+
+// mergeServerConfig merges shared server settings into the config.
+func mergeServerConfig(dst Config, src ServerConfig) Config {
+	if src.Hostname != "" {
+		dst.Hostname = src.Hostname
+	}
+
+	if src.Maildir != "" {
+		dst.Delivery.Maildir = src.Maildir
+	}
+
+	if src.TLS.CertFile != "" {
+		dst.TLS.CertFile = src.TLS.CertFile
+	}
+
+	if src.TLS.KeyFile != "" {
+		dst.TLS.KeyFile = src.TLS.KeyFile
+	}
+
+	if src.TLS.MinVersion != "" {
+		dst.TLS.MinVersion = src.TLS.MinVersion
+	}
+
+	return dst
 }
 
 // mergeConfig merges non-zero values from src into dst.

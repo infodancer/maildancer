@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/infodancer/maildancer/msgstore v0.0.0-20260119190950-8397c0fa98ca // indirect
 	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 )

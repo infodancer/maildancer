@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/infodancer/maildancer/auth"
+	"github.com/infodancer/maildancer/msgstore"
 )
 
 // AuthProvider is the interface for authentication operations.
@@ -101,6 +102,7 @@ func (u *userCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 // passCommand implements the PASS command (RFC 1939).
 type passCommand struct {
 	authProvider AuthProvider
+	msgStore     msgstore.MessageStore
 }
 
 func (p *passCommand) Name() string {
@@ -145,6 +147,18 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 	// Authentication successful - transition to TRANSACTION state
 	sess.SetAuthenticated(authSession)
 
+	// Initialize mailbox if message store is available
+	if p.msgStore != nil {
+		if err := sess.InitializeMailbox(ctx, p.msgStore); err != nil {
+			conn.Logger().Error("failed to initialize mailbox",
+				"username", username,
+				"mailbox", authSession.User.Mailbox,
+				"error", err.Error(),
+			)
+			return Response{OK: false, Message: "Failed to access mailbox"}, nil
+		}
+	}
+
 	conn.Logger().Info("authentication successful",
 		"username", username,
 		"mailbox", authSession.User.Mailbox,
@@ -186,10 +200,10 @@ func (q *quitCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 }
 
 // RegisterAuthCommands registers all authentication-related commands.
-func RegisterAuthCommands(authProvider AuthProvider) {
+func RegisterAuthCommands(authProvider AuthProvider, msgStore msgstore.MessageStore) {
 	RegisterCommand(&capaCommand{})
 	RegisterCommand(&stlsCommand{})
 	RegisterCommand(&userCommand{})
-	RegisterCommand(&passCommand{authProvider: authProvider})
+	RegisterCommand(&passCommand{authProvider: authProvider, msgStore: msgStore})
 	RegisterCommand(&quitCommand{})
 }

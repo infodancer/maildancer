@@ -413,7 +413,7 @@ func TestCommandRegistry(t *testing.T) {
 
 	// Register test commands
 	mockAuth := &mockAuthProvider{}
-	RegisterAuthCommands(mockAuth)
+	RegisterAuthCommands(mockAuth, nil)
 
 	tests := []struct {
 		name      string

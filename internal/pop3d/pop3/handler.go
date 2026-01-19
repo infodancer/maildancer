@@ -7,23 +7,26 @@ import (
 	"io"
 	"strings"
 
+	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/server"
 )
 
 // Handler creates a POP3 protocol handler with the given configuration.
-func Handler(hostname string, authProvider AuthProvider, tlsConfig *tls.Config) server.ConnectionHandler {
-	// Register authentication commands with the auth provider
-	RegisterAuthCommands(authProvider)
+func Handler(hostname string, authProvider AuthProvider, msgStore msgstore.MessageStore, tlsConfig *tls.Config) server.ConnectionHandler {
+	// Register authentication commands with the auth provider and message store
+	RegisterAuthCommands(authProvider, msgStore)
+	// Register transaction commands
+	RegisterTransactionCommands()
 
 	return func(ctx context.Context, conn *server.Connection) {
-		handleConnection(ctx, conn, hostname, tlsConfig)
+		handleConnection(ctx, conn, hostname, msgStore, tlsConfig)
 	}
 }
 
 // handleConnection manages a single POP3 connection.
-func handleConnection(ctx context.Context, conn *server.Connection, hostname string, tlsConfig *tls.Config) {
+func handleConnection(ctx context.Context, conn *server.Connection, hostname string, msgStore msgstore.MessageStore, tlsConfig *tls.Config) {
 	logger := logging.FromContext(ctx)
 
 	// Determine listener mode based on connection state
@@ -160,7 +163,22 @@ func handleConnection(ctx context.Context, conn *server.Connection, hostname str
 			}
 
 		case "QUIT":
-			// QUIT always closes the connection
+			// If we were in TRANSACTION state (now UPDATE), expunge deleted messages
+			if sess.State() == StateUpdate && msgStore != nil {
+				uids := sess.GetDeletedUIDs()
+				for _, uid := range uids {
+					if err := msgStore.Delete(ctx, sess.Mailbox(), uid); err != nil {
+						logger.Error("failed to delete message", "uid", uid, "error", err.Error())
+					}
+				}
+				if len(uids) > 0 {
+					if err := msgStore.Expunge(ctx, sess.Mailbox()); err != nil {
+						logger.Error("failed to expunge mailbox", "error", err.Error())
+					} else {
+						logger.Info("expunged messages", "count", len(uids))
+					}
+				}
+			}
 			logger.Info("QUIT command received, closing connection")
 			return
 		}

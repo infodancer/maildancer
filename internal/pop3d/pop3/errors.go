@@ -24,4 +24,13 @@ var (
 
 	// ErrInvalidCommand is returned when a command is not recognized.
 	ErrInvalidCommand = errors.New("invalid command")
+
+	// ErrNoSuchMessage is returned when a message number doesn't exist.
+	ErrNoSuchMessage = errors.New("no such message")
+
+	// ErrMessageDeleted is returned when accessing a message marked for deletion.
+	ErrMessageDeleted = errors.New("message already deleted")
+
+	// ErrMailboxNotInitialized is returned when mailbox is accessed before auth.
+	ErrMailboxNotInitialized = errors.New("mailbox not initialized")
 )

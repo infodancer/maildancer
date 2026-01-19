@@ -1,9 +1,11 @@
 package pop3
 
 import (
+	"context"
 	"crypto/tls"
 
 	"github.com/infodancer/maildancer/auth"
+	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 )
 
@@ -72,6 +74,12 @@ type Session struct {
 	// Authentication state
 	username    string
 	authSession *auth.AuthSession
+
+	// Transaction state (mailbox data)
+	mailbox     string                 // User's mailbox path
+	store       msgstore.MessageStore  // Reference to message store
+	messageList []msgstore.MessageInfo // Loaded after auth
+	deletedSet  map[int]bool           // 1-based message numbers marked deleted
 }
 
 // NewSession creates a new POP3 session.
@@ -185,4 +193,136 @@ func (s *Session) Cleanup() {
 		s.authSession.Clear()
 		s.authSession = nil
 	}
+}
+
+// InitializeMailbox loads the message list for the authenticated user's mailbox.
+// Should be called after successful authentication.
+func (s *Session) InitializeMailbox(ctx context.Context, store msgstore.MessageStore) error {
+	if s.authSession == nil || s.authSession.User == nil {
+		return ErrMailboxNotInitialized
+	}
+
+	s.mailbox = s.authSession.User.Mailbox
+	s.store = store
+	s.deletedSet = make(map[int]bool)
+
+	// Load message list
+	messages, err := store.List(ctx, s.mailbox)
+	if err != nil {
+		return err
+	}
+	s.messageList = messages
+
+	return nil
+}
+
+// MessageCount returns the count of non-deleted messages.
+func (s *Session) MessageCount() int {
+	if s.messageList == nil {
+		return 0
+	}
+	count := 0
+	for i := range s.messageList {
+		if !s.deletedSet[i+1] { // 1-based numbering
+			count++
+		}
+	}
+	return count
+}
+
+// TotalSize returns the total size of non-deleted messages in bytes.
+func (s *Session) TotalSize() int64 {
+	if s.messageList == nil {
+		return 0
+	}
+	var total int64
+	for i, msg := range s.messageList {
+		if !s.deletedSet[i+1] { // 1-based numbering
+			total += msg.Size
+		}
+	}
+	return total
+}
+
+// GetMessage returns message info by 1-based message number.
+// Returns an error if the message doesn't exist or is deleted.
+func (s *Session) GetMessage(msgNum int) (*msgstore.MessageInfo, error) {
+	if s.messageList == nil {
+		return nil, ErrMailboxNotInitialized
+	}
+	if msgNum < 1 || msgNum > len(s.messageList) {
+		return nil, ErrNoSuchMessage
+	}
+	if s.deletedSet[msgNum] {
+		return nil, ErrMessageDeleted
+	}
+	return &s.messageList[msgNum-1], nil
+}
+
+// MarkDeleted marks a message for deletion by 1-based message number.
+func (s *Session) MarkDeleted(msgNum int) error {
+	if s.messageList == nil {
+		return ErrMailboxNotInitialized
+	}
+	if msgNum < 1 || msgNum > len(s.messageList) {
+		return ErrNoSuchMessage
+	}
+	if s.deletedSet[msgNum] {
+		return ErrMessageDeleted
+	}
+	s.deletedSet[msgNum] = true
+	return nil
+}
+
+// ResetDeletions clears all deletion marks (RSET command).
+func (s *Session) ResetDeletions() {
+	s.deletedSet = make(map[int]bool)
+}
+
+// GetDeletedUIDs returns the UIDs of messages marked for deletion.
+func (s *Session) GetDeletedUIDs() []string {
+	if s.messageList == nil {
+		return nil
+	}
+	var uids []string
+	for msgNum := range s.deletedSet {
+		if msgNum >= 1 && msgNum <= len(s.messageList) {
+			uids = append(uids, s.messageList[msgNum-1].UID)
+		}
+	}
+	return uids
+}
+
+// Store returns the message store for this session.
+func (s *Session) Store() msgstore.MessageStore {
+	return s.store
+}
+
+// Mailbox returns the mailbox path for this session.
+func (s *Session) Mailbox() string {
+	return s.mailbox
+}
+
+// AllMessages returns iterating info for all messages (for LIST/UIDL).
+// Returns slice of (msgNum, msgInfo) where msgNum is 1-based.
+func (s *Session) AllMessages() []struct {
+	MsgNum int
+	Info   msgstore.MessageInfo
+} {
+	if s.messageList == nil {
+		return nil
+	}
+	var result []struct {
+		MsgNum int
+		Info   msgstore.MessageInfo
+	}
+	for i, msg := range s.messageList {
+		if !s.deletedSet[i+1] {
+			result = append(result, struct {
+				MsgNum int
+				Info   msgstore.MessageInfo
+			}{MsgNum: i + 1, Info: msg})
+		}
+	}
+	return result
 }

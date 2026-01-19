@@ -25,7 +25,15 @@ const (
 // FileConfig is the top-level wrapper for the shared configuration file.
 // This allows smtpd, pop3d, and msgstore to share a single config file.
 type FileConfig struct {
-	Smtpd Config `toml:"smtpd"`
+	Server ServerConfig `toml:"server"`
+	Smtpd  Config       `toml:"smtpd"`
+}
+
+// ServerConfig holds shared settings used by all mail services.
+type ServerConfig struct {
+	Hostname string    `toml:"hostname"`
+	Maildir  string    `toml:"maildir"`
+	TLS      TLSConfig `toml:"tls"`
 }
 
 // Config holds the complete SMTP server configuration.

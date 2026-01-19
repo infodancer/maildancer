@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/BurntSushi/toml"
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 // Flags holds command-line flag values.
@@ -53,7 +53,7 @@ func Load(path string) (Config, error) {
 	}
 
 	var fileConfig FileConfig
-	if _, err := toml.Decode(string(data), &fileConfig); err != nil {
+	if err := toml.Unmarshal(data, &fileConfig); err != nil {
 		return cfg, fmt.Errorf("parsing config file: %w", err)
 	}
 

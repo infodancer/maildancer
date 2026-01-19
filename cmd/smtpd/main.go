@@ -8,7 +8,10 @@ import (
 	"syscall"
 
 	"github.com/infodancer/maildancer/internal/smtpd/config"
+	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/server"
+	"github.com/infodancer/maildancer/internal/smtpd/smtp"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -31,6 +34,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error creating server: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Set up metrics collector
+	var collector metrics.Collector = &metrics.NoopCollector{}
+	if cfg.Metrics.Enabled {
+		collector = metrics.NewPrometheusCollector(prometheus.DefaultRegisterer)
+	}
+
+	// Create and set the SMTP handler
+	// Note: delivery agent is nil for now - messages will be rejected
+	// TODO: Wire up actual message storage once msgstore is configured
+	handler := smtp.Handler(cfg.Hostname, collector, nil)
+	srv.SetHandler(handler)
 
 	// Set up context with signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

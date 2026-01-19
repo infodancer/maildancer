@@ -4,7 +4,7 @@ import (
 	"crypto/tls"
 	"testing"
 
-	"github.com/infodancer/maildancer/msgstore"
+	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 )
 
@@ -148,8 +148,8 @@ func TestSessionAuthentication(t *testing.T) {
 	}
 
 	// Authenticate
-	authSession := &msgstore.AuthSession{
-		User: &msgstore.User{
+	authSession := &auth.AuthSession{
+		User: &auth.User{
 			Username: "testuser",
 			Mailbox:  "/var/mail/testuser",
 		},
@@ -179,8 +179,8 @@ func TestSessionStateTransitions(t *testing.T) {
 	}
 
 	// Authenticate -> TRANSACTION
-	authSession := &msgstore.AuthSession{
-		User: &msgstore.User{Username: "test"},
+	authSession := &auth.AuthSession{
+		User: &auth.User{Username: "test"},
 	}
 	sess.SetAuthenticated(authSession)
 
@@ -284,8 +284,8 @@ func TestSessionCleanup(t *testing.T) {
 	sess := NewSession("test.example.com", config.ModePop3s, nil, true)
 
 	// Authenticate with a session
-	authSession := &msgstore.AuthSession{
-		User: &msgstore.User{Username: "test"},
+	authSession := &auth.AuthSession{
+		User: &auth.User{Username: "test"},
 	}
 	sess.SetAuthenticated(authSession)
 

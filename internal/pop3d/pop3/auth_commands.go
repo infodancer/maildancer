@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/infodancer/maildancer/msgstore"
+	"github.com/infodancer/maildancer/auth"
 )
 
 // AuthProvider is the interface for authentication operations.
 type AuthProvider interface {
-	Authenticate(ctx context.Context, username, password string) (*msgstore.AuthSession, error)
+	Authenticate(ctx context.Context, username, password string) (*auth.AuthSession, error)
 }
 
 // capaCommand implements the CAPA command (RFC 2449).

@@ -3,7 +3,7 @@ package pop3
 import (
 	"crypto/tls"
 
-	"github.com/infodancer/maildancer/msgstore"
+	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 )
 
@@ -71,7 +71,7 @@ type Session struct {
 
 	// Authentication state
 	username    string
-	authSession *msgstore.AuthSession
+	authSession *auth.AuthSession
 }
 
 // NewSession creates a new POP3 session.
@@ -138,7 +138,7 @@ func (s *Session) Username() string {
 
 // SetAuthenticated transitions to StateTransaction after successful authentication.
 // Stores the AuthSession for later use.
-func (s *Session) SetAuthenticated(authSession *msgstore.AuthSession) {
+func (s *Session) SetAuthenticated(authSession *auth.AuthSession) {
 	s.state = StateTransaction
 	s.authSession = authSession
 }
@@ -149,7 +149,7 @@ func (s *Session) IsAuthenticated() bool {
 }
 
 // AuthSession returns the authentication session, or nil if not authenticated.
-func (s *Session) AuthSession() *msgstore.AuthSession {
+func (s *Session) AuthSession() *auth.AuthSession {
 	return s.authSession
 }
 

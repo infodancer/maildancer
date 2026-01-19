@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/infodancer/maildancer/msgstore"
-	_ "github.com/infodancer/maildancer/msgstore/passwd" // Register passwd backend
+	"github.com/infodancer/maildancer/auth"
+	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd backend
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/pop3"
 	"github.com/infodancer/maildancer/internal/pop3d/server"
@@ -29,7 +29,7 @@ func main() {
 	}
 
 	// Create authentication agent
-	authAgent, err := msgstore.OpenAuthAgent(msgstore.AuthAgentConfig{
+	authAgent, err := auth.OpenAuthAgent(auth.AuthAgentConfig{
 		Type:              cfg.Auth.Type,
 		CredentialBackend: cfg.Auth.CredentialBackend,
 		KeyBackend:        cfg.Auth.KeyBackend,

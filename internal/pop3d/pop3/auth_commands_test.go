@@ -6,16 +6,16 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/infodancer/maildancer/msgstore"
+	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 )
 
 // mockAuthProvider is a test double for AuthProvider.
 type mockAuthProvider struct {
-	authenticateFn func(ctx context.Context, username, password string) (*msgstore.AuthSession, error)
+	authenticateFn func(ctx context.Context, username, password string) (*auth.AuthSession, error)
 }
 
-func (m *mockAuthProvider) Authenticate(ctx context.Context, username, password string) (*msgstore.AuthSession, error) {
+func (m *mockAuthProvider) Authenticate(ctx context.Context, username, password string) (*auth.AuthSession, error) {
 	if m.authenticateFn != nil {
 		return m.authenticateFn(ctx, username, password)
 	}
@@ -232,7 +232,7 @@ func TestPassCommand(t *testing.T) {
 		sess          *Session
 		setupSession  func(*Session)
 		args          []string
-		authFn        func(ctx context.Context, username, password string) (*msgstore.AuthSession, error)
+		authFn        func(ctx context.Context, username, password string) (*auth.AuthSession, error)
 		wantOK        bool
 		wantMessage   string
 		wantState     State
@@ -263,9 +263,9 @@ func TestPassCommand(t *testing.T) {
 				s.SetUsername("testuser")
 			},
 			args: []string{"correctpassword"},
-			authFn: func(ctx context.Context, username, password string) (*msgstore.AuthSession, error) {
-				return &msgstore.AuthSession{
-					User: &msgstore.User{
+			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+				return &auth.AuthSession{
+					User: &auth.User{
 						Username: username,
 						Mailbox:  "/var/mail/" + username,
 					},
@@ -282,7 +282,7 @@ func TestPassCommand(t *testing.T) {
 				s.SetUsername("testuser")
 			},
 			args: []string{"wrongpassword"},
-			authFn: func(ctx context.Context, username, password string) (*msgstore.AuthSession, error) {
+			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
 				return nil, errors.New("invalid credentials")
 			},
 			wantOK:      false,
@@ -359,8 +359,8 @@ func TestQuitCommand(t *testing.T) {
 			name:        "QUIT in TRANSACTION",
 			sess:        newTestSession(config.ModePop3s, true),
 			setupSession: func(s *Session) {
-				s.SetAuthenticated(&msgstore.AuthSession{
-					User: &msgstore.User{Username: "test"},
+				s.SetAuthenticated(&auth.AuthSession{
+					User: &auth.User{Username: "test"},
 				})
 			},
 			args:        []string{},

@@ -1,5 +1,3 @@
-github.com/infodancer/maildancer/msgstore v0.0.0-20260119172740-b28c3738bb5f h1:ktcBKUBSafF1HwuWSCALwEt+b/4X20UF9iaHRN0EUVc=
-github.com/infodancer/maildancer/msgstore v0.0.0-20260119172740-b28c3738bb5f/go.mod h1:gj2jONRoKtUjJr3DkvQkBiR54cl3B0llvKheNQ06Xfk=
 github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
 github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 golang.org/x/crypto v0.47.0 h1:V6e3FRj+n4dbpw86FJ8Fv7XVOql7TEwpHapKoMJ/GO8=

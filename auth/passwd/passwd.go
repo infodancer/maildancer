@@ -162,6 +162,15 @@ func (a *Agent) Close() error {
 	return nil
 }
 
+// UserExists checks if a user exists without authenticating.
+func (a *Agent) UserExists(ctx context.Context, username string) (bool, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	_, exists := a.users[username]
+	return exists, nil
+}
+
 // GetPublicKey returns the public key for a user.
 func (a *Agent) GetPublicKey(ctx context.Context, username string) ([]byte, error) {
 	a.mu.RLock()

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,9 +14,9 @@ import (
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir storage backend
 	"github.com/infodancer/maildancer/internal/smtpd/config"
+	"github.com/infodancer/maildancer/internal/smtpd/logging"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/rspamd"
-	"github.com/infodancer/maildancer/internal/smtpd/server"
 	"github.com/infodancer/maildancer/internal/smtpd/smtp"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 	"github.com/prometheus/client_golang/prometheus"
@@ -34,11 +36,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Create the server
-	srv, err := server.New(&cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating server: %v\n", err)
-		os.Exit(1)
+	// Create logger
+	logger := logging.NewLogger(cfg.LogLevel)
+
+	// Load TLS configuration if certificates are specified
+	var tlsConfig *tls.Config
+	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading TLS certificate: %v\n", err)
+			os.Exit(1)
+		}
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   cfg.TLS.MinTLSVersion(),
+		}
+		logger.Info("TLS configured",
+			slog.String("cert", cfg.TLS.CertFile),
+			slog.String("min_version", cfg.TLS.MinVersion))
 	}
 
 	// Set up metrics collector
@@ -61,7 +76,7 @@ func main() {
 			os.Exit(1)
 		}
 		delivery = store
-		srv.Logger().Info("delivery enabled", "type", cfg.Delivery.Type, "path", cfg.Delivery.BasePath)
+		logger.Info("delivery enabled", "type", cfg.Delivery.Type, "path", cfg.Delivery.BasePath)
 	}
 
 	// Create authentication agent if configured
@@ -80,29 +95,51 @@ func main() {
 		}
 		defer func() {
 			if err := authAgent.Close(); err != nil {
-				srv.Logger().Error("error closing auth agent", "error", err)
+				logger.Error("error closing auth agent", "error", err)
 			}
 		}()
-		srv.Logger().Info("authentication enabled", "type", cfg.Auth.AgentType)
+		logger.Info("authentication enabled", "type", cfg.Auth.AgentType)
 	}
 
 	// Create spam checker from config
-	spamChecker, spamCheckConfig := createSpamChecker(cfg, srv)
+	spamChecker, spamCheckConfig := createSpamChecker(cfg, logger)
 	if spamChecker != nil {
 		defer func() {
 			if err := spamChecker.Close(); err != nil {
-				srv.Logger().Error("error closing spam checker", "error", err)
+				logger.Error("error closing spam checker", "error", err)
 			}
 		}()
 	}
 
-	// Create and set the SMTP handler
-	handlerOpts := &smtp.HandlerOptions{
-		SpamChecker:     spamChecker,
-		SpamCheckConfig: spamCheckConfig,
+	// Create the go-smtp backend
+	backend := smtp.NewBackend(smtp.BackendConfig{
+		Hostname:       cfg.Hostname,
+		Delivery:       delivery,
+		AuthAgent:      authAgent,
+		SpamChecker:    spamChecker,
+		SpamConfig:     spamCheckConfig,
+		Collector:      collector,
+		MaxRecipients:  cfg.Limits.MaxRecipients,
+		MaxMessageSize: int64(cfg.Limits.MaxMessageSize),
+		Logger:         logger,
+	})
+
+	// Create the multi-mode server
+	srv, err := smtp.NewServer(smtp.ServerConfig{
+		Backend:        backend,
+		Listeners:      cfg.Listeners,
+		Hostname:       cfg.Hostname,
+		TLSConfig:      tlsConfig,
+		ReadTimeout:    cfg.Timeouts.ConnectionTimeout(),
+		WriteTimeout:   cfg.Timeouts.ConnectionTimeout(),
+		MaxMessageSize: cfg.Limits.MaxMessageSize,
+		MaxRecipients:  cfg.Limits.MaxRecipients,
+		Logger:         logger,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating server: %v\n", err)
+		os.Exit(1)
 	}
-	handler := smtp.Handler(cfg.Hostname, collector, delivery, authAgent, srv.TLSConfig(), handlerOpts)
-	srv.SetHandler(handler)
 
 	// Set up context with signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -113,9 +150,21 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-sigChan
-		srv.Logger().Info("received signal, shutting down", "signal", sig.String())
+		logger.Info("received signal, shutting down", "signal", sig.String())
 		cancel()
 	}()
+
+	// Start metrics server if enabled
+	if cfg.Metrics.Enabled {
+		metricsServer := metrics.NewPrometheusServer(cfg.Metrics.Address, cfg.Metrics.Path)
+		go func() {
+			if err := metricsServer.Start(ctx); err != nil && err != context.Canceled {
+				logger.Error("metrics server error", "error", err)
+			}
+		}()
+	}
+
+	logger.Info("starting smtpd", "hostname", cfg.Hostname, "listeners", len(cfg.Listeners))
 
 	// Run the server
 	if err := srv.Run(ctx); err != nil && err != context.Canceled {
@@ -125,17 +174,17 @@ func main() {
 }
 
 // createSpamChecker creates a spam checker from the configuration.
-func createSpamChecker(cfg config.Config, srv *server.Server) (spamcheck.Checker, config.SpamCheckConfig) {
+func createSpamChecker(cfg config.Config, logger *slog.Logger) (spamcheck.Checker, config.SpamCheckConfig) {
 	if !cfg.SpamCheck.IsEnabled() {
 		return nil, config.SpamCheckConfig{}
 	}
 
-	checkers, names := createCheckersFromConfig(cfg.SpamCheck, srv)
+	checkers, names := createCheckersFromConfig(cfg.SpamCheck, logger)
 	if len(checkers) == 0 {
 		return nil, config.SpamCheckConfig{}
 	}
 
-	srv.Logger().Info("spam checking enabled",
+	logger.Info("spam checking enabled",
 		"checkers", names,
 		"mode", cfg.SpamCheck.Mode,
 		"fail_mode", cfg.SpamCheck.GetFailMode(),
@@ -157,7 +206,7 @@ func createSpamChecker(cfg config.Config, srv *server.Server) (spamcheck.Checker
 }
 
 // createCheckersFromConfig creates spam checkers from the spamcheck config.
-func createCheckersFromConfig(cfg config.SpamCheckConfig, srv *server.Server) ([]spamcheck.Checker, []string) {
+func createCheckersFromConfig(cfg config.SpamCheckConfig, logger *slog.Logger) ([]spamcheck.Checker, []string) {
 	var checkers []spamcheck.Checker
 	var names []string
 
@@ -171,7 +220,7 @@ func createCheckersFromConfig(cfg config.SpamCheckConfig, srv *server.Server) ([
 			checker := rspamd.NewChecker(checkerCfg.URL, checkerCfg.Password, checkerCfg.GetTimeout())
 			checkers = append(checkers, checker)
 			names = append(names, "rspamd")
-			srv.Logger().Debug("created rspamd checker", "url", checkerCfg.URL)
+			logger.Debug("created rspamd checker", "url", checkerCfg.URL)
 
 		// Add more checker types here as they're implemented:
 		// case "spamassassin":
@@ -180,7 +229,7 @@ func createCheckersFromConfig(cfg config.SpamCheckConfig, srv *server.Server) ([
 		//     names = append(names, "spamassassin")
 
 		default:
-			srv.Logger().Warn("unknown spam checker type", "type", checkerCfg.Type)
+			logger.Warn("unknown spam checker type", "type", checkerCfg.Type)
 		}
 	}
 

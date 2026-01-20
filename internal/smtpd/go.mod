@@ -5,6 +5,8 @@ go 1.24.0
 toolchain go1.24.4
 
 require (
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
+	github.com/emersion/go-smtp v0.24.0
 	github.com/infodancer/maildancer/auth v0.0.0-20260119190831-f30a740fec24
 	github.com/infodancer/maildancer/msgstore v0.0.0-20260119122628-46a831f8f899
 	github.com/pelletier/go-toml/v2 v2.2.3

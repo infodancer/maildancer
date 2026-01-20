@@ -1,33 +1,29 @@
 # Test Domains
 
-This directory contains example domain configurations for use with `FilesystemDomainProvider` in tests.
+Test domain fixtures are now generated at runtime using the `testutil` package.
+This avoids storing sensitive files (passwd) in version control.
 
-## Structure
+## Expected Structure
+
+When `SetupTestDomains` creates a domain fixture, it generates:
 
 ```
-domains/
-├── example.com/
+<tempdir>/
+├── <domain>/
 │   ├── config.toml    # Domain configuration
 │   ├── passwd         # User credentials (argon2id hashed)
-│   ├── keys/          # User encryption keys
+│   ├── keys/          # User encryption keys directory
 │   └── users/         # Per-user storage
-│       ├── testuser/
-│       │   └── Maildir/
-│       │       ├── cur/
-│       │       ├── new/
-│       │       └── tmp/
-│       └── admin/
+│       └── <user>/
 │           └── Maildir/
-└── test.org/
-    ├── config.toml
-    ├── passwd
-    ├── keys/
-    └── users/
-        └── user1/
-            └── Maildir/
+│               ├── cur/
+│               ├── new/
+│               └── tmp/
 ```
 
-## Test Users
+## Default Test Domains
+
+The `DefaultTestDomains()` function provides these test users:
 
 | Domain       | Username  | Password  |
 |--------------|-----------|-----------|
@@ -42,23 +38,51 @@ import (
     "github.com/infodancer/maildancer/auth/domain"
     _ "github.com/infodancer/maildancer/auth/passwd"
     _ "github.com/infodancer/maildancer/msgstore/maildir"
+    "github.com/infodancer/maildancer/internal/smtpd/testutil"
 )
 
 func TestWithDomainProvider(t *testing.T) {
-    provider := domain.NewFilesystemDomainProvider("test/domains", nil)
+    // Create default test domains (example.com, test.org)
+    basePath := testutil.SetupDefaultTestDomains(t)
+
+    provider := domain.NewFilesystemDomainProvider(basePath, nil)
     defer provider.Close()
 
     d := provider.GetDomain("example.com")
+    // Use domain...
+}
+
+func TestWithCustomDomains(t *testing.T) {
+    // Create custom test domains
+    domains := []testutil.TestDomain{
+        {
+            Name: "custom.com",
+            Users: []testutil.TestUser{
+                {Username: "alice", Password: "testpass"},
+                {Username: "bob", Password: "testpass", Mailbox: "robert"},
+            },
+        },
+    }
+    basePath := testutil.SetupTestDomains(t, domains)
+
+    provider := domain.NewFilesystemDomainProvider(basePath, nil)
+    defer provider.Close()
+
+    d := provider.GetDomain("custom.com")
     // Use domain...
 }
 ```
 
 ## Configuration
 
-The `config.toml` uses the `maildir_subdir` option to specify that each user's
-Maildir is under a subdirectory:
+Each domain's `config.toml` is generated with:
 
 ```toml
+[auth]
+type = "passwd"
+credential_backend = "passwd"
+key_backend = "keys"
+
 [msgstore]
 type = "maildir"
 base_path = "users"
@@ -67,4 +91,9 @@ base_path = "users"
 maildir_subdir = "Maildir"
 ```
 
-This results in paths like `users/testuser/Maildir/{cur,new,tmp}/`.
+This results in paths like `users/<username>/Maildir/{cur,new,tmp}/`.
+
+## Test Password
+
+All default test users have the password `"testpass"`. The `testutil.TestPassword`
+constant provides this value for use in authentication tests.

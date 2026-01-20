@@ -33,7 +33,7 @@
 - [ ] APOP - MD5 challenge-response authentication (RFC 1939 optional)
 - [ ] AUTH/SASL mechanisms (RFC 5034)
 
-## Phase 4: Observability & Operations
+## Phase 4: Observability & Operations - COMPLETE
 
 ### Metrics - COMPLETE
 - [x] Initialize Prometheus metrics endpoint
@@ -42,9 +42,9 @@
 - [x] Add message retrieval statistics
 - [x] Add active connection gauge
 
-### Connection Management
+### Connection Management - COMPLETE
 - [x] Implement connection counter
-- [ ] Enforce MaxConnections limit (counter exists but not enforced)
+- [x] Enforce MaxConnections limit
 - [x] Start IdleMonitor goroutine in handler
 - [x] Enforce idle timeout disconnection
 

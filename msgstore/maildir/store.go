@@ -19,6 +19,7 @@ import (
 type MaildirStore struct {
 	basePath      string
 	maildirSubdir string // optional subdirectory under each mailbox (e.g., "Maildir")
+	pathTemplate  string // optional path template for domain-aware storage
 
 	// deleted tracks messages marked for deletion per mailbox.
 	deletedMu sync.Mutex
@@ -28,23 +29,53 @@ type MaildirStore struct {
 // NewStore creates a new MaildirStore with the given base path.
 // The optional maildirSubdir specifies a subdirectory under each mailbox
 // (e.g., "Maildir" for paths like users/testuser/Maildir/).
-func NewStore(basePath string, maildirSubdir string) *MaildirStore {
+// The optional pathTemplate transforms mailbox names using variables:
+// {domain}, {localpart}, {email} (e.g., "{domain}/users/{localpart}").
+func NewStore(basePath string, maildirSubdir string, pathTemplate string) *MaildirStore {
 	return &MaildirStore{
 		basePath:      basePath,
 		maildirSubdir: maildirSubdir,
+		pathTemplate:  pathTemplate,
 		deleted:       make(map[string]map[string]bool),
 	}
+}
+
+// splitEmail splits an email address into localpart and domain.
+// If the email doesn't contain @, localpart is the entire input and domain is empty.
+func splitEmail(email string) (localpart, domain string) {
+	if idx := strings.LastIndex(email, "@"); idx >= 0 {
+		return email[:idx], email[idx+1:]
+	}
+	return email, ""
+}
+
+// expandMailbox applies the path template to transform a mailbox name.
+// If no template is set, the mailbox is returned unchanged.
+// Template variables: {domain}, {localpart}, {email}
+func (s *MaildirStore) expandMailbox(mailbox string) string {
+	if s.pathTemplate == "" {
+		return mailbox // Backward compatible
+	}
+	localpart, domain := splitEmail(mailbox)
+	result := s.pathTemplate
+	result = strings.ReplaceAll(result, "{domain}", domain)
+	result = strings.ReplaceAll(result, "{localpart}", localpart)
+	result = strings.ReplaceAll(result, "{email}", mailbox)
+	return result
 }
 
 // mailboxPath returns the filesystem path for a mailbox.
 // Returns an error if the resulting path would escape the base directory.
 func (s *MaildirStore) mailboxPath(mailbox string) (string, error) {
+	// Apply path template transformation
+	expandedMailbox := s.expandMailbox(mailbox)
+
 	// Build the candidate path
 	var candidate string
 	if s.maildirSubdir != "" {
-		candidate = filepath.Join(s.basePath, mailbox, s.maildirSubdir)
+		candidate = filepath.Join(s.basePath, expandedMailbox, s.maildirSubdir)
 	} else {
-		candidate = filepath.Join(s.basePath, mailbox)
+		candidate = filepath.Join(s.basePath, expandedMailbox)
 	}
 
 	// Clean both paths to normalize them

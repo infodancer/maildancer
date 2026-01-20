@@ -3,6 +3,7 @@ package maildir
 import (
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 
 func TestMaildirStore_Deliver(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -44,7 +45,7 @@ func TestMaildirStore_Deliver(t *testing.T) {
 
 func TestMaildirStore_DeliverNoRecipients(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -62,7 +63,7 @@ func TestMaildirStore_DeliverNoRecipients(t *testing.T) {
 
 func TestMaildirStore_List(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	// Deliver two messages
@@ -88,7 +89,7 @@ func TestMaildirStore_List(t *testing.T) {
 
 func TestMaildirStore_ListNonexistent(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	_, err := store.List(ctx, "nonexistent@example.com")
@@ -99,7 +100,7 @@ func TestMaildirStore_ListNonexistent(t *testing.T) {
 
 func TestMaildirStore_Retrieve(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	messageContent := "Subject: Test\r\n\r\nTest message body"
@@ -139,7 +140,7 @@ func TestMaildirStore_Retrieve(t *testing.T) {
 
 func TestMaildirStore_Delete(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -177,7 +178,7 @@ func TestMaildirStore_Delete(t *testing.T) {
 
 func TestMaildirStore_Expunge(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -213,7 +214,7 @@ func TestMaildirStore_Expunge(t *testing.T) {
 
 func TestMaildirStore_Stat(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	// Deliver messages
@@ -242,7 +243,7 @@ func TestMaildirStore_Stat(t *testing.T) {
 
 func TestMaildirStore_MultipleRecipients(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -314,7 +315,7 @@ func TestConvertFlags(t *testing.T) {
 
 func TestMaildirStore_PathTraversal(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "")
+	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
 	// Attempt path traversal attacks (using forward slashes - Unix style)
@@ -340,7 +341,7 @@ func TestMaildirStore_PathTraversal(t *testing.T) {
 
 func TestMaildirStore_MaildirSubdir(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath, "Maildir")
+	store := NewStore(basePath, "Maildir", "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -361,5 +362,199 @@ func TestMaildirStore_MaildirSubdir(t *testing.T) {
 	}
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+}
+
+func TestSplitEmail(t *testing.T) {
+	tests := []struct {
+		name           string
+		email          string
+		wantLocalpart  string
+		wantDomain     string
+	}{
+		{
+			name:          "standard email",
+			email:         "user@example.com",
+			wantLocalpart: "user",
+			wantDomain:    "example.com",
+		},
+		{
+			name:          "no domain",
+			email:         "localuser",
+			wantLocalpart: "localuser",
+			wantDomain:    "",
+		},
+		{
+			name:          "multiple at signs",
+			email:         "user@sub@example.com",
+			wantLocalpart: "user@sub",
+			wantDomain:    "example.com",
+		},
+		{
+			name:          "empty string",
+			email:         "",
+			wantLocalpart: "",
+			wantDomain:    "",
+		},
+		{
+			name:          "just at sign",
+			email:         "@",
+			wantLocalpart: "",
+			wantDomain:    "",
+		},
+		{
+			name:          "subdomain",
+			email:         "user@mail.example.com",
+			wantLocalpart: "user",
+			wantDomain:    "mail.example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			localpart, domain := splitEmail(tt.email)
+			if localpart != tt.wantLocalpart {
+				t.Errorf("splitEmail(%q) localpart = %q, want %q", tt.email, localpart, tt.wantLocalpart)
+			}
+			if domain != tt.wantDomain {
+				t.Errorf("splitEmail(%q) domain = %q, want %q", tt.email, domain, tt.wantDomain)
+			}
+		})
+	}
+}
+
+func TestMaildirStore_ExpandMailbox(t *testing.T) {
+	tests := []struct {
+		name         string
+		pathTemplate string
+		mailbox      string
+		want         string
+	}{
+		{
+			name:         "no template",
+			pathTemplate: "",
+			mailbox:      "user@example.com",
+			want:         "user@example.com",
+		},
+		{
+			name:         "domain and localpart template",
+			pathTemplate: "{domain}/users/{localpart}",
+			mailbox:      "user@example.com",
+			want:         "example.com/users/user",
+		},
+		{
+			name:         "email template",
+			pathTemplate: "mailboxes/{email}",
+			mailbox:      "user@example.com",
+			want:         "mailboxes/user@example.com",
+		},
+		{
+			name:         "domain only template",
+			pathTemplate: "{domain}",
+			mailbox:      "user@example.com",
+			want:         "example.com",
+		},
+		{
+			name:         "localpart only template",
+			pathTemplate: "users/{localpart}",
+			mailbox:      "user@example.com",
+			want:         "users/user",
+		},
+		{
+			name:         "no domain in email",
+			pathTemplate: "{domain}/users/{localpart}",
+			mailbox:      "localuser",
+			want:         "/users/localuser",
+		},
+		{
+			name:         "all variables",
+			pathTemplate: "{domain}/{localpart}/{email}",
+			mailbox:      "user@example.com",
+			want:         "example.com/user/user@example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewStore("/tmp", "", tt.pathTemplate)
+			got := store.expandMailbox(tt.mailbox)
+			if got != tt.want {
+				t.Errorf("expandMailbox(%q) = %q, want %q", tt.mailbox, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaildirStore_PathTemplate(t *testing.T) {
+	basePath := t.TempDir()
+	// Template: example.com/users/user/Maildir/
+	store := NewStore(basePath, "Maildir", "{domain}/users/{localpart}")
+	ctx := context.Background()
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"testuser@example.com"},
+	}
+	message := strings.NewReader("Subject: Test\r\n\r\nTest message body")
+
+	err := store.Deliver(ctx, envelope, message)
+	if err != nil {
+		t.Fatalf("Deliver failed: %v", err)
+	}
+
+	// Verify message was delivered
+	messages, err := store.List(ctx, "testuser@example.com")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+
+	// Verify the path structure exists
+	expectedPath := basePath + "/example.com/users/testuser/Maildir/new"
+	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
+		t.Errorf("expected path %s to exist", expectedPath)
+	}
+}
+
+func TestMaildirStore_PathTemplateMultipleDomains(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "Maildir", "{domain}/users/{localpart}")
+	ctx := context.Background()
+
+	// Deliver to users in different domains
+	users := []string{"user1@example.com", "user2@other.org"}
+	for _, user := range users {
+		envelope := msgstore.Envelope{
+			From:       "sender@example.com",
+			Recipients: []string{user},
+		}
+		message := strings.NewReader("Subject: Test\r\n\r\nTest message body")
+		if err := store.Deliver(ctx, envelope, message); err != nil {
+			t.Fatalf("Deliver to %s failed: %v", user, err)
+		}
+	}
+
+	// Verify each user has their message
+	for _, user := range users {
+		messages, err := store.List(ctx, user)
+		if err != nil {
+			t.Fatalf("List failed for %s: %v", user, err)
+		}
+		if len(messages) != 1 {
+			t.Fatalf("expected 1 message for %s, got %d", user, len(messages))
+		}
+	}
+
+	// Verify the directory structure
+	expectedPaths := []string{
+		basePath + "/example.com/users/user1/Maildir",
+		basePath + "/other.org/users/user2/Maildir",
+	}
+	for _, path := range expectedPaths {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Errorf("expected path %s to exist", path)
+		}
 	}
 }

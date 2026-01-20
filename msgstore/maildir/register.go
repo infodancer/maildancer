@@ -12,6 +12,9 @@ func init() {
 		}
 		// maildir_subdir specifies the subdirectory under each user (e.g., "Maildir")
 		maildirSubdir := config.Options["maildir_subdir"]
-		return NewStore(config.BasePath, maildirSubdir), nil
+		// path_template transforms mailbox names using {domain}, {localpart}, {email}
+		// e.g., "{domain}/users/{localpart}" transforms user@example.com to example.com/users/user
+		pathTemplate := config.Options["path_template"]
+		return NewStore(config.BasePath, maildirSubdir, pathTemplate), nil
 	})
 }

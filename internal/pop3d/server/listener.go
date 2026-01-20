@@ -25,6 +25,7 @@ type Listener struct {
 	connCfg   ConnectionConfig
 	handler   ConnectionHandler
 	logger    *slog.Logger
+	limiter   *ConnectionLimiter
 
 	listener net.Listener
 	wg       sync.WaitGroup
@@ -42,6 +43,7 @@ type ListenerConfig struct {
 	LogTransaction bool
 	Logger         *slog.Logger
 	Handler        ConnectionHandler
+	Limiter        *ConnectionLimiter
 }
 
 // NewListener creates a new Listener with the given configuration.
@@ -63,6 +65,7 @@ func NewListener(cfg ListenerConfig) *Listener {
 		},
 		handler: cfg.Handler,
 		logger:  logging.WithListener(logger, cfg.Address, string(cfg.Mode)),
+		limiter: cfg.Limiter,
 	}
 }
 
@@ -154,6 +157,19 @@ func (l *Listener) acceptLoop(ctx context.Context) {
 // handleConnection wraps a connection and calls the handler.
 func (l *Listener) handleConnection(ctx context.Context, netConn net.Conn) {
 	defer l.wg.Done()
+
+	// Check connection limit
+	if l.limiter != nil && !l.limiter.TryAcquire() {
+		l.logger.Warn("connection rejected: at capacity",
+			slog.String("remote_addr", netConn.RemoteAddr().String()),
+		)
+		_, _ = netConn.Write([]byte("-ERR [SYS/TEMP] Server busy, try again later\r\n"))
+		_ = netConn.Close()
+		return
+	}
+	if l.limiter != nil {
+		defer l.limiter.Release()
+	}
 
 	// Create connection wrapper
 	conn := NewConnection(netConn, l.connCfg)

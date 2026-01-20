@@ -60,6 +60,9 @@ func (s *Server) Run(ctx context.Context) error {
 		s.handler = s.defaultHandler
 	}
 
+	// Create shared connection limiter
+	limiter := NewConnectionLimiter(s.cfg.Limits.MaxConnections)
+
 	// Create listeners
 	for _, lc := range s.cfg.Listeners {
 		// Determine if this listener needs TLS
@@ -84,6 +87,7 @@ func (s *Server) Run(ctx context.Context) error {
 			LogTransaction: s.cfg.LogLevel == "debug",
 			Logger:         s.logger,
 			Handler:        s.handler,
+			Limiter:        limiter,
 		})
 		s.listeners = append(s.listeners, listener)
 	}

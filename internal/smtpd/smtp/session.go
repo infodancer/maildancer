@@ -15,6 +15,7 @@ import (
 	autherrors "github.com/infodancer/maildancer/auth/errors"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
+	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
 
@@ -40,6 +41,7 @@ type Session struct {
 	from       string
 	recipients []string
 	authUser   string
+	domain     *domain.Domain // Set during RCPT TO for delivery
 	logger     *slog.Logger
 }
 
@@ -133,13 +135,61 @@ func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 // Rcpt handles the RCPT TO command.
 // Implements smtp.Session interface.
 func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
-	// Check recipient limit
-	if s.backend.maxRecipients > 0 && len(s.recipients) >= s.backend.maxRecipients {
+	// Enforce single recipient per message to avoid partial delivery scenarios
+	if len(s.recipients) > 0 {
 		return &smtp.SMTPError{
 			Code:         452,
 			EnhancedCode: smtp.EnhancedCode{4, 5, 3},
-			Message:      "Too many recipients",
+			Message:      "Only one recipient allowed per message",
 		}
+	}
+
+	// Extract domain from address
+	domainName := extractDomain(to)
+	if domainName == "" {
+		return &smtp.SMTPError{
+			Code:         550,
+			EnhancedCode: smtp.EnhancedCode{5, 1, 2},
+			Message:      "Invalid address format",
+		}
+	}
+
+	// Validate domain if DomainProvider is configured
+	if s.backend.domainProvider != nil {
+		d := s.backend.domainProvider.GetDomain(domainName)
+		if d == nil {
+			s.logger.Debug("domain not accepted", slog.String("domain", domainName))
+			return &smtp.SMTPError{
+				Code:         550,
+				EnhancedCode: smtp.EnhancedCode{5, 1, 2},
+				Message:      "Domain not accepted",
+			}
+		}
+
+		// Check if user exists
+		ctx := context.Background()
+		exists, err := d.AuthAgent.UserExists(ctx, to)
+		if err != nil {
+			s.logger.Debug("user lookup failed",
+				slog.String("recipient", to),
+				slog.String("error", err.Error()))
+			return &smtp.SMTPError{
+				Code:         451,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+				Message:      "Temporary lookup failure",
+			}
+		}
+
+		if !exists {
+			s.logger.Debug("user unknown", slog.String("recipient", to))
+			return &smtp.SMTPError{
+				Code:         550,
+				EnhancedCode: smtp.EnhancedCode{5, 1, 1},
+				Message:      "User unknown",
+			}
+		}
+
+		s.domain = d // Store for delivery
 	}
 
 	s.recipients = append(s.recipients, to)
@@ -150,6 +200,19 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 
 	s.logger.Debug("RCPT TO", slog.String("to", to))
 	return nil
+}
+
+// extractDomain extracts the domain part from an email address.
+func extractDomain(email string) string {
+	// Handle angle brackets: <user@domain>
+	email = strings.TrimPrefix(email, "<")
+	email = strings.TrimSuffix(email, ">")
+
+	idx := strings.LastIndex(email, "@")
+	if idx < 0 || idx == len(email)-1 {
+		return ""
+	}
+	return strings.ToLower(email[idx+1:])
 }
 
 // Data handles the DATA command and message delivery.
@@ -298,8 +361,16 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
+	// Determine which delivery agent to use
+	var deliveryAgent msgstore.DeliveryAgent
+	if s.domain != nil && s.domain.DeliveryAgent != nil {
+		deliveryAgent = s.domain.DeliveryAgent
+	} else if s.backend.delivery != nil {
+		deliveryAgent = s.backend.delivery
+	}
+
 	// Deliver the message
-	if s.backend.delivery != nil {
+	if deliveryAgent != nil {
 		// Seek to beginning of temp file for delivery
 		if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
 			s.logger.Debug("failed to seek temp file", slog.String("error", err.Error()))
@@ -318,12 +389,12 @@ func (s *Session) Data(r io.Reader) error {
 			ClientHostname: s.helo,
 		}
 
-		if err := s.backend.delivery.Deliver(ctx, envelope, tmpFile); err != nil {
+		if err := deliveryAgent.Deliver(ctx, envelope, tmpFile); err != nil {
 			s.logger.Debug("delivery failed", slog.String("error", err.Error()))
 
 			if s.backend.collector != nil {
-				domain := sessionExtractRecipientDomain(s.recipients)
-				s.backend.collector.MessageRejected(domain, "delivery_error")
+				recipientDomain := sessionExtractRecipientDomain(s.recipients)
+				s.backend.collector.MessageRejected(recipientDomain, "delivery_error")
 			}
 
 			return &smtp.SMTPError{
@@ -334,8 +405,8 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		if s.backend.collector != nil {
-			domain := sessionExtractRecipientDomain(s.recipients)
-			s.backend.collector.MessageReceived(domain, counter.n)
+			recipientDomain := sessionExtractRecipientDomain(s.recipients)
+			s.backend.collector.MessageReceived(recipientDomain, counter.n)
 		}
 
 		s.logger.Debug("message delivered",
@@ -344,8 +415,8 @@ func (s *Session) Data(r io.Reader) error {
 	} else {
 		// No delivery agent - reject all mail
 		if s.backend.collector != nil {
-			domain := sessionExtractRecipientDomain(s.recipients)
-			s.backend.collector.MessageRejected(domain, "no_delivery_agent")
+			recipientDomain := sessionExtractRecipientDomain(s.recipients)
+			s.backend.collector.MessageRejected(recipientDomain, "no_delivery_agent")
 		}
 		return &smtp.SMTPError{
 			Code:         550,
@@ -362,6 +433,7 @@ func (s *Session) Data(r io.Reader) error {
 func (s *Session) Reset() {
 	s.from = ""
 	s.recipients = nil
+	s.domain = nil
 	s.logger.Debug("session reset")
 }
 

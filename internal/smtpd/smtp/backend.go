@@ -8,6 +8,7 @@ import (
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
+	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
@@ -18,6 +19,7 @@ type Backend struct {
 	hostname        string
 	delivery        msgstore.DeliveryAgent
 	authAgent       auth.AuthenticationAgent
+	domainProvider  domain.DomainProvider
 	spamChecker     spamcheck.Checker
 	spamConfig      config.SpamCheckConfig
 	collector       metrics.Collector
@@ -31,6 +33,7 @@ type BackendConfig struct {
 	Hostname       string
 	Delivery       msgstore.DeliveryAgent
 	AuthAgent      auth.AuthenticationAgent
+	DomainProvider domain.DomainProvider
 	SpamChecker    spamcheck.Checker
 	SpamConfig     config.SpamCheckConfig
 	Collector      metrics.Collector
@@ -50,6 +53,7 @@ func NewBackend(cfg BackendConfig) *Backend {
 		hostname:       cfg.Hostname,
 		delivery:       cfg.Delivery,
 		authAgent:      cfg.AuthAgent,
+		domainProvider: cfg.DomainProvider,
 		spamChecker:    cfg.SpamChecker,
 		spamConfig:     cfg.SpamConfig,
 		collector:      cfg.Collector,

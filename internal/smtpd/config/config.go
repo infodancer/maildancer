@@ -122,10 +122,42 @@ type DeliveryConfig struct {
 // AuthConfig holds configuration for SMTP authentication.
 type AuthConfig struct {
 	Enabled           bool              `toml:"enabled"`
-	AgentType         string            `toml:"agent_type"`          // Auth agent type (e.g., "passwd")
-	CredentialBackend string            `toml:"credential_backend"`  // Path to credential store
-	KeyBackend        string            `toml:"key_backend"`         // Path to key store
-	Options           map[string]string `toml:"options"`             // Backend-specific options
+	AgentType         string            `toml:"agent_type"`         // Auth agent type (e.g., "passwd")
+	CredentialBackend string            `toml:"credential_backend"` // Path to credential store
+	KeyBackend        string            `toml:"key_backend"`        // Path to key store
+	Options           map[string]string `toml:"options"`            // Backend-specific options
+	OAuth             OAuthConfig       `toml:"oauth"`              // OAuth/OAUTHBEARER configuration
+}
+
+// OAuthConfig holds configuration for OAuth 2.0 bearer token authentication (RFC 7628).
+type OAuthConfig struct {
+	// Enabled indicates whether OAUTHBEARER mechanism is available.
+	Enabled bool `toml:"enabled"`
+
+	// JWKSURL is the URL to fetch the JSON Web Key Set for token validation.
+	// Example: "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+	JWKSURL string `toml:"jwks_url"`
+
+	// Issuer is the expected "iss" claim in the JWT.
+	// Example: "https://login.microsoftonline.com/{tenant}/v2.0"
+	Issuer string `toml:"issuer"`
+
+	// Audience is the expected "aud" claim in the JWT.
+	// This is typically your application's client ID or API identifier.
+	Audience string `toml:"audience"`
+
+	// UsernameClaim specifies which JWT claim contains the username.
+	// Common values: "email", "preferred_username", "sub", "upn"
+	// Defaults to "email" if not specified.
+	UsernameClaim string `toml:"username_claim"`
+
+	// JWKSRefreshInterval is how often to refresh the JWKS (e.g., "1h").
+	// Defaults to "1h" if not specified.
+	JWKSRefreshInterval string `toml:"jwks_refresh_interval"`
+
+	// AllowedDomains restricts which email domains can authenticate.
+	// If empty, all domains are allowed.
+	AllowedDomains []string `toml:"allowed_domains"`
 }
 
 // SpamCheckFailMode defines the behavior when spam checkers are unavailable or error.
@@ -236,6 +268,32 @@ func (c *AuthConfig) IsEnabled() bool {
 	return c.Enabled && c.AgentType != ""
 }
 
+// IsEnabled returns true if OAuth authentication is enabled and properly configured.
+func (c *OAuthConfig) IsEnabled() bool {
+	return c.Enabled && c.JWKSURL != ""
+}
+
+// GetUsernameClaim returns the configured username claim, defaulting to "email".
+func (c *OAuthConfig) GetUsernameClaim() string {
+	if c.UsernameClaim == "" {
+		return "email"
+	}
+	return c.UsernameClaim
+}
+
+// GetJWKSRefreshInterval returns the JWKS refresh interval as a time.Duration.
+// Returns 1 hour if not configured or invalid.
+func (c *OAuthConfig) GetJWKSRefreshInterval() time.Duration {
+	if c.JWKSRefreshInterval == "" {
+		return 1 * time.Hour
+	}
+	d, err := time.ParseDuration(c.JWKSRefreshInterval)
+	if err != nil {
+		return 1 * time.Hour
+	}
+	return d
+}
+
 // Default returns a Config with sensible default values.
 func Default() Config {
 	return Config{
@@ -334,6 +392,24 @@ func (c *Config) Validate() error {
 		}
 		if c.Auth.CredentialBackend == "" {
 			return errors.New("auth.credential_backend is required when authentication is enabled")
+		}
+	}
+
+	// Validate OAuth config
+	if c.Auth.OAuth.Enabled {
+		if c.Auth.OAuth.JWKSURL == "" {
+			return errors.New("auth.oauth.jwks_url is required when OAuth is enabled")
+		}
+		if c.Auth.OAuth.Issuer == "" {
+			return errors.New("auth.oauth.issuer is required when OAuth is enabled")
+		}
+		if c.Auth.OAuth.Audience == "" {
+			return errors.New("auth.oauth.audience is required when OAuth is enabled")
+		}
+		if c.Auth.OAuth.JWKSRefreshInterval != "" {
+			if _, err := time.ParseDuration(c.Auth.OAuth.JWKSRefreshInterval); err != nil {
+				return fmt.Errorf("invalid auth.oauth.jwks_refresh_interval: %w", err)
+			}
 		}
 	}
 

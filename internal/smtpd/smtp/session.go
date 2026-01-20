@@ -48,28 +48,36 @@ type Session struct {
 // AuthMechanisms returns the available authentication mechanisms.
 // Implements smtp.AuthSession interface.
 func (s *Session) AuthMechanisms() []string {
-	if s.backend.authAgent == nil {
-		return nil
-	}
-
 	// Only advertise AUTH if TLS is active or connection is from localhost
 	_, isTLS := s.conn.TLSConnectionState()
 	if !isTLS && !sessionIsLocalhost(s.clientIP) {
 		return nil
 	}
 
-	return []string{sasl.Plain}
+	var mechs []string
+
+	// Advertise PLAIN if password auth is configured
+	if s.backend.authAgent != nil {
+		mechs = append(mechs, sasl.Plain)
+	}
+
+	// Advertise OAUTHBEARER if OAuth is configured
+	if s.backend.oauthAgent != nil {
+		mechs = append(mechs, sasl.OAuthBearer)
+	}
+
+	return mechs
 }
 
 // Auth handles authentication.
 // Implements smtp.AuthSession interface.
 func (s *Session) Auth(mech string) (sasl.Server, error) {
-	if s.backend.authAgent == nil {
-		return nil, smtp.ErrAuthUnsupported
-	}
-
 	switch mech {
 	case sasl.Plain:
+		if s.backend.authAgent == nil {
+			return nil, smtp.ErrAuthUnsupported
+		}
+
 		return sasl.NewPlainServer(func(identity, username, password string) error {
 			ctx := context.Background()
 
@@ -111,6 +119,47 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 			}
 
 			s.logger.Debug("authentication successful", slog.String("username", s.authUser))
+			return nil
+		}), nil
+
+	case sasl.OAuthBearer:
+		if s.backend.oauthAgent == nil {
+			return nil, smtp.ErrAuthUnsupported
+		}
+
+		return sasl.NewOAuthBearerServer(func(opts sasl.OAuthBearerOptions) *sasl.OAuthBearerError {
+			ctx := context.Background()
+
+			username, err := s.backend.oauthAgent.ValidateToken(ctx, opts.Token)
+			if err != nil {
+				if s.backend.collector != nil {
+					// Use username from options if available, otherwise "unknown"
+					authDomain := "unknown"
+					if opts.Username != "" {
+						authDomain = sessionExtractAuthDomain(opts.Username)
+					}
+					s.backend.collector.AuthAttempt(authDomain, false)
+				}
+
+				s.logger.Debug("OAuth authentication failed",
+					slog.String("username", opts.Username),
+					slog.String("error", err.Error()))
+
+				// Return OAuth-specific error per RFC 7628
+				return &sasl.OAuthBearerError{
+					Status:  "invalid_token",
+					Schemes: "bearer",
+				}
+			}
+
+			s.authUser = username
+
+			if s.backend.collector != nil {
+				domain := sessionExtractAuthDomain(username)
+				s.backend.collector.AuthAttempt(domain, true)
+			}
+
+			s.logger.Debug("OAuth authentication successful", slog.String("username", s.authUser))
 			return nil
 		}), nil
 

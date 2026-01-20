@@ -1,6 +1,7 @@
 package maildir
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -8,11 +9,13 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/emersion/go-maildir"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/msgstore/errors"
 )
 
 // MaildirStore implements msgstore.MsgStore using the Maildir format.
+// It uses emersion/go-maildir for low-level maildir operations.
 type MaildirStore struct {
 	basePath string
 
@@ -37,16 +40,20 @@ func (s *MaildirStore) mailboxPath(mailbox string) string {
 	return filepath.Join(s.basePath, safe)
 }
 
-// getMaildir returns a Maildir for the given mailbox, creating it if needed.
-func (s *MaildirStore) getMaildir(mailbox string) (*Maildir, error) {
+// ensureMaildir ensures the maildir exists, creating it if necessary.
+func (s *MaildirStore) ensureMaildir(mailbox string) (maildir.Dir, error) {
 	path := s.mailboxPath(mailbox)
-	md := New(path)
-	if !md.Exists() {
-		if err := md.Create(); err != nil {
-			return nil, err
+	dir := maildir.Dir(path)
+
+	// Check if maildir exists by checking for cur/ directory
+	curPath := filepath.Join(path, "cur")
+	if _, err := os.Stat(curPath); os.IsNotExist(err) {
+		if err := dir.Init(); err != nil {
+			return "", err
 		}
 	}
-	return md, nil
+
+	return dir, nil
 }
 
 // Deliver implements msgstore.DeliveryAgent.
@@ -65,17 +72,30 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 	delivered := 0
 
 	for _, recipient := range envelope.Recipients {
-		md, err := s.getMaildir(recipient)
+		dir, err := s.ensureMaildir(recipient)
 		if err != nil {
 			lastErr = err
 			continue
 		}
 
-		reader := strings.NewReader(string(data))
-		if _, err := md.Deliver(reader); err != nil {
+		// NewDelivery takes the directory path as a string
+		delivery, err := maildir.NewDelivery(string(dir))
+		if err != nil {
 			lastErr = err
 			continue
 		}
+
+		if _, err := io.Copy(delivery, bytes.NewReader(data)); err != nil {
+			_ = delivery.Abort()
+			lastErr = err
+			continue
+		}
+
+		if err := delivery.Close(); err != nil {
+			lastErr = err
+			continue
+		}
+
 		delivered++
 	}
 
@@ -88,91 +108,82 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 // List implements msgstore.MessageStore.
 func (s *MaildirStore) List(ctx context.Context, mailbox string) ([]msgstore.MessageInfo, error) {
 	path := s.mailboxPath(mailbox)
-	md := New(path)
-	if !md.Exists() {
+
+	// Check if maildir exists
+	curPath := filepath.Join(path, "cur")
+	if _, err := os.Stat(curPath); os.IsNotExist(err) {
 		return nil, errors.ErrMailboxNotFound
 	}
 
+	dir := maildir.Dir(path)
+
+	// Track which messages were in new/ (recent messages)
+	recentKeys := make(map[string]bool)
+
+	// Unseen() moves messages from new/ to cur/ and returns them
+	// These messages are considered "recent"
+	unseenMsgs, err := dir.Unseen()
+	if err != nil {
+		return nil, err
+	}
+	for _, msg := range unseenMsgs {
+		recentKeys[msg.Key()] = true
+	}
+
+	// Now get all messages (which are all in cur/ after Unseen())
+	allMsgs, err := dir.Messages()
+	if err != nil {
+		return nil, err
+	}
+
 	var messages []msgstore.MessageInfo
+	for _, msg := range allMsgs {
+		key := msg.Key()
+		if s.isDeleted(mailbox, key) {
+			continue
+		}
 
-	// List messages in new/
-	newFiles, err := md.ListNew()
-	if err != nil && err != errors.ErrMaildirNotFound {
-		return nil, err
-	}
-	for _, filename := range newFiles {
-		if s.isDeleted(mailbox, filename) {
-			continue
-		}
-		info, err := s.getMessageInfo(path, "new", filename)
+		filename := msg.Filename()
+		fi, err := os.Stat(filename)
 		if err != nil {
-			continue
+			continue // Skip on error
 		}
-		messages = append(messages, info)
-	}
 
-	// List messages in cur/
-	curFiles, err := md.ListCur()
-	if err != nil && err != errors.ErrMaildirNotFound {
-		return nil, err
-	}
-	for _, filename := range curFiles {
-		if s.isDeleted(mailbox, filename) {
-			continue
+		flags := msg.Flags()
+		var flagStrings []string
+		if recentKeys[key] {
+			flagStrings = append(flagStrings, "\\Recent")
 		}
-		info, err := s.getMessageInfo(path, "cur", filename)
-		if err != nil {
-			continue
-		}
-		messages = append(messages, info)
+		flagStrings = append(flagStrings, convertFlags(flags)...)
+
+		messages = append(messages, msgstore.MessageInfo{
+			UID:   key,
+			Size:  fi.Size(),
+			Flags: flagStrings,
+		})
 	}
 
 	return messages, nil
 }
 
-func (s *MaildirStore) getMessageInfo(basePath, subdir, filename string) (msgstore.MessageInfo, error) {
-	path := filepath.Join(basePath, subdir, filename)
-	fi, err := os.Stat(path)
-	if err != nil {
-		return msgstore.MessageInfo{}, err
-	}
-
-	// Parse flags from filename (format: unique:2,flags)
-	flags := parseFlags(filename)
-	if subdir == "new" {
-		// Messages in new/ are implicitly unseen
-		flags = append(flags, "\\Recent")
-	}
-
-	return msgstore.MessageInfo{
-		UID:   filename,
-		Size:  fi.Size(),
-		Flags: flags,
-	}, nil
-}
-
-// parseFlags extracts flags from a maildir filename.
-// Format: unique:2,flags where flags are single characters like S, R, T, D, F
-func parseFlags(filename string) []string {
-	var flags []string
-	if idx := strings.Index(filename, ":2,"); idx != -1 {
-		flagStr := filename[idx+3:]
-		for _, c := range flagStr {
-			switch c {
-			case 'S':
-				flags = append(flags, "\\Seen")
-			case 'R':
-				flags = append(flags, "\\Answered")
-			case 'T':
-				flags = append(flags, "\\Deleted")
-			case 'D':
-				flags = append(flags, "\\Draft")
-			case 'F':
-				flags = append(flags, "\\Flagged")
-			}
+// convertFlags converts go-maildir flags to IMAP flag strings.
+func convertFlags(flags []maildir.Flag) []string {
+	var result []string
+	for _, f := range flags {
+		switch f {
+		case maildir.FlagSeen:
+			result = append(result, "\\Seen")
+		case maildir.FlagReplied:
+			result = append(result, "\\Answered")
+		case maildir.FlagFlagged:
+			result = append(result, "\\Flagged")
+		case maildir.FlagDraft:
+			result = append(result, "\\Draft")
+		case maildir.FlagTrashed:
+			result = append(result, "\\Deleted")
 		}
 	}
-	return flags
+	return result
 }
 
 // Retrieve implements msgstore.MessageStore.
@@ -182,12 +193,19 @@ func (s *MaildirStore) Retrieve(ctx context.Context, mailbox string, uid string)
 	}
 
 	path := s.mailboxPath(mailbox)
-	md := New(path)
-	if !md.Exists() {
+
+	// Check if maildir exists
+	curPath := filepath.Join(path, "cur")
+	if _, err := os.Stat(curPath); os.IsNotExist(err) {
 		return nil, errors.ErrMailboxNotFound
 	}
 
-	return md.Open(uid)
+	dir := maildir.Dir(path)
+	msg, err := dir.MessageByKey(uid)
+	if err != nil {
+		return nil, err
+	}
+	return msg.Open()
 }
 
 // Delete implements msgstore.MessageStore.
@@ -214,14 +232,23 @@ func (s *MaildirStore) Expunge(ctx context.Context, mailbox string) error {
 	}
 
 	path := s.mailboxPath(mailbox)
-	md := New(path)
-	if !md.Exists() {
+
+	// Check if maildir exists
+	curPath := filepath.Join(path, "cur")
+	if _, err := os.Stat(curPath); os.IsNotExist(err) {
 		return errors.ErrMailboxNotFound
 	}
 
+	dir := maildir.Dir(path)
+
 	var lastErr error
 	for uid := range deletedUIDs {
-		if err := md.Remove(uid); err != nil && !os.IsNotExist(err) {
+		msg, err := dir.MessageByKey(uid)
+		if err != nil {
+			// Message might not exist, skip
+			continue
+		}
+		if err := msg.Remove(); err != nil && !os.IsNotExist(err) {
 			lastErr = err
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/emersion/go-maildir"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/msgstore/errors"
 )
@@ -266,106 +267,47 @@ func TestMaildirStore_MultipleRecipients(t *testing.T) {
 	}
 }
 
-func TestMaildir_Create(t *testing.T) {
-	basePath := t.TempDir()
-	md := New(basePath + "/testmaildir")
-
-	if md.Exists() {
-		t.Fatal("maildir should not exist before Create")
-	}
-
-	if err := md.Create(); err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	if !md.Exists() {
-		t.Fatal("maildir should exist after Create")
-	}
-}
-
-func TestMaildir_Deliver(t *testing.T) {
-	basePath := t.TempDir()
-	md := New(basePath + "/testmaildir")
-
-	if err := md.Create(); err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	message := strings.NewReader("Subject: Test\r\n\r\nTest body")
-	filename, err := md.Deliver(message)
-	if err != nil {
-		t.Fatalf("Deliver failed: %v", err)
-	}
-	if filename == "" {
-		t.Fatal("expected non-empty filename")
-	}
-
-	// Verify file exists in new/
-	files, err := md.ListNew()
-	if err != nil {
-		t.Fatalf("ListNew failed: %v", err)
-	}
-	if len(files) != 1 {
-		t.Fatalf("expected 1 file in new/, got %d", len(files))
-	}
-	if files[0] != filename {
-		t.Fatalf("filename mismatch: got %s, want %s", files[0], filename)
-	}
-}
-
-func TestGenerateFilename(t *testing.T) {
-	filename1 := generateFilename()
-	filename2 := generateFilename()
-
-	if filename1 == "" {
-		t.Fatal("expected non-empty filename")
-	}
-	if filename1 == filename2 {
-		t.Fatal("expected unique filenames")
-	}
-}
-
-func TestSanitizeHostname(t *testing.T) {
+func TestConvertFlags(t *testing.T) {
 	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"localhost", "localhost"},
-		{"host/name", "host_name"},
-		{"host:name", "host_name"},
-		{"host/name:test", "host_name_test"},
-	}
-
-	for _, tt := range tests {
-		result := sanitizeHostname(tt.input)
-		if result != tt.expected {
-			t.Errorf("sanitizeHostname(%q) = %q, want %q", tt.input, result, tt.expected)
-		}
-	}
-}
-
-func TestParseFlags(t *testing.T) {
-	tests := []struct {
-		filename string
+		name     string
+		flags    []maildir.Flag
 		expected []string
 	}{
-		{"1234567890.P123.hostname", nil},
-		{"1234567890.P123.hostname:2,S", []string{"\\Seen"}},
-		{"1234567890.P123.hostname:2,SR", []string{"\\Seen", "\\Answered"}},
-		{"1234567890.P123.hostname:2,SRTDF", []string{"\\Seen", "\\Answered", "\\Deleted", "\\Draft", "\\Flagged"}},
+		{
+			name:     "no flags",
+			flags:    nil,
+			expected: nil,
+		},
+		{
+			name:     "seen flag",
+			flags:    []maildir.Flag{maildir.FlagSeen},
+			expected: []string{"\\Seen"},
+		},
+		{
+			name:     "multiple flags",
+			flags:    []maildir.Flag{maildir.FlagSeen, maildir.FlagReplied, maildir.FlagFlagged},
+			expected: []string{"\\Seen", "\\Answered", "\\Flagged"},
+		},
+		{
+			name:     "all flags",
+			flags:    []maildir.Flag{maildir.FlagSeen, maildir.FlagReplied, maildir.FlagFlagged, maildir.FlagDraft, maildir.FlagTrashed},
+			expected: []string{"\\Seen", "\\Answered", "\\Flagged", "\\Draft", "\\Deleted"},
+		},
 	}
 
 	for _, tt := range tests {
-		result := parseFlags(tt.filename)
-		if len(result) != len(tt.expected) {
-			t.Errorf("parseFlags(%q) = %v, want %v", tt.filename, result, tt.expected)
-			continue
-		}
-		for i := range result {
-			if result[i] != tt.expected[i] {
-				t.Errorf("parseFlags(%q) = %v, want %v", tt.filename, result, tt.expected)
-				break
+		t.Run(tt.name, func(t *testing.T) {
+			result := convertFlags(tt.flags)
+			if len(result) != len(tt.expected) {
+				t.Errorf("convertFlags(%v) = %v, want %v", tt.flags, result, tt.expected)
+				return
 			}
-		}
+			for i := range result {
+				if result[i] != tt.expected[i] {
+					t.Errorf("convertFlags(%v) = %v, want %v", tt.flags, result, tt.expected)
+					break
+				}
+			}
+		})
 	}
 }

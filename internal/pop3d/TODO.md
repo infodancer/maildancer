@@ -1,63 +1,63 @@
 # TODO
 
-## Phase 1: Core Protocol Compliance (Critical)
+## Phase 1: Core Protocol Compliance (Critical) - COMPLETE
 
 ### Transaction State Commands
-- [ ] STAT - Get mailbox status (message count and total size)
-- [ ] LIST - List messages with sizes (with optional message number argument)
-- [ ] RETR - Retrieve full message (with dot-stuffing)
-- [ ] DELE - Mark message for deletion
-- [ ] RSET - Reset/undo deletion flags
-- [ ] NOOP - Keep-alive command
+- [x] STAT - Get mailbox status (message count and total size)
+- [x] LIST - List messages with sizes (with optional message number argument)
+- [x] RETR - Retrieve full message (with dot-stuffing)
+- [x] DELE - Mark message for deletion
+- [x] RSET - Reset/undo deletion flags
+- [x] NOOP - Keep-alive command
 
 ### Session Enhancements
-- [ ] Add MessageStore interface field to Session
-- [ ] Add deletion tracking (map or slice of message IDs)
-- [ ] Implement deletion commit logic in UPDATE state
-- [ ] Store Mailbox reference in session after successful PASS
+- [x] Add MessageStore interface field to Session
+- [x] Add deletion tracking (map or slice of message IDs)
+- [x] Implement deletion commit logic in UPDATE state
+- [x] Store Mailbox reference in session after successful PASS
 
-## Phase 2: MessageStore Integration
+## Phase 2: MessageStore Integration - COMPLETE
 
-- [ ] Define/import MessageStore interface from msgstore repo
-- [ ] Initialize MessageStore in main.go from config.Maildir
-- [ ] Pass MessageStore to Handler/Session
-- [ ] Load message count for STAT command
-- [ ] Load message list with sizes for LIST command
-- [ ] Load message content for RETR command
-- [ ] Commit deletions to MessageStore in UPDATE state
+- [x] Define/import MessageStore interface from msgstore repo
+- [x] Initialize MessageStore in main.go from config.Maildir
+- [x] Pass MessageStore to Handler/Session
+- [x] Load message count for STAT command
+- [x] Load message list with sizes for LIST command
+- [x] Load message content for RETR command
+- [x] Commit deletions to MessageStore in UPDATE state
 
 ## Phase 3: Optional Extensions (RFC 2449)
 
-- [ ] TOP - Retrieve headers plus n lines of body (currently advertised but not implemented)
-- [ ] UIDL - Unique message ID listing (currently advertised but not implemented)
+- [x] TOP - Retrieve headers plus n lines of body
+- [x] UIDL - Unique message ID listing
 - [ ] APOP - MD5 challenge-response authentication (RFC 1939 optional)
 - [ ] AUTH/SASL mechanisms (RFC 5034)
 
 ## Phase 4: Observability & Operations
 
-### Metrics
-- [ ] Initialize Prometheus metrics endpoint
-- [ ] Add command execution counters (by type)
-- [ ] Add authentication success/failure metrics
-- [ ] Add message retrieval statistics
-- [ ] Add active connection gauge
+### Metrics - COMPLETE
+- [x] Initialize Prometheus metrics endpoint
+- [x] Add command execution counters (by type)
+- [x] Add authentication success/failure metrics
+- [x] Add message retrieval statistics
+- [x] Add active connection gauge
 
 ### Connection Management
-- [ ] Implement connection counter
-- [ ] Enforce MaxConnections limit
-- [ ] Start IdleMonitor goroutine in handler
-- [ ] Enforce idle timeout disconnection
+- [x] Implement connection counter
+- [ ] Enforce MaxConnections limit (counter exists but not enforced)
+- [x] Start IdleMonitor goroutine in handler
+- [x] Enforce idle timeout disconnection
 
 ## Phase 5: Testing
 
-### Transaction Commands
-- [ ] Create `transaction_commands_test.go`
-- [ ] Test STAT in different states
-- [ ] Test LIST with/without arguments
-- [ ] Test RETR with valid/invalid message IDs
-- [ ] Test DELE tracking
-- [ ] Test RSET clearing deletions
-- [ ] Test NOOP
+### Transaction Commands - COMPLETE
+- [x] Create `transaction_commands_test.go`
+- [x] Test STAT in different states
+- [x] Test LIST with/without arguments
+- [x] Test RETR with valid/invalid message IDs
+- [x] Test DELE tracking
+- [x] Test RSET clearing deletions
+- [x] Test NOOP
 
 ### Integration Tests
 - [ ] Create `handler_test.go` for command dispatch

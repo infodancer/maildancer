@@ -13,6 +13,11 @@ type AuthenticationAgent interface {
 	// is enabled for the user.
 	Authenticate(ctx context.Context, username, password string) (*AuthSession, error)
 
+	// UserExists checks if a user exists without authenticating.
+	// Returns true if the user exists, false otherwise.
+	// Returns an error only for backend failures, not for missing users.
+	UserExists(ctx context.Context, username string) (bool, error)
+
 	// Close releases any resources held by the agent.
 	Close() error
 }

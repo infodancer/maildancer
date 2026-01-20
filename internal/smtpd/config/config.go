@@ -39,17 +39,18 @@ type ServerConfig struct {
 
 // Config holds the complete SMTP server configuration.
 type Config struct {
-	Hostname   string           `toml:"hostname"`
-	LogLevel   string           `toml:"log_level"`
-	Listeners  []ListenerConfig `toml:"listeners"`
-	TLS        TLSConfig        `toml:"tls"`
-	Limits     LimitsConfig     `toml:"limits"`
-	Timeouts   TimeoutsConfig   `toml:"timeouts"`
-	Metrics    MetricsConfig    `toml:"metrics"`
-	Delivery   DeliveryConfig   `toml:"delivery"`
-	Encryption EncryptionConfig `toml:"encryption"`
-	Auth       AuthConfig       `toml:"auth"`
-	SpamCheck  SpamCheckConfig  `toml:"spamcheck"`
+	Hostname    string           `toml:"hostname"`
+	LogLevel    string           `toml:"log_level"`
+	DomainsPath string           `toml:"domains_path"`
+	Listeners   []ListenerConfig `toml:"listeners"`
+	TLS         TLSConfig        `toml:"tls"`
+	Limits      LimitsConfig     `toml:"limits"`
+	Timeouts    TimeoutsConfig   `toml:"timeouts"`
+	Metrics     MetricsConfig    `toml:"metrics"`
+	Delivery    DeliveryConfig   `toml:"delivery"`
+	Encryption  EncryptionConfig `toml:"encryption"`
+	Auth        AuthConfig       `toml:"auth"`
+	SpamCheck   SpamCheckConfig  `toml:"spamcheck"`
 }
 
 // EncryptionConfig holds configuration for message encryption.

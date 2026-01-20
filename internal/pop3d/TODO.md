@@ -26,12 +26,12 @@
 - [x] Load message content for RETR command
 - [x] Commit deletions to MessageStore in UPDATE state
 
-## Phase 3: Optional Extensions (RFC 2449)
+## Phase 3: Optional Extensions (RFC 2449) - COMPLETE
 
 - [x] TOP - Retrieve headers plus n lines of body
 - [x] UIDL - Unique message ID listing
-- [ ] APOP - MD5 challenge-response authentication (RFC 1939 optional)
-- [ ] AUTH/SASL mechanisms (RFC 5034)
+- [x] AUTH/SASL mechanisms (RFC 5034)
+- ~~APOP~~ - Not implemented (MD5 is broken; requires plaintext password storage; TLS+PLAIN is preferred)
 
 ## Phase 4: Observability & Operations - COMPLETE
 

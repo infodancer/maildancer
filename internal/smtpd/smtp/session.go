@@ -1,12 +1,12 @@
 package smtp
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -17,6 +17,18 @@ import (
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
+
+// countingReader wraps an io.Reader and counts bytes read.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
 
 // Session implements the go-smtp Session interface.
 // It also implements AuthSession for AUTH support.
@@ -142,27 +154,38 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 
 // Data handles the DATA command and message delivery.
 // Implements smtp.Session interface.
+//
+// Uses TeeReader to stream message data to a temp file during spam checking,
+// avoiding triple buffering of large messages in memory.
 func (s *Session) Data(r io.Reader) error {
 	ctx := context.Background()
-
-	// Read message data
-	message, err := io.ReadAll(r)
-	if err != nil {
-		s.logger.Debug("failed to read message data", slog.String("error", err.Error()))
-		return &smtp.SMTPError{
-			Code:         451,
-			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
-			Message:      "Error reading message",
-		}
-	}
 
 	if s.backend.collector != nil {
 		s.backend.collector.CommandProcessed("DATA")
 	}
 
-	// Spam check (if enabled)
+	// Create temp file for message data
+	tmpFile, err := os.CreateTemp("", "smtp-msg-*")
+	if err != nil {
+		s.logger.Debug("failed to create temp file", slog.String("error", err.Error()))
+		return &smtp.SMTPError{
+			Code:         451,
+			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+			Message:      "Internal error",
+		}
+	}
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
+	defer func() { _ = tmpFile.Close() }()
+
+	// TeeReader writes to tmpFile as data is read
+	tee := io.TeeReader(r, tmpFile)
+
+	// Wrap in countingReader to track message size
+	counter := &countingReader{r: tee}
+
+	// Spam check (if enabled) - reads through counter, which fills tmpFile
 	if s.backend.spamChecker != nil && s.backend.spamConfig.IsEnabled() {
-		checkResult, checkErr := s.backend.spamChecker.Check(ctx, bytes.NewReader(message), spamcheck.CheckOptions{
+		checkResult, checkErr := s.backend.spamChecker.Check(ctx, counter, spamcheck.CheckOptions{
 			From:       s.from,
 			Recipients: s.recipients,
 			IP:         s.clientIP,
@@ -263,10 +286,30 @@ func (s *Session) Data(r io.Reader) error {
 			// Note: Header injection is not supported with go-smtp.
 			// Spam check can reject but cannot modify the message.
 		}
+	} else {
+		// No spam check - read the entire message into tmpFile
+		if _, err := io.Copy(tmpFile, counter); err != nil {
+			s.logger.Debug("failed to read message data", slog.String("error", err.Error()))
+			return &smtp.SMTPError{
+				Code:         451,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+				Message:      "Error reading message",
+			}
+		}
 	}
 
 	// Deliver the message
 	if s.backend.delivery != nil {
+		// Seek to beginning of temp file for delivery
+		if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
+			s.logger.Debug("failed to seek temp file", slog.String("error", err.Error()))
+			return &smtp.SMTPError{
+				Code:         451,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+				Message:      "Internal error",
+			}
+		}
+
 		envelope := msgstore.Envelope{
 			From:           s.from,
 			Recipients:     s.recipients,
@@ -275,8 +318,7 @@ func (s *Session) Data(r io.Reader) error {
 			ClientHostname: s.helo,
 		}
 
-		messageReader := bytes.NewReader(message)
-		if err := s.backend.delivery.Deliver(ctx, envelope, messageReader); err != nil {
+		if err := s.backend.delivery.Deliver(ctx, envelope, tmpFile); err != nil {
 			s.logger.Debug("delivery failed", slog.String("error", err.Error()))
 
 			if s.backend.collector != nil {
@@ -293,11 +335,11 @@ func (s *Session) Data(r io.Reader) error {
 
 		if s.backend.collector != nil {
 			domain := sessionExtractRecipientDomain(s.recipients)
-			s.backend.collector.MessageReceived(domain, int64(len(message)))
+			s.backend.collector.MessageReceived(domain, counter.n)
 		}
 
 		s.logger.Debug("message delivered",
-			slog.Int("size", len(message)),
+			slog.Int64("size", counter.n),
 			slog.Int("recipients", len(s.recipients)))
 	} else {
 		// No delivery agent - reject all mail

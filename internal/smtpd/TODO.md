@@ -15,35 +15,32 @@ This document tracks the implementation status of SMTP commands, extensions, and
 - [x] QUIT - Clean disconnection
 
 ### Administrative Commands
-- [ ] VRFY - Verify user address
-- [ ] EXPN - Expand mailing list
-- [ ] HELP - Help information
+- ~~VRFY~~ - Not implemented (security/privacy concern, enables address harvesting)
+- ~~EXPN~~ - Not implemented (security/privacy concern, enables address harvesting)
+- ~~HELP~~ - Not implemented (no practical value)
 
 ### Obsolete Commands (RFC 5321 Appendix F)
-- [ ] SEND - Not planned
-- [ ] SOML - Not planned
-- [ ] SAML - Not planned
-- [ ] TURN - Not planned
+Not implemented: SEND, SOML, SAML, TURN
 
 ## SMTP Extensions
 
 ### Advertised Extensions
 - [x] SIZE - Message size limits (default 25 MB, configurable)
 - [x] 8BITMIME - 8-bit MIME transport
-- [ ] PIPELINING - Command pipelining (RFC 2920)
-- [ ] CHUNKING/BDAT - Binary data transfer (RFC 3030)
-- [ ] DSN - Delivery Status Notifications (RFC 3461)
-- [ ] ENHANCEDSTATUSCODES - Enhanced status codes (RFC 2034)
+- [x] PIPELINING - Command pipelining (RFC 2920) - provided by go-smtp
+- [x] CHUNKING/BDAT - Binary data transfer (RFC 3030) - provided by go-smtp
+- [x] ENHANCEDSTATUSCODES - Enhanced status codes (RFC 2034) - provided by go-smtp
+- [ ] DSN - Delivery Status Notifications (RFC 3461) - available via go-smtp EnableDSN
 
 ### AUTH Extension (RFC 4954)
 - [x] AUTH command framework
 - [x] PLAIN mechanism (RFC 4616)
-- [ ] LOGIN mechanism
-- [ ] CRAM-MD5 mechanism
-- [ ] SCRAM-SHA-1 mechanism
-- [ ] SCRAM-SHA-256 mechanism
 - [x] TLS enforcement for PLAIN (except localhost)
 - [x] Prevents username enumeration
+- [ ] OAUTHBEARER mechanism (RFC 7628) - available via go-sasl
+- ~~LOGIN~~ - Not implemented (obsolete, PLAIN is preferred)
+- ~~CRAM-MD5~~ - Not implemented (MD5 broken, requires plaintext storage)
+- ~~SCRAM-*~~ - Not implemented (not available in go-sasl)
 
 ### TLS Support
 - [x] SMTPS (implicit TLS, port 465)

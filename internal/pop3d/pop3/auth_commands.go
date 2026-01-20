@@ -3,7 +3,9 @@ package pop3
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/emersion/go-sasl"
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/msgstore"
 )
@@ -199,11 +201,163 @@ func (q *quitCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 	return Response{OK: true, Message: message}, nil
 }
 
+// authCommand implements the AUTH command (RFC 5034).
+type authCommand struct {
+	authProvider AuthProvider
+	msgStore     msgstore.MessageStore
+}
+
+func (a *authCommand) Name() string {
+	return "AUTH"
+}
+
+func (a *authCommand) Execute(ctx context.Context, sess *Session, conn ConnectionLogger, args []string) (Response, error) {
+	// AUTH is only valid in AUTHORIZATION state
+	if sess.State() != StateAuthorization {
+		return Response{OK: false, Message: "Command not valid in this state"}, nil
+	}
+
+	// Require TLS for AUTH command
+	if !sess.IsTLSActive() {
+		return Response{OK: false, Message: "TLS required for authentication"}, nil
+	}
+
+	// AUTH requires at least a mechanism argument
+	if len(args) < 1 {
+		return Response{OK: false, Message: "AUTH command requires mechanism argument"}, nil
+	}
+
+	mechanism := strings.ToUpper(args[0])
+
+	// Check if mechanism is supported
+	supported := false
+	for _, mech := range SupportedSASLMechanisms() {
+		if strings.EqualFold(mech, mechanism) {
+			supported = true
+			break
+		}
+	}
+	if !supported {
+		return Response{OK: false, Message: fmt.Sprintf("Unsupported mechanism: %s", mechanism)}, nil
+	}
+
+	// Create the SASL server based on mechanism
+	var server sasl.Server
+	switch mechanism {
+	case sasl.Plain:
+		server = sasl.NewPlainServer(func(identity, username, password string) error {
+			authSession, err := a.authProvider.Authenticate(ctx, username, password)
+			if err != nil {
+				conn.Logger().Info("SASL authentication failed",
+					"mechanism", mechanism,
+					"username", username,
+					"error", err.Error(),
+				)
+				return err
+			}
+
+			// Authentication successful - transition to TRANSACTION state
+			sess.SetAuthenticated(authSession)
+			sess.SetUsername(username)
+
+			// Initialize mailbox if message store is available
+			if a.msgStore != nil {
+				if err := sess.InitializeMailbox(ctx, a.msgStore); err != nil {
+					conn.Logger().Error("failed to initialize mailbox",
+						"username", username,
+						"mailbox", authSession.User.Mailbox,
+						"error", err.Error(),
+					)
+					return err
+				}
+			}
+
+			conn.Logger().Info("SASL authentication successful",
+				"mechanism", mechanism,
+				"username", username,
+				"mailbox", authSession.User.Mailbox,
+			)
+			return nil
+		})
+	default:
+		return Response{OK: false, Message: fmt.Sprintf("Unsupported mechanism: %s", mechanism)}, nil
+	}
+
+	// Store the SASL server in the session
+	sess.SetSASLServer(mechanism, server)
+
+	// Check if there's an initial response (RFC 4954)
+	var initialResponse []byte
+	if len(args) > 1 {
+		// Handle special case of "=" meaning empty initial response
+		if args[1] == "=" {
+			initialResponse = []byte{}
+		} else {
+			var err error
+			initialResponse, err = DecodeSASLResponse(args[1])
+			if err != nil {
+				sess.ClearSASL()
+				return Response{OK: false, Message: "Invalid base64 encoding"}, nil
+			}
+		}
+
+		// Process the initial response
+		return a.processSASLStep(ctx, sess, conn, initialResponse)
+	}
+
+	// No initial response - send empty challenge to request credentials
+	return Response{Continuation: true, Challenge: ""}, nil
+}
+
+// processSASLStep processes a SASL response and returns the next challenge or completion.
+func (a *authCommand) processSASLStep(ctx context.Context, sess *Session, conn ConnectionLogger, response []byte) (Response, error) {
+	server := sess.SASLServer()
+	if server == nil {
+		return Response{OK: false, Message: "No SASL exchange in progress"}, nil
+	}
+
+	// Process the response
+	challenge, done, err := server.Next(response)
+	if err != nil {
+		sess.ClearSASL()
+		return Response{OK: false, Message: "Authentication failed"}, nil
+	}
+
+	if done {
+		// Authentication complete
+		sess.ClearSASL()
+		return Response{OK: true, Message: fmt.Sprintf("Logged in as %s", sess.Username())}, nil
+	}
+
+	// Need more data - send challenge
+	return Response{Continuation: true, Challenge: EncodeSASLChallenge(challenge)}, nil
+}
+
+// ProcessSASLResponse processes a SASL response from the handler.
+// This is called when the handler receives a line during an active SASL exchange.
+func (a *authCommand) ProcessSASLResponse(ctx context.Context, sess *Session, conn ConnectionLogger, line string) (Response, error) {
+	// Check for cancellation
+	if line == "*" {
+		sess.ClearSASL()
+		return Response{OK: false, Message: "Authentication cancelled"}, nil
+	}
+
+	// Decode the response
+	response, err := DecodeSASLResponse(line)
+	if err != nil {
+		sess.ClearSASL()
+		return Response{OK: false, Message: "Invalid base64 encoding"}, nil
+	}
+
+	return a.processSASLStep(ctx, sess, conn, response)
+}
+
 // RegisterAuthCommands registers all authentication-related commands.
 func RegisterAuthCommands(authProvider AuthProvider, msgStore msgstore.MessageStore) {
 	RegisterCommand(&capaCommand{})
 	RegisterCommand(&stlsCommand{})
 	RegisterCommand(&userCommand{})
 	RegisterCommand(&passCommand{authProvider: authProvider, msgStore: msgStore})
+	RegisterCommand(&authCommand{authProvider: authProvider, msgStore: msgStore})
 	RegisterCommand(&quitCommand{})
 }

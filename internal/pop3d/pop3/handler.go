@@ -109,6 +109,55 @@ func handleConnection(ctx context.Context, conn *server.Connection, hostname str
 
 		logger.Debug("received command", "line", line)
 
+		// Check if SASL exchange is in progress
+		if sess.IsSASLInProgress() {
+			// Get the AUTH command to process the SASL response
+			authCmd, ok := GetCommand("AUTH")
+			if !ok {
+				logger.Error("AUTH command not registered")
+				sess.ClearSASL()
+				sendError(conn, logger, "Internal server error")
+				continue
+			}
+
+			// Type assert to access ProcessSASLResponse
+			auth, ok := authCmd.(*authCommand)
+			if !ok {
+				logger.Error("AUTH command has wrong type")
+				sess.ClearSASL()
+				sendError(conn, logger, "Internal server error")
+				continue
+			}
+
+			// Process the SASL response
+			resp, err := auth.ProcessSASLResponse(ctx, sess, conn, line)
+			if err != nil {
+				logger.Error("SASL processing error", "error", err.Error())
+				sess.ClearSASL()
+				sendError(conn, logger, "Internal server error")
+				continue
+			}
+
+			// Send response
+			if _, err := conn.Writer().WriteString(resp.String()); err != nil {
+				logger.Error("failed to send response", "error", err.Error())
+				return
+			}
+			if err := conn.Flush(); err != nil {
+				logger.Error("failed to flush response", "error", err.Error())
+				return
+			}
+
+			// Record auth metrics if authentication completed
+			if resp.OK || (!resp.OK && !resp.Continuation) {
+				domain := extractDomain(sess.Username())
+				collector.AuthAttempt(domain, resp.OK)
+				collector.CommandProcessed("AUTH")
+			}
+
+			continue
+		}
+
 		// Parse command
 		cmdName, args, err := ParseCommand(line)
 		if err != nil {
@@ -157,10 +206,13 @@ func handleConnection(ctx context.Context, conn *server.Connection, hostname str
 			"message", resp.Message,
 		)
 
-		// Record auth metrics for PASS command
-		if cmdName == "PASS" {
-			domain := extractDomain(sess.Username())
-			collector.AuthAttempt(domain, resp.OK)
+		// Record auth metrics for PASS and AUTH commands
+		if cmdName == "PASS" || cmdName == "AUTH" {
+			// For AUTH, only record if not a continuation (authentication completed)
+			if cmdName != "AUTH" || (resp.OK || (!resp.OK && !resp.Continuation)) {
+				domain := extractDomain(sess.Username())
+				collector.AuthAttempt(domain, resp.OK)
+			}
 		}
 
 		// Handle special cases

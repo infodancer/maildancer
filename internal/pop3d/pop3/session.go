@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 
+	"github.com/emersion/go-sasl"
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
@@ -74,6 +75,10 @@ type Session struct {
 	// Authentication state
 	username    string
 	authSession *auth.AuthSession
+
+	// SASL state (for multi-step authentication exchanges)
+	saslServer sasl.Server // Active SASL server during exchange
+	saslMech   string      // Current mechanism name
 
 	// Transaction state (mailbox data)
 	mailbox     string                 // User's mailbox path
@@ -168,6 +173,33 @@ func (s *Session) EnterUpdate() {
 	}
 }
 
+// SetSASLServer sets the active SASL server for a multi-step exchange.
+func (s *Session) SetSASLServer(mech string, server sasl.Server) {
+	s.saslMech = mech
+	s.saslServer = server
+}
+
+// SASLServer returns the active SASL server, or nil if none.
+func (s *Session) SASLServer() sasl.Server {
+	return s.saslServer
+}
+
+// SASLMech returns the current SASL mechanism name.
+func (s *Session) SASLMech() string {
+	return s.saslMech
+}
+
+// ClearSASL clears the SASL state after completion or cancellation.
+func (s *Session) ClearSASL() {
+	s.saslServer = nil
+	s.saslMech = ""
+}
+
+// IsSASLInProgress returns true if a SASL exchange is in progress.
+func (s *Session) IsSASLInProgress() bool {
+	return s.saslServer != nil
+}
+
 // Capabilities returns the list of capabilities for this session.
 // Capabilities change based on TLS state and listener mode.
 func (s *Session) Capabilities() []string {
@@ -176,6 +208,11 @@ func (s *Session) Capabilities() []string {
 	// Only advertise USER if TLS is active
 	if s.tlsState == TLSStateActive {
 		caps = append([]string{"USER"}, caps...)
+	}
+
+	// Only advertise SASL PLAIN if TLS is active
+	if s.tlsState == TLSStateActive {
+		caps = append(caps, "SASL PLAIN")
 	}
 
 	// Only advertise STLS if it's available

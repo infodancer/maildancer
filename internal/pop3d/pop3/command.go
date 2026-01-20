@@ -34,11 +34,27 @@ type Response struct {
 	// Lines contains multi-line response data (for commands like CAPA).
 	// If present, will be sent after the +OK message, terminated by ".".
 	Lines []string
+
+	// Continuation indicates this is a SASL continuation response.
+	// If true, the response is formatted as "+ <Challenge>" instead of +OK/-ERR.
+	Continuation bool
+
+	// Challenge is the base64-encoded SASL challenge data.
+	// Only used when Continuation is true.
+	Challenge string
 }
 
 // String formats the response as a POP3 protocol string.
 func (r Response) String() string {
 	var sb strings.Builder
+
+	// Handle SASL continuation response
+	if r.Continuation {
+		sb.WriteString("+ ")
+		sb.WriteString(r.Challenge)
+		sb.WriteString("\r\n")
+		return sb.String()
+	}
 
 	if r.OK {
 		sb.WriteString("+OK")

@@ -234,7 +234,7 @@ func TestCapabilities(t *testing.T) {
 			mode:          config.ModePop3s,
 			isTLS:         true,
 			tlsConfig:     &tls.Config{},
-			wantCapCount:  4, // USER, TOP, UIDL, RESP-CODES
+			wantCapCount:  5, // USER, TOP, UIDL, RESP-CODES, SASL PLAIN
 			wantHasUser:   true,
 			wantHasSTLS:   false,
 		},
@@ -243,7 +243,7 @@ func TestCapabilities(t *testing.T) {
 			mode:          config.ModePop3,
 			isTLS:         true,
 			tlsConfig:     &tls.Config{},
-			wantCapCount:  4, // USER, TOP, UIDL, RESP-CODES
+			wantCapCount:  5, // USER, TOP, UIDL, RESP-CODES, SASL PLAIN
 			wantHasUser:   true,
 			wantHasSTLS:   false,
 		},

@@ -66,12 +66,12 @@ func TestCapaCommand(t *testing.T) {
 			wantCapCount: 3, // TOP, UIDL, RESP-CODES (no USER, no STLS without TLS config)
 		},
 		{
-			name:         "CAPA with TLS shows USER",
+			name:         "CAPA with TLS shows USER and SASL",
 			sess:         newTestSession(config.ModePop3s, true),
 			args:         []string{},
 			wantOK:       true,
 			wantMessage:  "Capability list follows",
-			wantCapCount: 4, // USER, TOP, UIDL, RESP-CODES
+			wantCapCount: 5, // USER, TOP, UIDL, RESP-CODES, SASL PLAIN
 		},
 		{
 			name:    "CAPA with arguments fails",
@@ -424,6 +424,8 @@ func TestCommandRegistry(t *testing.T) {
 		{"capa exists (case insensitive)", "capa", true},
 		{"USER exists", "USER", true},
 		{"PASS exists", "PASS", true},
+		{"AUTH exists", "AUTH", true},
+		{"auth exists (case insensitive)", "auth", true},
 		{"QUIT exists", "QUIT", true},
 		{"STLS exists", "STLS", true},
 		{"INVALID does not exist", "INVALID", false},
@@ -441,6 +443,280 @@ func TestCommandRegistry(t *testing.T) {
 				t.Errorf("GetCommand(%q) returned nil command", tt.cmdName)
 			}
 		})
+	}
+}
+
+func TestAuthCommand(t *testing.T) {
+	tests := []struct {
+		name            string
+		sess            *Session
+		args            []string
+		authFn          func(ctx context.Context, username, password string) (*auth.AuthSession, error)
+		wantOK          bool
+		wantContinuation bool
+		wantMessage     string
+		wantState       State
+	}{
+		{
+			name:        "AUTH without TLS fails",
+			sess:        newTestSession(config.ModePop3, false),
+			args:        []string{"PLAIN"},
+			wantOK:      false,
+			wantMessage: "TLS required for authentication",
+			wantState:   StateAuthorization,
+		},
+		{
+			name:        "AUTH without mechanism fails",
+			sess:        newTestSession(config.ModePop3s, true),
+			args:        []string{},
+			wantOK:      false,
+			wantMessage: "AUTH command requires mechanism argument",
+			wantState:   StateAuthorization,
+		},
+		{
+			name:        "AUTH with unsupported mechanism fails",
+			sess:        newTestSession(config.ModePop3s, true),
+			args:        []string{"CRAM-MD5"},
+			wantOK:      false,
+			wantMessage: "Unsupported mechanism: CRAM-MD5",
+			wantState:   StateAuthorization,
+		},
+		{
+			name:             "AUTH PLAIN without initial response sends challenge",
+			sess:             newTestSession(config.ModePop3s, true),
+			args:             []string{"PLAIN"},
+			wantContinuation: true,
+			wantState:        StateAuthorization,
+		},
+		{
+			name: "AUTH PLAIN with valid initial response succeeds",
+			sess: newTestSession(config.ModePop3s, true),
+			// Base64 of "\x00alice\x00secret"
+			args: []string{"PLAIN", "AGFsaWNlAHNlY3JldA=="},
+			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+				if username == "alice" && password == "secret" {
+					return &auth.AuthSession{
+						User: &auth.User{
+							Username: username,
+							Mailbox:  "/var/mail/" + username,
+						},
+					}, nil
+				}
+				return nil, errors.New("invalid credentials")
+			},
+			wantOK:      true,
+			wantMessage: "Logged in as alice",
+			wantState:   StateTransaction,
+		},
+		{
+			name: "AUTH PLAIN with invalid credentials fails",
+			sess: newTestSession(config.ModePop3s, true),
+			// Base64 of "\x00alice\x00wrongpassword"
+			args: []string{"PLAIN", "AGFsaWNlAHdyb25ncGFzc3dvcmQ="},
+			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+				return nil, errors.New("invalid credentials")
+			},
+			wantOK:      false,
+			wantMessage: "Authentication failed",
+			wantState:   StateAuthorization,
+		},
+		{
+			name:        "AUTH PLAIN with invalid base64 fails",
+			sess:        newTestSession(config.ModePop3s, true),
+			args:        []string{"PLAIN", "not-valid-base64!!!"},
+			wantOK:      false,
+			wantMessage: "Invalid base64 encoding",
+			wantState:   StateAuthorization,
+		},
+		{
+			name: "AUTH PLAIN with empty initial response (=) sends challenge",
+			sess: newTestSession(config.ModePop3s, true),
+			args: []string{"PLAIN", "="},
+			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+				// Empty response is not valid PLAIN credentials
+				return nil, errors.New("invalid credentials")
+			},
+			wantOK:      false,
+			wantMessage: "Authentication failed",
+			wantState:   StateAuthorization,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockAuth := &mockAuthProvider{
+				authenticateFn: tt.authFn,
+			}
+
+			cmd := &authCommand{authProvider: mockAuth}
+
+			// Create a minimal mock connection for logging
+			conn := newMockConnection()
+			resp, err := cmd.Execute(context.Background(), tt.sess, conn, tt.args)
+
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+
+			if resp.OK != tt.wantOK {
+				t.Errorf("Execute() OK = %v, want %v", resp.OK, tt.wantOK)
+			}
+
+			if resp.Continuation != tt.wantContinuation {
+				t.Errorf("Execute() Continuation = %v, want %v", resp.Continuation, tt.wantContinuation)
+			}
+
+			if !tt.wantContinuation && resp.Message != tt.wantMessage {
+				t.Errorf("Execute() Message = %v, want %v", resp.Message, tt.wantMessage)
+			}
+
+			if tt.sess.State() != tt.wantState {
+				t.Errorf("Session state = %v, want %v", tt.sess.State(), tt.wantState)
+			}
+		})
+	}
+}
+
+func TestAuthCommandInTransaction(t *testing.T) {
+	sess := newTestSession(config.ModePop3s, true)
+	sess.SetAuthenticated(&auth.AuthSession{
+		User: &auth.User{Username: "test"},
+	})
+
+	mockAuth := &mockAuthProvider{}
+	cmd := &authCommand{authProvider: mockAuth}
+	conn := newMockConnection()
+
+	resp, err := cmd.Execute(context.Background(), sess, conn, []string{"PLAIN"})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if resp.OK {
+		t.Error("Execute() should fail in TRANSACTION state")
+	}
+
+	if resp.Message != "Command not valid in this state" {
+		t.Errorf("Execute() Message = %v, want %v", resp.Message, "Command not valid in this state")
+	}
+}
+
+func TestAuthSASLCancellation(t *testing.T) {
+	sess := newTestSession(config.ModePop3s, true)
+	mockAuth := &mockAuthProvider{}
+
+	cmd := &authCommand{authProvider: mockAuth}
+	conn := newMockConnection()
+
+	// First, start AUTH to create SASL state
+	resp, err := cmd.Execute(context.Background(), sess, conn, []string{"PLAIN"})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !resp.Continuation {
+		t.Fatal("Expected continuation response")
+	}
+
+	if !sess.IsSASLInProgress() {
+		t.Fatal("Expected SASL to be in progress")
+	}
+
+	// Now send cancellation
+	resp, err = cmd.ProcessSASLResponse(context.Background(), sess, conn, "*")
+	if err != nil {
+		t.Fatalf("ProcessSASLResponse() error = %v", err)
+	}
+
+	if resp.OK {
+		t.Error("Cancellation should return -ERR")
+	}
+
+	if resp.Message != "Authentication cancelled" {
+		t.Errorf("Message = %v, want %v", resp.Message, "Authentication cancelled")
+	}
+
+	if sess.IsSASLInProgress() {
+		t.Error("SASL should be cleared after cancellation")
+	}
+}
+
+func TestAuthSASLMultiStep(t *testing.T) {
+	sess := newTestSession(config.ModePop3s, true)
+	mockAuth := &mockAuthProvider{
+		authenticateFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+			if username == "alice" && password == "secret" {
+				return &auth.AuthSession{
+					User: &auth.User{
+						Username: username,
+						Mailbox:  "/var/mail/" + username,
+					},
+				}, nil
+			}
+			return nil, errors.New("invalid credentials")
+		},
+	}
+
+	cmd := &authCommand{authProvider: mockAuth}
+	conn := newMockConnection()
+
+	// Start AUTH without initial response
+	resp, err := cmd.Execute(context.Background(), sess, conn, []string{"PLAIN"})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if !resp.Continuation {
+		t.Fatal("Expected continuation response")
+	}
+
+	// Send credentials in second step
+	// Base64 of "\x00alice\x00secret"
+	resp, err = cmd.ProcessSASLResponse(context.Background(), sess, conn, "AGFsaWNlAHNlY3JldA==")
+	if err != nil {
+		t.Fatalf("ProcessSASLResponse() error = %v", err)
+	}
+
+	if !resp.OK {
+		t.Errorf("Expected +OK, got -ERR: %s", resp.Message)
+	}
+
+	if sess.State() != StateTransaction {
+		t.Errorf("Session state = %v, want TRANSACTION", sess.State())
+	}
+
+	if sess.Username() != "alice" {
+		t.Errorf("Username = %v, want alice", sess.Username())
+	}
+}
+
+func TestCapabilitiesIncludeSASL(t *testing.T) {
+	// With TLS active, SASL should be advertised
+	sess := newTestSession(config.ModePop3s, true)
+	caps := sess.Capabilities()
+
+	found := false
+	for _, cap := range caps {
+		if cap == "SASL PLAIN" {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Errorf("Capabilities() should include 'SASL PLAIN' when TLS is active, got: %v", caps)
+	}
+}
+
+func TestCapabilitiesHideSASLWithoutTLS(t *testing.T) {
+	// Without TLS, SASL should not be advertised
+	sess := newTestSession(config.ModePop3, false)
+	caps := sess.Capabilities()
+
+	for _, cap := range caps {
+		if cap == "SASL PLAIN" {
+			t.Errorf("Capabilities() should not include 'SASL PLAIN' without TLS, got: %v", caps)
+		}
 	}
 }
 
@@ -483,6 +759,22 @@ func TestResponseFormatting(t *testing.T) {
 				Lines:   []string{".hidden", "normal", "..double"},
 			},
 			wantText: "+OK Data\r\n..hidden\r\nnormal\r\n...double\r\n.\r\n",
+		},
+		{
+			name: "SASL continuation response with challenge",
+			resp: Response{
+				Continuation: true,
+				Challenge:    "SGVsbG8=",
+			},
+			wantText: "+ SGVsbG8=\r\n",
+		},
+		{
+			name: "SASL continuation response with empty challenge",
+			resp: Response{
+				Continuation: true,
+				Challenge:    "",
+			},
+			wantText: "+ \r\n",
 		},
 	}
 

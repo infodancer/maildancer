@@ -52,4 +52,7 @@ var (
 
 	// ErrInvalidPath indicates an invalid maildir path.
 	ErrInvalidPath = errors.New("invalid maildir path")
+
+	// ErrPathTraversal indicates an attempted path traversal attack.
+	ErrPathTraversal = errors.New("path traversal rejected")
 )

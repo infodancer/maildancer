@@ -17,7 +17,8 @@ import (
 // MaildirStore implements msgstore.MsgStore using the Maildir format.
 // It uses emersion/go-maildir for low-level maildir operations.
 type MaildirStore struct {
-	basePath string
+	basePath      string
+	maildirSubdir string // optional subdirectory under each mailbox (e.g., "Maildir")
 
 	// deleted tracks messages marked for deletion per mailbox.
 	deletedMu sync.Mutex
@@ -25,29 +26,55 @@ type MaildirStore struct {
 }
 
 // NewStore creates a new MaildirStore with the given base path.
-func NewStore(basePath string) *MaildirStore {
+// The optional maildirSubdir specifies a subdirectory under each mailbox
+// (e.g., "Maildir" for paths like users/testuser/Maildir/).
+func NewStore(basePath string, maildirSubdir string) *MaildirStore {
 	return &MaildirStore{
-		basePath: basePath,
-		deleted:  make(map[string]map[string]bool),
+		basePath:      basePath,
+		maildirSubdir: maildirSubdir,
+		deleted:       make(map[string]map[string]bool),
 	}
 }
 
 // mailboxPath returns the filesystem path for a mailbox.
-func (s *MaildirStore) mailboxPath(mailbox string) string {
-	// Sanitize mailbox name to prevent path traversal
-	safe := strings.ReplaceAll(mailbox, "..", "")
-	safe = strings.ReplaceAll(safe, "/", "_")
-	return filepath.Join(s.basePath, safe)
+// Returns an error if the resulting path would escape the base directory.
+func (s *MaildirStore) mailboxPath(mailbox string) (string, error) {
+	// Build the candidate path
+	var candidate string
+	if s.maildirSubdir != "" {
+		candidate = filepath.Join(s.basePath, mailbox, s.maildirSubdir)
+	} else {
+		candidate = filepath.Join(s.basePath, mailbox)
+	}
+
+	// Clean both paths to normalize them
+	cleanBase := filepath.Clean(s.basePath)
+	cleanCandidate := filepath.Clean(candidate)
+
+	// Verify the candidate is under the base path
+	// Add separator to prevent prefix matching (e.g., /base-other matching /base)
+	if !strings.HasPrefix(cleanCandidate+string(filepath.Separator), cleanBase+string(filepath.Separator)) {
+		return "", errors.ErrPathTraversal
+	}
+
+	return cleanCandidate, nil
 }
 
 // ensureMaildir ensures the maildir exists, creating it if necessary.
 func (s *MaildirStore) ensureMaildir(mailbox string) (maildir.Dir, error) {
-	path := s.mailboxPath(mailbox)
+	path, err := s.mailboxPath(mailbox)
+	if err != nil {
+		return "", err
+	}
 	dir := maildir.Dir(path)
 
 	// Check if maildir exists by checking for cur/ directory
 	curPath := filepath.Join(path, "cur")
 	if _, err := os.Stat(curPath); os.IsNotExist(err) {
+		// Ensure parent directories exist (needed when maildirSubdir is set)
+		if err := os.MkdirAll(path, 0700); err != nil {
+			return "", err
+		}
 		if err := dir.Init(); err != nil {
 			return "", err
 		}
@@ -107,7 +134,10 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 
 // List implements msgstore.MessageStore.
 func (s *MaildirStore) List(ctx context.Context, mailbox string) ([]msgstore.MessageInfo, error) {
-	path := s.mailboxPath(mailbox)
+	path, err := s.mailboxPath(mailbox)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check if maildir exists
 	curPath := filepath.Join(path, "cur")
@@ -192,7 +222,10 @@ func (s *MaildirStore) Retrieve(ctx context.Context, mailbox string, uid string)
 		return nil, errors.ErrMessageDeleted
 	}
 
-	path := s.mailboxPath(mailbox)
+	path, err := s.mailboxPath(mailbox)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check if maildir exists
 	curPath := filepath.Join(path, "cur")
@@ -231,7 +264,10 @@ func (s *MaildirStore) Expunge(ctx context.Context, mailbox string) error {
 		return nil
 	}
 
-	path := s.mailboxPath(mailbox)
+	path, err := s.mailboxPath(mailbox)
+	if err != nil {
+		return err
+	}
 
 	// Check if maildir exists
 	curPath := filepath.Join(path, "cur")

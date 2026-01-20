@@ -14,7 +14,7 @@ import (
 
 func TestMaildirStore_Deliver(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath)
+	store := NewStore(basePath, "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -44,7 +44,7 @@ func TestMaildirStore_Deliver(t *testing.T) {
 
 func TestMaildirStore_DeliverNoRecipients(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath)
+	store := NewStore(basePath, "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -62,7 +62,7 @@ func TestMaildirStore_DeliverNoRecipients(t *testing.T) {
 
 func TestMaildirStore_List(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath)
+	store := NewStore(basePath, "")
 	ctx := context.Background()
 
 	// Deliver two messages
@@ -88,7 +88,7 @@ func TestMaildirStore_List(t *testing.T) {
 
 func TestMaildirStore_ListNonexistent(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath)
+	store := NewStore(basePath, "")
 	ctx := context.Background()
 
 	_, err := store.List(ctx, "nonexistent@example.com")
@@ -99,7 +99,7 @@ func TestMaildirStore_ListNonexistent(t *testing.T) {
 
 func TestMaildirStore_Retrieve(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath)
+	store := NewStore(basePath, "")
 	ctx := context.Background()
 
 	messageContent := "Subject: Test\r\n\r\nTest message body"
@@ -139,7 +139,7 @@ func TestMaildirStore_Retrieve(t *testing.T) {
 
 func TestMaildirStore_Delete(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath)
+	store := NewStore(basePath, "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -177,7 +177,7 @@ func TestMaildirStore_Delete(t *testing.T) {
 
 func TestMaildirStore_Expunge(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath)
+	store := NewStore(basePath, "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -213,7 +213,7 @@ func TestMaildirStore_Expunge(t *testing.T) {
 
 func TestMaildirStore_Stat(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath)
+	store := NewStore(basePath, "")
 	ctx := context.Background()
 
 	// Deliver messages
@@ -242,7 +242,7 @@ func TestMaildirStore_Stat(t *testing.T) {
 
 func TestMaildirStore_MultipleRecipients(t *testing.T) {
 	basePath := t.TempDir()
-	store := NewStore(basePath)
+	store := NewStore(basePath, "")
 	ctx := context.Background()
 
 	envelope := msgstore.Envelope{
@@ -309,5 +309,57 @@ func TestConvertFlags(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMaildirStore_PathTraversal(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "")
+	ctx := context.Background()
+
+	// Attempt path traversal attacks (using forward slashes - Unix style)
+	traversalAttempts := []string{
+		"../etc/passwd",
+		"user/../../../etc/passwd",
+		"./../../etc/passwd",
+	}
+
+	for _, mailbox := range traversalAttempts {
+		envelope := msgstore.Envelope{
+			From:       "sender@example.com",
+			Recipients: []string{mailbox},
+		}
+		message := strings.NewReader("Subject: Test\r\n\r\nTest message body")
+
+		err := store.Deliver(ctx, envelope, message)
+		if err != errors.ErrPathTraversal {
+			t.Errorf("expected ErrPathTraversal for mailbox %q, got %v", mailbox, err)
+		}
+	}
+}
+
+func TestMaildirStore_MaildirSubdir(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "Maildir")
+	ctx := context.Background()
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"testuser"},
+	}
+	message := strings.NewReader("Subject: Test\r\n\r\nTest message body")
+
+	err := store.Deliver(ctx, envelope, message)
+	if err != nil {
+		t.Fatalf("Deliver failed: %v", err)
+	}
+
+	// Verify message was delivered to basePath/testuser/Maildir/
+	messages, err := store.List(ctx, "testuser")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
 	}
 }

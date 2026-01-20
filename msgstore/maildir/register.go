@@ -10,6 +10,8 @@ func init() {
 		if config.BasePath == "" {
 			return nil, errors.ErrStoreConfigInvalid
 		}
-		return NewStore(config.BasePath), nil
+		// maildir_subdir specifies the subdirectory under each user (e.g., "Maildir")
+		maildirSubdir := config.Options["maildir_subdir"]
+		return NewStore(config.BasePath, maildirSubdir), nil
 	})
 }

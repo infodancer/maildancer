@@ -119,12 +119,14 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 }
 
 // LoadWithFlags loads configuration from the path specified in flags,
-// then applies flag overrides.
+// then applies environment variable overrides and flag overrides.
+// Precedence (highest to lowest): flags > environment variables > TOML config > defaults.
 func LoadWithFlags(f *Flags) (Config, error) {
 	cfg, err := Load(f.ConfigPath)
 	if err != nil {
 		return cfg, err
 	}
+	cfg = ApplyEnv(cfg)
 	return ApplyFlags(cfg, f), nil
 }
 

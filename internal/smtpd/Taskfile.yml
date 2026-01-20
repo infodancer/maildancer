@@ -94,3 +94,29 @@ tasks:
     cmds:
       - task: test:swaks
       - task: test:swaks:tls
+
+  docker:build:
+    desc: Build Docker image
+    cmds:
+      - docker build -t infodancer-smtpd:latest .
+
+  docker:run:
+    desc: Run smtpd container with domain-aware storage
+    vars:
+      CONFIG_PATH:
+        sh: mktemp -d -t smtpd-config-XXXXXX
+      STORAGE_PATH:
+        sh: mktemp -d -t smtpd-storage-XXXXXX
+    cmds:
+      - 'echo "Config: {{.CONFIG_PATH}}, Storage: {{.STORAGE_PATH}}"'
+      - |
+        docker run -p 2525:25 \
+          -v {{.CONFIG_PATH}}:/etc/infodancer:ro \
+          -v {{.STORAGE_PATH}}:/var/infodancer \
+          -e SMTPD_HOSTNAME=localhost \
+          -e SMTPD_DELIVERY_TYPE=maildir \
+          -e SMTPD_DELIVERY_PATH=/var/infodancer/domains \
+          -e SMTPD_DELIVERY_PATH_TEMPLATE='{domain}/users/{localpart}' \
+          -e SMTPD_DELIVERY_MAILDIR_SUBDIR=Maildir \
+          -e SMTPD_LOG_LEVEL=debug \
+          infodancer-smtpd:latest

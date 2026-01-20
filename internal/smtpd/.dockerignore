@@ -1,0 +1,8 @@
+bin/
+*.toml
+!smtpd.toml.example
+.git/
+.github/
+*.md
+Taskfile.yml
+.githooks/

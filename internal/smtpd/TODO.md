@@ -37,7 +37,7 @@ Not implemented: SEND, SOML, SAML, TURN
 - [x] PLAIN mechanism (RFC 4616)
 - [x] TLS enforcement for PLAIN (except localhost)
 - [x] Prevents username enumeration
-- [ ] OAUTHBEARER mechanism (RFC 7628) - available via go-sasl
+- [x] OAUTHBEARER mechanism (RFC 7628) - JWT validation via JWKS
 - ~~LOGIN~~ - Not implemented (obsolete, PLAIN is preferred)
 - ~~CRAM-MD5~~ - Not implemented (MD5 broken, requires plaintext storage)
 - ~~SCRAM-*~~ - Not implemented (not available in go-sasl)

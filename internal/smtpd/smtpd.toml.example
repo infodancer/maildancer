@@ -63,6 +63,42 @@ mode = "smtps"
 # # url = "localhost:783"
 # # timeout = "30s"
 
+# Authentication Configuration
+# Supports username/password (PLAIN) and OAuth 2.0 bearer tokens (OAUTHBEARER)
+# [smtpd.auth]
+# enabled = true
+# agent_type = "passwd"                    # Auth agent type (e.g., "passwd")
+# credential_backend = "/etc/mail/passwd"  # Path to credential store
+# key_backend = "/etc/mail/keys"           # Path to encryption key store
+#
+# # OAuth 2.0 OAUTHBEARER Configuration (RFC 7628)
+# # Enables OAuth bearer token authentication for SMTP clients
+# [smtpd.auth.oauth]
+# enabled = true
+# jwks_url = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+# issuer = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "your-client-id"              # Your app's client ID or API identifier
+# username_claim = "email"                 # JWT claim for username: "email", "preferred_username", "upn", "sub"
+# jwks_refresh_interval = "1h"             # How often to refresh JWKS
+# allowed_domains = []                     # Restrict to specific email domains (empty = all)
+#
+# # Example: Google OAuth configuration
+# # [smtpd.auth.oauth]
+# # enabled = true
+# # jwks_url = "https://www.googleapis.com/oauth2/v3/certs"
+# # issuer = "https://accounts.google.com"
+# # audience = "your-client-id.apps.googleusercontent.com"
+# # username_claim = "email"
+#
+# # Example: Microsoft 365 / Azure AD configuration
+# # [smtpd.auth.oauth]
+# # enabled = true
+# # jwks_url = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+# # issuer = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# # audience = "your-client-id"
+# # username_claim = "preferred_username"
+# # allowed_domains = ["yourdomain.com"]
+
 # Future sections:
 # [pop3d]
 # [msgstore]

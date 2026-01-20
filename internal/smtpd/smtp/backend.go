@@ -6,26 +6,28 @@ import (
 
 	"github.com/emersion/go-smtp"
 	"github.com/infodancer/maildancer/auth"
+	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
-	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
+	"github.com/infodancer/maildancer/auth/oauth"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
 
 // Backend implements the go-smtp Backend interface.
 // It creates new sessions for each connection.
 type Backend struct {
-	hostname        string
-	delivery        msgstore.DeliveryAgent
-	authAgent       auth.AuthenticationAgent
-	domainProvider  domain.DomainProvider
-	spamChecker     spamcheck.Checker
-	spamConfig      config.SpamCheckConfig
-	collector       metrics.Collector
-	maxRecipients   int
-	maxMessageSize  int64
-	logger          *slog.Logger
+	hostname       string
+	delivery       msgstore.DeliveryAgent
+	authAgent      auth.AuthenticationAgent
+	oauthAgent     oauth.Agent
+	domainProvider domain.DomainProvider
+	spamChecker    spamcheck.Checker
+	spamConfig     config.SpamCheckConfig
+	collector      metrics.Collector
+	maxRecipients  int
+	maxMessageSize int64
+	logger         *slog.Logger
 }
 
 // BackendConfig holds configuration for creating a Backend.
@@ -33,6 +35,7 @@ type BackendConfig struct {
 	Hostname       string
 	Delivery       msgstore.DeliveryAgent
 	AuthAgent      auth.AuthenticationAgent
+	OAuthAgent     oauth.Agent
 	DomainProvider domain.DomainProvider
 	SpamChecker    spamcheck.Checker
 	SpamConfig     config.SpamCheckConfig
@@ -53,6 +56,7 @@ func NewBackend(cfg BackendConfig) *Backend {
 		hostname:       cfg.Hostname,
 		delivery:       cfg.Delivery,
 		authAgent:      cfg.AuthAgent,
+		oauthAgent:     cfg.OAuthAgent,
 		domainProvider: cfg.DomainProvider,
 		spamChecker:    cfg.SpamChecker,
 		spamConfig:     cfg.SpamConfig,

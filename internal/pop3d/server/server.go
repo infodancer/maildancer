@@ -22,30 +22,24 @@ type Server struct {
 	mu        sync.Mutex
 }
 
-// New creates a new Server with the given configuration.
-func New(cfg *config.Config) (*Server, error) {
-	logger := logging.NewLogger(cfg.LogLevel)
+// Config holds configuration for creating a new Server.
+type Config struct {
+	Cfg       *config.Config
+	TLSConfig *tls.Config
+	Logger    *slog.Logger
+}
 
-	s := &Server{
-		cfg:    cfg,
-		logger: logger,
+// New creates a new Server with the given configuration.
+func New(sc Config) (*Server, error) {
+	logger := sc.Logger
+	if logger == nil {
+		logger = logging.NewLogger(sc.Cfg.LogLevel)
 	}
 
-	// Load TLS configuration if certificates are specified
-	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("loading TLS certificate: %w", err)
-		}
-
-		s.tlsConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   cfg.TLS.MinTLSVersion(),
-		}
-		logger.Info("TLS configured",
-			slog.String("cert", cfg.TLS.CertFile),
-			slog.String("min_version", cfg.TLS.MinVersion),
-		)
+	s := &Server{
+		cfg:       sc.Cfg,
+		tlsConfig: sc.TLSConfig,
+		logger:    logger,
 	}
 
 	return s, nil

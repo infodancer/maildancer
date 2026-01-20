@@ -10,30 +10,36 @@ import (
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
+	"github.com/infodancer/maildancer/internal/pop3d/metrics"
 	"github.com/infodancer/maildancer/internal/pop3d/server"
 )
 
 // Handler creates a POP3 protocol handler with the given configuration.
-func Handler(hostname string, authProvider AuthProvider, msgStore msgstore.MessageStore, tlsConfig *tls.Config) server.ConnectionHandler {
+func Handler(hostname string, authProvider AuthProvider, msgStore msgstore.MessageStore, tlsConfig *tls.Config, collector metrics.Collector) server.ConnectionHandler {
 	// Register authentication commands with the auth provider and message store
 	RegisterAuthCommands(authProvider, msgStore)
 	// Register transaction commands
 	RegisterTransactionCommands()
 
 	return func(ctx context.Context, conn *server.Connection) {
-		handleConnection(ctx, conn, hostname, msgStore, tlsConfig)
+		handleConnection(ctx, conn, hostname, msgStore, tlsConfig, collector)
 	}
 }
 
 // handleConnection manages a single POP3 connection.
-func handleConnection(ctx context.Context, conn *server.Connection, hostname string, msgStore msgstore.MessageStore, tlsConfig *tls.Config) {
+func handleConnection(ctx context.Context, conn *server.Connection, hostname string, msgStore msgstore.MessageStore, tlsConfig *tls.Config, collector metrics.Collector) {
 	logger := logging.FromContext(ctx)
+
+	// Record connection opened
+	collector.ConnectionOpened()
+	defer collector.ConnectionClosed()
 
 	// Determine listener mode based on connection state
 	// If already TLS, assume ModePop3s; otherwise ModePop3
 	listenerMode := config.ModePop3
 	if conn.IsTLS() {
 		listenerMode = config.ModePop3s
+		collector.TLSConnectionEstablished()
 	}
 
 	// Create session
@@ -122,6 +128,9 @@ func handleConnection(ctx context.Context, conn *server.Connection, hostname str
 			"args_count", len(args),
 		)
 
+		// Record command execution
+		collector.CommandProcessed(cmdName)
+
 		// Execute command
 		resp, err := cmd.Execute(ctx, sess, conn, args)
 		if err != nil {
@@ -148,6 +157,12 @@ func handleConnection(ctx context.Context, conn *server.Connection, hostname str
 			"message", resp.Message,
 		)
 
+		// Record auth metrics for PASS command
+		if cmdName == "PASS" {
+			domain := extractDomain(sess.Username())
+			collector.AuthAttempt(domain, resp.OK)
+		}
+
 		// Handle special cases
 		switch cmdName {
 		case "STLS":
@@ -157,6 +172,7 @@ func handleConnection(ctx context.Context, conn *server.Connection, hostname str
 					logger.Error("TLS upgrade failed", "error", err.Error())
 					return
 				}
+				collector.TLSConnectionEstablished()
 				logger.Info("TLS upgrade successful",
 					"tls_state", sess.TLSState().String(),
 				)
@@ -214,4 +230,14 @@ func sendError(conn *server.Connection, logger interface{}, message string) {
 		return
 	}
 	_ = conn.Flush()
+}
+
+// extractDomain extracts the domain part from a username.
+// If the username contains @, returns the part after @.
+// Otherwise returns "unknown" for metrics labeling.
+func extractDomain(username string) string {
+	if idx := strings.LastIndex(username, "@"); idx >= 0 {
+		return username[idx+1:]
+	}
+	return "unknown"
 }

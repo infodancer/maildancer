@@ -14,10 +14,13 @@ type PrometheusServer struct {
 }
 
 // NewPrometheusServer creates a new PrometheusServer that will serve metrics
-// at the specified address and path.
-func NewPrometheusServer(address, path string) *PrometheusServer {
+// at the specified address and path. Health check endpoints are registered at
+// both /health and /healthz for compatibility with different conventions.
+func NewPrometheusServer(address, metricsPath string) *PrometheusServer {
 	mux := http.NewServeMux()
-	mux.Handle(path, promhttp.Handler())
+	mux.Handle(metricsPath, promhttp.Handler())
+	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/healthz", healthHandler)
 
 	return &PrometheusServer{
 		server: &http.Server{
@@ -25,6 +28,13 @@ func NewPrometheusServer(address, path string) *PrometheusServer {
 			Handler: mux,
 		},
 	}
+}
+
+// healthHandler responds with a simple JSON health status.
+func healthHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
 // Start begins serving metrics. It blocks until the context is canceled

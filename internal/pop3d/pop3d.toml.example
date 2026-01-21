@@ -27,6 +27,7 @@ max_connections = 100   # Concurrent connections limit
 enabled = false
 address = ":9101"
 path = "/metrics"
+# Health endpoints available at /health and /healthz
 
 [[pop3d.listeners]]
 address = ":110"

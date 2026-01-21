@@ -35,6 +35,12 @@ mode = "submission"
 address = ":465"
 mode = "smtps"
 
+[smtpd.metrics]
+enabled = false
+address = ":9100"
+path = "/metrics"
+# Health endpoints available at /health and /healthz
+
 # Spam Check Configuration
 # Supports multiple spam checkers running in sequence
 # [spamcheck]

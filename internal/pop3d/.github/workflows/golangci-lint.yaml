@@ -22,11 +22,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-      - name: Strip local replace directives and resolve dependencies
-        run: |
-          go mod edit -dropreplace=github.com/infodancer/maildancer/auth -dropreplace=github.com/infodancer/maildancer/msgstore
-          go get github.com/infodancer/maildancer/auth@latest
-          go mod tidy
+      - name: Strip local replace directives for CI
+        run: go mod edit -dropreplace=github.com/infodancer/maildancer/auth -dropreplace=github.com/infodancer/maildancer/msgstore
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:

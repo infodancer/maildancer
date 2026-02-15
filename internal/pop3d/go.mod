@@ -6,7 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
-	github.com/infodancer/maildancer/auth v0.0.0-00010101000000-000000000000
+	github.com/infodancer/maildancer/auth v0.0.0-20260120055502-78200a80f0f4
 	github.com/infodancer/maildancer/msgstore v0.0.0-20260119190950-8397c0fa98ca
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2

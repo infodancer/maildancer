@@ -68,3 +68,26 @@ tasks:
     cmds:
       - git config core.hooksPath .githooks
       - echo "Git hooks installed from .githooks directory"
+
+  docker:build:
+    desc: Build Docker image
+    cmds:
+      - docker build -t infodancer-pop3d:latest .
+
+  docker:run:
+    desc: Run pop3d container with maildir storage
+    vars:
+      CONFIG_PATH:
+        sh: mktemp -d -t pop3d-config-XXXXXX
+      STORAGE_PATH:
+        sh: mktemp -d -t pop3d-storage-XXXXXX
+    cmds:
+      - 'echo "Config: {{.CONFIG_PATH}}, Storage: {{.STORAGE_PATH}}"'
+      - |
+        docker run -p 1110:110 -p 1995:995 \
+          -v {{.CONFIG_PATH}}:/etc/infodancer:ro \
+          -v {{.STORAGE_PATH}}:/var/infodancer \
+          -e POP3D_HOSTNAME=localhost \
+          -e POP3D_MAILDIR=/var/infodancer/domains \
+          -e POP3D_LOG_LEVEL=debug \
+          infodancer-pop3d:latest

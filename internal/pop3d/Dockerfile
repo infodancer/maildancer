@@ -2,6 +2,8 @@
 FROM golang:1.24-alpine AS builder
 WORKDIR /build
 COPY go.mod go.sum ./
+# Strip local replace directives so Go fetches published module versions
+RUN go mod edit -dropreplace=github.com/infodancer/maildancer/auth -dropreplace=github.com/infodancer/maildancer/msgstore
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o pop3d ./cmd/pop3d

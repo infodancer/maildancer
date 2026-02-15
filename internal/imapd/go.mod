@@ -1,3 +1,3 @@
-module github.com/infodancer/gotemplate
+module github.com/infodancer/maildancer/internal/imapd
 
-go 1.23
+go 1.24.0

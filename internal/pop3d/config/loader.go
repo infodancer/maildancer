@@ -18,6 +18,7 @@ type Flags struct {
 	TLSKey         string
 	MaxConnections int
 	Maildir        string
+	DomainsPath    string
 }
 
 // ParseFlags parses command-line flags and returns a Flags struct.
@@ -32,6 +33,7 @@ func ParseFlags() *Flags {
 	flag.StringVar(&f.TLSKey, "tls-key", "", "TLS key file path")
 	flag.IntVar(&f.MaxConnections, "max-connections", 0, "Maximum concurrent connections")
 	flag.StringVar(&f.Maildir, "maildir", "", "Maildir path for message storage")
+	flag.StringVar(&f.DomainsPath, "domains", "", "Path to per-domain configuration directory")
 
 	flag.Parse()
 	return f
@@ -100,6 +102,10 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 		cfg.Maildir = f.Maildir
 	}
 
+	if f.DomainsPath != "" {
+		cfg.DomainsPath = f.DomainsPath
+	}
+
 	return cfg
 }
 
@@ -121,6 +127,10 @@ func mergeServerConfig(dst Config, src ServerConfig) Config {
 
 	if src.Maildir != "" {
 		dst.Maildir = src.Maildir
+	}
+
+	if src.DomainsPath != "" {
+		dst.DomainsPath = src.DomainsPath
 	}
 
 	if src.TLS.CertFile != "" {
@@ -195,6 +205,10 @@ func mergeConfig(dst, src Config) Config {
 
 	if src.Maildir != "" {
 		dst.Maildir = src.Maildir
+	}
+
+	if src.DomainsPath != "" {
+		dst.DomainsPath = src.DomainsPath
 	}
 
 	// Merge auth config

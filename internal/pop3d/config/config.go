@@ -27,9 +27,10 @@ type FileConfig struct {
 
 // ServerConfig holds shared settings used by all mail services.
 type ServerConfig struct {
-	Hostname string    `toml:"hostname"`
-	Maildir  string    `toml:"maildir"`
-	TLS      TLSConfig `toml:"tls"`
+	Hostname    string    `toml:"hostname"`
+	Maildir     string    `toml:"maildir"`
+	DomainsPath string    `toml:"domains_path"`
+	TLS         TLSConfig `toml:"tls"`
 }
 
 // Config holds the POP3-specific server configuration.
@@ -41,8 +42,9 @@ type Config struct {
 	Timeouts  TimeoutsConfig   `toml:"timeouts"`
 	Limits    LimitsConfig     `toml:"limits"`
 	Metrics   MetricsConfig    `toml:"metrics"`
-	Maildir   string           `toml:"maildir"`
-	Auth      AuthConfig       `toml:"auth"`
+	Maildir     string           `toml:"maildir"`
+	DomainsPath string           `toml:"domains_path"`
+	Auth        AuthConfig       `toml:"auth"`
 }
 
 // AuthConfig holds configuration for the authentication agent.

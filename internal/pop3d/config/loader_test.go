@@ -431,6 +431,97 @@ max_connections = 100
 	}
 }
 
+func TestLoadDomainsPath(t *testing.T) {
+	content := `
+[pop3d]
+hostname = "mail.example.com"
+domains_path = "/etc/mail/domains"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.DomainsPath != "/etc/mail/domains" {
+		t.Errorf("domains_path = %q, want '/etc/mail/domains'", cfg.DomainsPath)
+	}
+}
+
+func TestLoadDomainsPathFromServer(t *testing.T) {
+	content := `
+[server]
+domains_path = "/etc/mail/shared-domains"
+
+[pop3d]
+hostname = "mail.example.com"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.DomainsPath != "/etc/mail/shared-domains" {
+		t.Errorf("domains_path = %q, want '/etc/mail/shared-domains'", cfg.DomainsPath)
+	}
+}
+
+func TestLoadDomainsPathPop3dOverridesServer(t *testing.T) {
+	content := `
+[server]
+domains_path = "/etc/mail/shared-domains"
+
+[pop3d]
+hostname = "mail.example.com"
+domains_path = "/etc/mail/pop3-domains"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.DomainsPath != "/etc/mail/pop3-domains" {
+		t.Errorf("domains_path = %q, want '/etc/mail/pop3-domains' (pop3d should override server)", cfg.DomainsPath)
+	}
+}
+
+func TestApplyFlagsDomainsPath(t *testing.T) {
+	cfg := Default()
+
+	flags := &Flags{
+		DomainsPath: "/flag/domains",
+	}
+
+	result := ApplyFlags(cfg, flags)
+
+	if result.DomainsPath != "/flag/domains" {
+		t.Errorf("domains_path = %q, want '/flag/domains'", result.DomainsPath)
+	}
+}
+
+func TestApplyFlagsEmptyDomainsPathDoesNotOverride(t *testing.T) {
+	cfg := Default()
+	cfg.DomainsPath = "/etc/mail/domains"
+
+	flags := &Flags{
+		DomainsPath: "",
+	}
+
+	result := ApplyFlags(cfg, flags)
+
+	if result.DomainsPath != "/etc/mail/domains" {
+		t.Errorf("domains_path = %q, want '/etc/mail/domains' (should not be overridden)", result.DomainsPath)
+	}
+}
+
 func createTempConfig(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()

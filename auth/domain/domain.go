@@ -17,8 +17,11 @@ type Domain struct {
 	// AuthAgent handles user authentication and existence checks for this domain.
 	AuthAgent auth.AuthenticationAgent
 
-	// DeliveryAgent handles message storage for this domain.
+	// DeliveryAgent handles message delivery for this domain.
 	DeliveryAgent msgstore.DeliveryAgent
+
+	// MessageStore provides read access to stored messages for this domain.
+	MessageStore msgstore.MessageStore
 }
 
 // Close releases resources held by the domain's agents.

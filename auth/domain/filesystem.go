@@ -128,6 +128,7 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		Name:          name,
 		AuthAgent:     authAgent,
 		DeliveryAgent: store,
+		MessageStore:  store,
 	}, nil
 }
 

@@ -25,6 +25,7 @@ jobs:
       - name: Strip local replace directives and resolve dependencies
         run: |
           go mod edit -dropreplace=github.com/infodancer/maildancer/auth -dropreplace=github.com/infodancer/maildancer/msgstore
+          go get github.com/infodancer/maildancer/auth@latest
           go mod tidy
       - id: govulncheck
         uses: golang/govulncheck-action@v1

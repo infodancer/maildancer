@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/infodancer/maildancer/auth"
+	"github.com/infodancer/maildancer/auth/domain"
 	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd backend
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir backend
@@ -98,6 +99,18 @@ func main() {
 		logger.Info("message store enabled", "type", "maildir", "path", cfg.Maildir)
 	}
 
+	// Create domain provider if configured
+	var domainProvider *domain.FilesystemDomainProvider
+	if cfg.DomainsPath != "" {
+		domainProvider = domain.NewFilesystemDomainProvider(cfg.DomainsPath, logger)
+		defer func() {
+			if err := domainProvider.Close(); err != nil {
+				logger.Error("error closing domain provider", "error", err)
+			}
+		}()
+		logger.Info("domain provider enabled", "path", cfg.DomainsPath)
+	}
+
 	// Create server
 	srv, err := server.New(server.Config{
 		Cfg:       &cfg,
@@ -110,7 +123,7 @@ func main() {
 	}
 
 	// Set POP3 protocol handler
-	handler := pop3.Handler(cfg.Hostname, authAgent, msgStore, tlsConfig, collector)
+	handler := pop3.Handler(cfg.Hostname, authAgent, msgStore, domainProvider, tlsConfig, collector)
 	srv.SetHandler(handler)
 
 	// Set up signal handling for graceful shutdown

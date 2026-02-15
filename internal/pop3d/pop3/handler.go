@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
@@ -14,10 +15,17 @@ import (
 	"github.com/infodancer/maildancer/internal/pop3d/server"
 )
 
+// DomainProvider resolves email domains to their auth and store agents.
+// May be nil when domain-aware auth is not configured.
+type DomainProvider interface {
+	GetDomain(name string) *domain.Domain
+}
+
 // Handler creates a POP3 protocol handler with the given configuration.
-func Handler(hostname string, authProvider AuthProvider, msgStore msgstore.MessageStore, tlsConfig *tls.Config, collector metrics.Collector) server.ConnectionHandler {
+// domainProvider may be nil when domain-aware auth is not configured.
+func Handler(hostname string, authProvider AuthProvider, msgStore msgstore.MessageStore, domainProvider DomainProvider, tlsConfig *tls.Config, collector metrics.Collector) server.ConnectionHandler {
 	// Register authentication commands with the auth provider and message store
-	RegisterAuthCommands(authProvider, msgStore)
+	RegisterAuthCommands(authProvider, msgStore, domainProvider)
 	// Register transaction commands
 	RegisterTransactionCommands()
 
@@ -231,16 +239,18 @@ func handleConnection(ctx context.Context, conn *server.Connection, hostname str
 			}
 
 		case "QUIT":
-			// If we were in TRANSACTION state (now UPDATE), expunge deleted messages
-			if sess.State() == StateUpdate && msgStore != nil {
+			// If we were in TRANSACTION state (now UPDATE), expunge deleted messages.
+			// Use sess.Store() which may be domain-specific rather than the global msgStore.
+			store := sess.Store()
+			if sess.State() == StateUpdate && store != nil {
 				uids := sess.GetDeletedUIDs()
 				for _, uid := range uids {
-					if err := msgStore.Delete(ctx, sess.Mailbox(), uid); err != nil {
+					if err := store.Delete(ctx, sess.Mailbox(), uid); err != nil {
 						logger.Error("failed to delete message", "uid", uid, "error", err.Error())
 					}
 				}
 				if len(uids) > 0 {
-					if err := msgStore.Expunge(ctx, sess.Mailbox()); err != nil {
+					if err := store.Expunge(ctx, sess.Mailbox()); err != nil {
 						logger.Error("failed to expunge mailbox", "error", err.Error())
 					} else {
 						logger.Info("expunged messages", "count", len(uids))

@@ -101,10 +101,20 @@ func (u *userCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 	return Response{OK: true, Message: fmt.Sprintf("User %s accepted", username)}, nil
 }
 
+// splitUsername splits "user@domain" into local part and domain.
+// Returns the full username and empty domain if no @ is present.
+func splitUsername(username string) (localPart, domainName string) {
+	if idx := strings.LastIndex(username, "@"); idx >= 0 {
+		return username[:idx], username[idx+1:]
+	}
+	return username, ""
+}
+
 // passCommand implements the PASS command (RFC 1939).
 type passCommand struct {
-	authProvider AuthProvider
-	msgStore     msgstore.MessageStore
+	authProvider   AuthProvider
+	msgStore       msgstore.MessageStore
+	domainProvider DomainProvider
 }
 
 func (p *passCommand) Name() string {
@@ -135,7 +145,57 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 	password := args[0]
 
-	// Authenticate using the auth provider
+	// Split username into local part and domain
+	localPart, domainName := splitUsername(username)
+
+	// Try domain-specific authentication first
+	if p.domainProvider != nil && domainName != "" {
+		d := p.domainProvider.GetDomain(domainName)
+		if d == nil {
+			// Return generic error to prevent domain enumeration
+			conn.Logger().Info("authentication failed: unknown domain",
+				"username", username,
+				"domain", domainName,
+			)
+			return Response{OK: false, Message: "Authentication failed"}, nil
+		}
+
+		// Authenticate with domain-specific auth agent using local part
+		authSession, err := d.AuthAgent.Authenticate(ctx, localPart, password)
+		if err != nil {
+			conn.Logger().Info("domain authentication failed",
+				"username", username,
+				"domain", domainName,
+				"error", err.Error(),
+			)
+			return Response{OK: false, Message: "Authentication failed"}, nil
+		}
+
+		sess.SetAuthenticated(authSession)
+
+		// Initialize mailbox with domain-specific store
+		if d.MessageStore != nil {
+			if err := sess.InitializeMailbox(ctx, d.MessageStore); err != nil {
+				conn.Logger().Error("failed to initialize domain mailbox",
+					"username", username,
+					"domain", domainName,
+					"mailbox", authSession.User.Mailbox,
+					"error", err.Error(),
+				)
+				return Response{OK: false, Message: "Failed to access mailbox"}, nil
+			}
+		}
+
+		conn.Logger().Info("domain authentication successful",
+			"username", username,
+			"domain", domainName,
+			"mailbox", authSession.User.Mailbox,
+		)
+
+		return Response{OK: true, Message: fmt.Sprintf("Logged in as %s", username)}, nil
+	}
+
+	// Fall back to global auth provider
 	authSession, err := p.authProvider.Authenticate(ctx, username, password)
 	if err != nil {
 		// Return generic error to prevent user enumeration
@@ -203,8 +263,9 @@ func (q *quitCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 // authCommand implements the AUTH command (RFC 5034).
 type authCommand struct {
-	authProvider AuthProvider
-	msgStore     msgstore.MessageStore
+	authProvider   AuthProvider
+	msgStore       msgstore.MessageStore
+	domainProvider DomainProvider
 }
 
 func (a *authCommand) Name() string {
@@ -246,6 +307,59 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 	switch mechanism {
 	case sasl.Plain:
 		server = sasl.NewPlainServer(func(identity, username, password string) error {
+			// Split username into local part and domain
+			localPart, domainName := splitUsername(username)
+
+			// Try domain-specific authentication first
+			if a.domainProvider != nil && domainName != "" {
+				d := a.domainProvider.GetDomain(domainName)
+				if d == nil {
+					conn.Logger().Info("SASL authentication failed: unknown domain",
+						"mechanism", mechanism,
+						"username", username,
+						"domain", domainName,
+					)
+					return fmt.Errorf("authentication failed")
+				}
+
+				// Authenticate with domain-specific auth agent using local part
+				authSession, err := d.AuthAgent.Authenticate(ctx, localPart, password)
+				if err != nil {
+					conn.Logger().Info("SASL domain authentication failed",
+						"mechanism", mechanism,
+						"username", username,
+						"domain", domainName,
+						"error", err.Error(),
+					)
+					return err
+				}
+
+				sess.SetAuthenticated(authSession)
+				sess.SetUsername(username)
+
+				if d.MessageStore != nil {
+					if err := sess.InitializeMailbox(ctx, d.MessageStore); err != nil {
+						conn.Logger().Error("failed to initialize domain mailbox",
+							"mechanism", mechanism,
+							"username", username,
+							"domain", domainName,
+							"mailbox", authSession.User.Mailbox,
+							"error", err.Error(),
+						)
+						return err
+					}
+				}
+
+				conn.Logger().Info("SASL domain authentication successful",
+					"mechanism", mechanism,
+					"username", username,
+					"domain", domainName,
+					"mailbox", authSession.User.Mailbox,
+				)
+				return nil
+			}
+
+			// Fall back to global auth provider
 			authSession, err := a.authProvider.Authenticate(ctx, username, password)
 			if err != nil {
 				conn.Logger().Info("SASL authentication failed",
@@ -353,11 +467,12 @@ func (a *authCommand) ProcessSASLResponse(ctx context.Context, sess *Session, co
 }
 
 // RegisterAuthCommands registers all authentication-related commands.
-func RegisterAuthCommands(authProvider AuthProvider, msgStore msgstore.MessageStore) {
+// domainProvider may be nil when domain-aware auth is not configured.
+func RegisterAuthCommands(authProvider AuthProvider, msgStore msgstore.MessageStore, domainProvider DomainProvider) {
 	RegisterCommand(&capaCommand{})
 	RegisterCommand(&stlsCommand{})
 	RegisterCommand(&userCommand{})
-	RegisterCommand(&passCommand{authProvider: authProvider, msgStore: msgStore})
-	RegisterCommand(&authCommand{authProvider: authProvider, msgStore: msgStore})
+	RegisterCommand(&passCommand{authProvider: authProvider, msgStore: msgStore, domainProvider: domainProvider})
+	RegisterCommand(&authCommand{authProvider: authProvider, msgStore: msgStore, domainProvider: domainProvider})
 	RegisterCommand(&quitCommand{})
 }

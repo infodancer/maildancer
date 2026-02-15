@@ -24,6 +24,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
+      - name: Strip local replace directives and update checksums
+        run: |
+          go mod edit -dropreplace=github.com/infodancer/maildancer/msgstore
+          go mod tidy
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:

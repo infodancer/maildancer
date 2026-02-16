@@ -217,6 +217,108 @@ base_path = "maildir"
 	}
 }
 
+func TestResolvePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     string
+		path     string
+		expected string
+	}{
+		{"relative path", "/etc/domains/example.com", "passwd", "/etc/domains/example.com/passwd"},
+		{"absolute path", "/etc/domains/example.com", "/opt/mail/example.com/users", "/opt/mail/example.com/users"},
+		{"empty path", "/etc/domains/example.com", "", ""},
+		{"relative subdir", "/etc/domains/example.com", "data/keys", "/etc/domains/example.com/data/keys"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolvePath(tt.base, tt.path)
+			if got != tt.expected {
+				t.Errorf("resolvePath(%q, %q) = %q, want %q", tt.base, tt.path, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFilesystemDomainProvider_AbsolutePaths(t *testing.T) {
+	// Config directory (would be read-only in production)
+	configDir := t.TempDir()
+	// Data directory (would be writable in production)
+	dataDir := t.TempDir()
+
+	// Create domain config directory
+	domainConfigDir := filepath.Join(configDir, "example.com")
+	if err := os.MkdirAll(domainConfigDir, 0755); err != nil {
+		t.Fatalf("failed to create domain config dir: %v", err)
+	}
+
+	// Create passwd file in config dir (relative path)
+	passwdPath := filepath.Join(domainConfigDir, "passwd")
+	passwdContent := "testuser:$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0c2FsdA$qqSCqQPLbO7RKU/qFwvGng:testuser\n"
+	if err := os.WriteFile(passwdPath, []byte(passwdContent), 0644); err != nil {
+		t.Fatalf("failed to create passwd file: %v", err)
+	}
+
+	// Create keys directory in config dir (relative path)
+	keysDir := filepath.Join(domainConfigDir, "keys")
+	if err := os.MkdirAll(keysDir, 0755); err != nil {
+		t.Fatalf("failed to create keys dir: %v", err)
+	}
+
+	// Create maildir in data dir (will be referenced by absolute path)
+	maildirPath := filepath.Join(dataDir, "example.com", "users")
+	if err := os.MkdirAll(maildirPath, 0755); err != nil {
+		t.Fatalf("failed to create maildir: %v", err)
+	}
+
+	// Create config with absolute base_path for msgstore
+	configPath := filepath.Join(domainConfigDir, "config.toml")
+	configContent := `[auth]
+type = "passwd"
+credential_backend = "passwd"
+key_backend = "keys"
+
+[msgstore]
+type = "maildir"
+base_path = "` + maildirPath + `"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to create config: %v", err)
+	}
+
+	// Create provider pointing at the config directory
+	provider := NewFilesystemDomainProvider(configDir, nil)
+	defer func() {
+		if err := provider.Close(); err != nil {
+			t.Errorf("failed to close provider: %v", err)
+		}
+	}()
+
+	d := provider.GetDomain("example.com")
+	if d == nil {
+		t.Fatal("expected domain to be found")
+	}
+	if d.AuthAgent == nil {
+		t.Error("expected AuthAgent to be set")
+	}
+	if d.DeliveryAgent == nil {
+		t.Error("expected DeliveryAgent to be set")
+	}
+	if d.MessageStore == nil {
+		t.Error("expected MessageStore to be set")
+	}
+
+	// Verify auth still works (relative path for passwd)
+	ctx := context.Background()
+	exists, err := d.AuthAgent.UserExists(ctx, "testuser")
+	if err != nil {
+		t.Fatalf("UserExists failed: %v", err)
+	}
+	if !exists {
+		t.Error("expected testuser to exist")
+	}
+}
+
 func TestDomain_Close(t *testing.T) {
 	d := &Domain{
 		Name:          "test.com",

@@ -95,11 +95,11 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	// Create auth agent (paths relative to domainPath)
+	// Create auth agent (absolute paths used as-is, relative paths joined with domainPath)
 	authCfg := auth.AuthAgentConfig{
 		Type:              cfg.Auth.Type,
-		CredentialBackend: filepath.Join(domainPath, cfg.Auth.CredentialBackend),
-		KeyBackend:        filepath.Join(domainPath, cfg.Auth.KeyBackend),
+		CredentialBackend: resolvePath(domainPath, cfg.Auth.CredentialBackend),
+		KeyBackend:        resolvePath(domainPath, cfg.Auth.KeyBackend),
 		Options:           cfg.Auth.Options,
 	}
 	authAgent, err := auth.OpenAuthAgent(authCfg)
@@ -107,10 +107,10 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		return nil, fmt.Errorf("create auth agent: %w", err)
 	}
 
-	// Create message store (paths relative to domainPath)
+	// Create message store (absolute paths used as-is, relative paths joined with domainPath)
 	storeCfg := msgstore.StoreConfig{
 		Type:     cfg.MsgStore.Type,
-		BasePath: filepath.Join(domainPath, cfg.MsgStore.BasePath),
+		BasePath: resolvePath(domainPath, cfg.MsgStore.BasePath),
 		Options:  cfg.MsgStore.Options,
 	}
 	store, err := msgstore.Open(storeCfg)
@@ -167,4 +167,12 @@ func (p *FilesystemDomainProvider) Close() error {
 	}
 	p.cache = make(map[string]*Domain)
 	return errors.Join(errs...)
+}
+
+// resolvePath returns path as-is if absolute, or joined with base if relative.
+func resolvePath(base, path string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(base, path)
 }

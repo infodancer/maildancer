@@ -81,7 +81,8 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 		return sasl.NewPlainServer(func(identity, username, password string) error {
 			ctx := context.Background()
 
-			session, err := s.backend.authAgent.Authenticate(ctx, username, password)
+			// AuthRouter handles domain splitting for user@domain usernames
+			session, err := s.backend.authRouter.Authenticate(ctx, username, password)
 			if err != nil {
 				if s.backend.collector != nil {
 					domain := sessionExtractAuthDomain(username)
@@ -215,9 +216,9 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 			}
 		}
 
-		// Check if user exists
+		// Check if user exists (AuthRouter handles domain splitting)
 		ctx := context.Background()
-		exists, err := d.AuthAgent.UserExists(ctx, to)
+		exists, err := s.backend.authRouter.UserExists(ctx, to)
 		if err != nil {
 			s.logger.Debug("user lookup failed",
 				slog.String("recipient", to),

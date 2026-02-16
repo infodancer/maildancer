@@ -124,11 +124,15 @@ func main() {
 		logger.Info("domain provider enabled", "path", cfg.DomainsPath)
 	}
 
+	// Create auth router (centralizes domain-aware auth routing)
+	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
+
 	// Create the go-smtp backend
 	backend := smtp.NewBackend(smtp.BackendConfig{
 		Hostname:       cfg.Hostname,
 		Delivery:       delivery,
 		AuthAgent:      authAgent,
+		AuthRouter:     authRouter,
 		DomainProvider: domainProvider,
 		SpamChecker:    spamChecker,
 		SpamConfig:     spamCheckConfig,

@@ -20,6 +20,7 @@ type Backend struct {
 	hostname       string
 	delivery       msgstore.DeliveryAgent
 	authAgent      auth.AuthenticationAgent
+	authRouter     *domain.AuthRouter
 	oauthAgent     oauth.Agent
 	domainProvider domain.DomainProvider
 	spamChecker    spamcheck.Checker
@@ -35,6 +36,7 @@ type BackendConfig struct {
 	Hostname       string
 	Delivery       msgstore.DeliveryAgent
 	AuthAgent      auth.AuthenticationAgent
+	AuthRouter     *domain.AuthRouter
 	OAuthAgent     oauth.Agent
 	DomainProvider domain.DomainProvider
 	SpamChecker    spamcheck.Checker
@@ -56,6 +58,7 @@ func NewBackend(cfg BackendConfig) *Backend {
 		hostname:       cfg.Hostname,
 		delivery:       cfg.Delivery,
 		authAgent:      cfg.AuthAgent,
+		authRouter:     cfg.AuthRouter,
 		oauthAgent:     cfg.OAuthAgent,
 		domainProvider: cfg.DomainProvider,
 		spamChecker:    cfg.SpamChecker,

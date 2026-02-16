@@ -136,6 +136,15 @@ func (m *mockDomainProvider) Close() error {
 	return nil
 }
 
+// newTestBackend creates a Backend with a DomainProvider and matching AuthRouter for tests.
+func newTestBackend(provider *mockDomainProvider, logger *slog.Logger) *Backend {
+	return NewBackend(BackendConfig{
+		DomainProvider: provider,
+		AuthRouter:     domain.NewAuthRouter(provider, nil),
+		Logger:         logger,
+	})
+}
+
 func TestSession_Rcpt_DomainValidation(t *testing.T) {
 	logger := slog.Default()
 
@@ -144,18 +153,13 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 			domains: map[string]*domain.Domain{
 				"example.com": {
 					Name:      "example.com",
-					AuthAgent: &mockAuthAgent{users: map[string]bool{"user@example.com": true}},
+					AuthAgent: &mockAuthAgent{users: map[string]bool{"user": true}},
 				},
 			},
 		}
 
-		backend := NewBackend(BackendConfig{
-			DomainProvider: provider,
-			Logger:         logger,
-		})
-
 		session := &Session{
-			backend: backend,
+			backend: newTestBackend(provider, logger),
 			logger:  logger,
 		}
 
@@ -178,18 +182,13 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 			domains: map[string]*domain.Domain{
 				"example.com": {
 					Name:      "example.com",
-					AuthAgent: &mockAuthAgent{users: map[string]bool{"validuser@example.com": true}},
+					AuthAgent: &mockAuthAgent{users: map[string]bool{"validuser": true}},
 				},
 			},
 		}
 
-		backend := NewBackend(BackendConfig{
-			DomainProvider: provider,
-			Logger:         logger,
-		})
-
 		session := &Session{
-			backend: backend,
+			backend: newTestBackend(provider, logger),
 			logger:  logger,
 		}
 
@@ -215,18 +214,13 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 			domains: map[string]*domain.Domain{
 				"example.com": {
 					Name:      "example.com",
-					AuthAgent: &mockAuthAgent{users: map[string]bool{"validuser@example.com": true}},
+					AuthAgent: &mockAuthAgent{users: map[string]bool{"validuser": true}},
 				},
 			},
 		}
 
-		backend := NewBackend(BackendConfig{
-			DomainProvider: provider,
-			Logger:         logger,
-		})
-
 		session := &Session{
-			backend: backend,
+			backend: newTestBackend(provider, logger),
 			logger:  logger,
 		}
 
@@ -247,18 +241,13 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 			domains: map[string]*domain.Domain{
 				"example.com": {
 					Name:      "example.com",
-					AuthAgent: &mockAuthAgent{users: map[string]bool{"user1@example.com": true, "user2@example.com": true}},
+					AuthAgent: &mockAuthAgent{users: map[string]bool{"user1": true, "user2": true}},
 				},
 			},
 		}
 
-		backend := NewBackend(BackendConfig{
-			DomainProvider: provider,
-			Logger:         logger,
-		})
-
 		session := &Session{
-			backend: backend,
+			backend: newTestBackend(provider, logger),
 			logger:  logger,
 		}
 
@@ -293,13 +282,8 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 			},
 		}
 
-		backend := NewBackend(BackendConfig{
-			DomainProvider: provider,
-			Logger:         logger,
-		})
-
 		session := &Session{
-			backend: backend,
+			backend: newTestBackend(provider, logger),
 			logger:  logger,
 		}
 

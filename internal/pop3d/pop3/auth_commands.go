@@ -6,13 +6,15 @@ import (
 	"strings"
 
 	"github.com/emersion/go-sasl"
-	"github.com/infodancer/maildancer/auth"
+	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/msgstore"
 )
 
-// AuthProvider is the interface for authentication operations.
-type AuthProvider interface {
-	Authenticate(ctx context.Context, username, password string) (*auth.AuthSession, error)
+// DomainAuthenticator handles authentication with optional domain routing.
+// Implementations split user@domain usernames and route to the appropriate
+// auth agent internally. Callers always pass the full username.
+type DomainAuthenticator interface {
+	AuthenticateWithDomain(ctx context.Context, username, password string) (*domain.AuthResult, error)
 }
 
 // capaCommand implements the CAPA command (RFC 2449).
@@ -101,20 +103,10 @@ func (u *userCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 	return Response{OK: true, Message: fmt.Sprintf("User %s accepted", username)}, nil
 }
 
-// splitUsername splits "user@domain" into local part and domain.
-// Returns the full username and empty domain if no @ is present.
-func splitUsername(username string) (localPart, domainName string) {
-	if idx := strings.LastIndex(username, "@"); idx >= 0 {
-		return username[:idx], username[idx+1:]
-	}
-	return username, ""
-}
-
 // passCommand implements the PASS command (RFC 1939).
 type passCommand struct {
-	authProvider   AuthProvider
-	msgStore       msgstore.MessageStore
-	domainProvider DomainProvider
+	auth     DomainAuthenticator
+	msgStore msgstore.MessageStore
 }
 
 func (p *passCommand) Name() string {
@@ -145,60 +137,9 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 	password := args[0]
 
-	// Split username into local part and domain
-	localPart, domainName := splitUsername(username)
-
-	// Try domain-specific authentication first
-	if p.domainProvider != nil && domainName != "" {
-		d := p.domainProvider.GetDomain(domainName)
-		if d == nil {
-			// Return generic error to prevent domain enumeration
-			conn.Logger().Info("authentication failed: unknown domain",
-				"username", username,
-				"domain", domainName,
-			)
-			return Response{OK: false, Message: "Authentication failed"}, nil
-		}
-
-		// Authenticate with domain-specific auth agent using local part
-		authSession, err := d.AuthAgent.Authenticate(ctx, localPart, password)
-		if err != nil {
-			conn.Logger().Info("domain authentication failed",
-				"username", username,
-				"domain", domainName,
-				"error", err.Error(),
-			)
-			return Response{OK: false, Message: "Authentication failed"}, nil
-		}
-
-		sess.SetAuthenticated(authSession)
-
-		// Initialize mailbox with domain-specific store
-		if d.MessageStore != nil {
-			if err := sess.InitializeMailbox(ctx, d.MessageStore); err != nil {
-				conn.Logger().Error("failed to initialize domain mailbox",
-					"username", username,
-					"domain", domainName,
-					"mailbox", authSession.User.Mailbox,
-					"error", err.Error(),
-				)
-				return Response{OK: false, Message: "Failed to access mailbox"}, nil
-			}
-		}
-
-		conn.Logger().Info("domain authentication successful",
-			"username", username,
-			"domain", domainName,
-			"mailbox", authSession.User.Mailbox,
-		)
-
-		return Response{OK: true, Message: fmt.Sprintf("Logged in as %s", username)}, nil
-	}
-
-	// Fall back to global auth provider
-	authSession, err := p.authProvider.Authenticate(ctx, username, password)
+	// Authenticate via the router (handles domain splitting internally)
+	result, err := p.auth.AuthenticateWithDomain(ctx, username, password)
 	if err != nil {
-		// Return generic error to prevent user enumeration
 		conn.Logger().Info("authentication failed",
 			"username", username,
 			"error", err.Error(),
@@ -206,15 +147,18 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 		return Response{OK: false, Message: "Authentication failed"}, nil
 	}
 
-	// Authentication successful - transition to TRANSACTION state
-	sess.SetAuthenticated(authSession)
+	sess.SetAuthenticated(result.Session)
 
-	// Initialize mailbox if message store is available
-	if p.msgStore != nil {
-		if err := sess.InitializeMailbox(ctx, p.msgStore); err != nil {
+	// Initialize mailbox: prefer domain-specific store, fall back to global
+	store := p.msgStore
+	if result.Domain != nil && result.Domain.MessageStore != nil {
+		store = result.Domain.MessageStore
+	}
+	if store != nil {
+		if err := sess.InitializeMailbox(ctx, store); err != nil {
 			conn.Logger().Error("failed to initialize mailbox",
 				"username", username,
-				"mailbox", authSession.User.Mailbox,
+				"mailbox", result.Session.User.Mailbox,
 				"error", err.Error(),
 			)
 			return Response{OK: false, Message: "Failed to access mailbox"}, nil
@@ -223,7 +167,7 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 	conn.Logger().Info("authentication successful",
 		"username", username,
-		"mailbox", authSession.User.Mailbox,
+		"mailbox", result.Session.User.Mailbox,
 	)
 
 	return Response{OK: true, Message: fmt.Sprintf("Logged in as %s", username)}, nil
@@ -263,9 +207,8 @@ func (q *quitCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 // authCommand implements the AUTH command (RFC 5034).
 type authCommand struct {
-	authProvider   AuthProvider
-	msgStore       msgstore.MessageStore
-	domainProvider DomainProvider
+	auth     DomainAuthenticator
+	msgStore msgstore.MessageStore
 }
 
 func (a *authCommand) Name() string {
@@ -307,60 +250,8 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 	switch mechanism {
 	case sasl.Plain:
 		server = sasl.NewPlainServer(func(identity, username, password string) error {
-			// Split username into local part and domain
-			localPart, domainName := splitUsername(username)
-
-			// Try domain-specific authentication first
-			if a.domainProvider != nil && domainName != "" {
-				d := a.domainProvider.GetDomain(domainName)
-				if d == nil {
-					conn.Logger().Info("SASL authentication failed: unknown domain",
-						"mechanism", mechanism,
-						"username", username,
-						"domain", domainName,
-					)
-					return fmt.Errorf("authentication failed")
-				}
-
-				// Authenticate with domain-specific auth agent using local part
-				authSession, err := d.AuthAgent.Authenticate(ctx, localPart, password)
-				if err != nil {
-					conn.Logger().Info("SASL domain authentication failed",
-						"mechanism", mechanism,
-						"username", username,
-						"domain", domainName,
-						"error", err.Error(),
-					)
-					return err
-				}
-
-				sess.SetAuthenticated(authSession)
-				sess.SetUsername(username)
-
-				if d.MessageStore != nil {
-					if err := sess.InitializeMailbox(ctx, d.MessageStore); err != nil {
-						conn.Logger().Error("failed to initialize domain mailbox",
-							"mechanism", mechanism,
-							"username", username,
-							"domain", domainName,
-							"mailbox", authSession.User.Mailbox,
-							"error", err.Error(),
-						)
-						return err
-					}
-				}
-
-				conn.Logger().Info("SASL domain authentication successful",
-					"mechanism", mechanism,
-					"username", username,
-					"domain", domainName,
-					"mailbox", authSession.User.Mailbox,
-				)
-				return nil
-			}
-
-			// Fall back to global auth provider
-			authSession, err := a.authProvider.Authenticate(ctx, username, password)
+			// Authenticate via the router (handles domain splitting internally)
+			result, err := a.auth.AuthenticateWithDomain(ctx, username, password)
 			if err != nil {
 				conn.Logger().Info("SASL authentication failed",
 					"mechanism", mechanism,
@@ -370,16 +261,20 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 				return err
 			}
 
-			// Authentication successful - transition to TRANSACTION state
-			sess.SetAuthenticated(authSession)
+			sess.SetAuthenticated(result.Session)
 			sess.SetUsername(username)
 
-			// Initialize mailbox if message store is available
-			if a.msgStore != nil {
-				if err := sess.InitializeMailbox(ctx, a.msgStore); err != nil {
+			// Initialize mailbox: prefer domain-specific store, fall back to global
+			store := a.msgStore
+			if result.Domain != nil && result.Domain.MessageStore != nil {
+				store = result.Domain.MessageStore
+			}
+			if store != nil {
+				if err := sess.InitializeMailbox(ctx, store); err != nil {
 					conn.Logger().Error("failed to initialize mailbox",
+						"mechanism", mechanism,
 						"username", username,
-						"mailbox", authSession.User.Mailbox,
+						"mailbox", result.Session.User.Mailbox,
 						"error", err.Error(),
 					)
 					return err
@@ -389,7 +284,7 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 			conn.Logger().Info("SASL authentication successful",
 				"mechanism", mechanism,
 				"username", username,
-				"mailbox", authSession.User.Mailbox,
+				"mailbox", result.Session.User.Mailbox,
 			)
 			return nil
 		})
@@ -467,12 +362,11 @@ func (a *authCommand) ProcessSASLResponse(ctx context.Context, sess *Session, co
 }
 
 // RegisterAuthCommands registers all authentication-related commands.
-// domainProvider may be nil when domain-aware auth is not configured.
-func RegisterAuthCommands(authProvider AuthProvider, msgStore msgstore.MessageStore, domainProvider DomainProvider) {
+func RegisterAuthCommands(auth DomainAuthenticator, msgStore msgstore.MessageStore) {
 	RegisterCommand(&capaCommand{})
 	RegisterCommand(&stlsCommand{})
 	RegisterCommand(&userCommand{})
-	RegisterCommand(&passCommand{authProvider: authProvider, msgStore: msgStore, domainProvider: domainProvider})
-	RegisterCommand(&authCommand{authProvider: authProvider, msgStore: msgStore, domainProvider: domainProvider})
+	RegisterCommand(&passCommand{auth: auth, msgStore: msgStore})
+	RegisterCommand(&authCommand{auth: auth, msgStore: msgStore})
 	RegisterCommand(&quitCommand{})
 }

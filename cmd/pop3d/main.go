@@ -100,16 +100,20 @@ func main() {
 	}
 
 	// Create domain provider if configured
-	var domainProvider *domain.FilesystemDomainProvider
+	var domainProvider domain.DomainProvider
 	if cfg.DomainsPath != "" {
-		domainProvider = domain.NewFilesystemDomainProvider(cfg.DomainsPath, logger)
+		dp := domain.NewFilesystemDomainProvider(cfg.DomainsPath, logger)
 		defer func() {
-			if err := domainProvider.Close(); err != nil {
+			if err := dp.Close(); err != nil {
 				logger.Error("error closing domain provider", "error", err)
 			}
 		}()
+		domainProvider = dp
 		logger.Info("domain provider enabled", "path", cfg.DomainsPath)
 	}
+
+	// Create auth router (centralizes domain-aware auth routing)
+	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
 
 	// Create server
 	srv, err := server.New(server.Config{
@@ -123,7 +127,7 @@ func main() {
 	}
 
 	// Set POP3 protocol handler
-	handler := pop3.Handler(cfg.Hostname, authAgent, msgStore, domainProvider, tlsConfig, collector)
+	handler := pop3.Handler(cfg.Hostname, authRouter, msgStore, tlsConfig, collector)
 	srv.SetHandler(handler)
 
 	// Set up signal handling for graceful shutdown

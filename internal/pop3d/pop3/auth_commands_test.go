@@ -11,20 +11,33 @@ import (
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 )
 
-// mockAuthProvider is a test double for AuthProvider.
-type mockAuthProvider struct {
-	authenticateFn func(ctx context.Context, username, password string) (*auth.AuthSession, error)
+// mockDomainAuth implements DomainAuthenticator for testing.
+type mockDomainAuth struct {
+	authenticateFn func(ctx context.Context, username, password string) (*domain.AuthResult, error)
 }
 
-func (m *mockAuthProvider) Authenticate(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+func (m *mockDomainAuth) AuthenticateWithDomain(ctx context.Context, username, password string) (*domain.AuthResult, error) {
 	if m.authenticateFn != nil {
 		return m.authenticateFn(ctx, username, password)
 	}
 	return nil, errors.New("not implemented")
 }
 
-func (m *mockAuthProvider) Close() error {
-	return nil
+// newSimpleAuth creates a mockDomainAuth that authenticates without domain routing.
+// This is the common case for tests that don't care about domain-specific behavior.
+func newSimpleAuth(fn func(ctx context.Context, username, password string) (*auth.AuthSession, error)) *mockDomainAuth {
+	return &mockDomainAuth{
+		authenticateFn: func(ctx context.Context, username, password string) (*domain.AuthResult, error) {
+			if fn == nil {
+				return nil, errors.New("not implemented")
+			}
+			session, err := fn(ctx, username, password)
+			if err != nil {
+				return nil, err
+			}
+			return &domain.AuthResult{Session: session}, nil
+		},
+	}
 }
 
 // mockConnection is a minimal mock for testing commands that need a logger.
@@ -42,38 +55,6 @@ func (m *mockConnection) Logger() *slog.Logger {
 
 func newMockConnection() *mockConnection {
 	return &mockConnection{}
-}
-
-// mockAuthAgent implements auth.AuthenticationAgent for domain tests.
-type mockAuthAgent struct {
-	authenticateFn func(ctx context.Context, username, password string) (*auth.AuthSession, error)
-}
-
-func (m *mockAuthAgent) Authenticate(ctx context.Context, username, password string) (*auth.AuthSession, error) {
-	if m.authenticateFn != nil {
-		return m.authenticateFn(ctx, username, password)
-	}
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockAuthAgent) UserExists(_ context.Context, _ string) (bool, error) {
-	return false, nil
-}
-
-func (m *mockAuthAgent) Close() error {
-	return nil
-}
-
-// mockDomainProvider is a test double for DomainProvider.
-type mockDomainProvider struct {
-	domains map[string]*domain.Domain
-}
-
-func (m *mockDomainProvider) GetDomain(name string) *domain.Domain {
-	if m.domains == nil {
-		return nil
-	}
-	return m.domains[name]
 }
 
 // Test helper to create a session for testing
@@ -107,10 +88,10 @@ func TestCapaCommand(t *testing.T) {
 			wantCapCount: 5, // USER, TOP, UIDL, RESP-CODES, SASL PLAIN
 		},
 		{
-			name:    "CAPA with arguments fails",
-			sess:    newTestSession(config.ModePop3, false),
-			args:    []string{"invalid"},
-			wantOK:  false,
+			name:        "CAPA with arguments fails",
+			sess:        newTestSession(config.ModePop3, false),
+			args:        []string{"invalid"},
+			wantOK:      false,
 			wantMessage: "CAPA command takes no arguments",
 		},
 	}
@@ -261,18 +242,18 @@ func TestUserCommand(t *testing.T) {
 
 func TestPassCommand(t *testing.T) {
 	tests := []struct {
-		name          string
-		sess          *Session
-		setupSession  func(*Session)
-		args          []string
-		authFn        func(ctx context.Context, username, password string) (*auth.AuthSession, error)
-		wantOK        bool
-		wantMessage   string
-		wantState     State
+		name         string
+		sess         *Session
+		setupSession func(*Session)
+		args         []string
+		authFn       func(ctx context.Context, username, password string) (*auth.AuthSession, error)
+		wantOK       bool
+		wantMessage  string
+		wantState    State
 	}{
 		{
-			name:        "PASS without TLS fails",
-			sess:        newTestSession(config.ModePop3, false),
+			name: "PASS without TLS fails",
+			sess: newTestSession(config.ModePop3, false),
 			setupSession: func(s *Session) {
 				s.SetUsername("testuser")
 			},
@@ -290,13 +271,13 @@ func TestPassCommand(t *testing.T) {
 			wantState:   StateAuthorization,
 		},
 		{
-			name:        "PASS with successful auth",
-			sess:        newTestSession(config.ModePop3s, true),
+			name: "PASS with successful auth",
+			sess: newTestSession(config.ModePop3s, true),
 			setupSession: func(s *Session) {
 				s.SetUsername("testuser")
 			},
 			args: []string{"correctpassword"},
-			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
 				return &auth.AuthSession{
 					User: &auth.User{
 						Username: username,
@@ -309,13 +290,13 @@ func TestPassCommand(t *testing.T) {
 			wantState:   StateTransaction,
 		},
 		{
-			name:        "PASS with failed auth",
-			sess:        newTestSession(config.ModePop3s, true),
+			name: "PASS with failed auth",
+			sess: newTestSession(config.ModePop3s, true),
 			setupSession: func(s *Session) {
 				s.SetUsername("testuser")
 			},
 			args: []string{"wrongpassword"},
-			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
 				return nil, errors.New("invalid credentials")
 			},
 			wantOK:      false,
@@ -323,8 +304,8 @@ func TestPassCommand(t *testing.T) {
 			wantState:   StateAuthorization,
 		},
 		{
-			name:        "PASS without arguments fails",
-			sess:        newTestSession(config.ModePop3s, true),
+			name: "PASS without arguments fails",
+			sess: newTestSession(config.ModePop3s, true),
 			setupSession: func(s *Session) {
 				s.SetUsername("testuser")
 			},
@@ -341,13 +322,8 @@ func TestPassCommand(t *testing.T) {
 				tt.setupSession(tt.sess)
 			}
 
-			mockAuth := &mockAuthProvider{
-				authenticateFn: tt.authFn,
-			}
+			cmd := &passCommand{auth: newSimpleAuth(tt.authFn)}
 
-			cmd := &passCommand{authProvider: mockAuth}
-
-			// Create a minimal mock connection for logging
 			conn := newMockConnection()
 			resp, err := cmd.Execute(context.Background(), tt.sess, conn, tt.args)
 
@@ -372,13 +348,13 @@ func TestPassCommand(t *testing.T) {
 
 func TestQuitCommand(t *testing.T) {
 	tests := []struct {
-		name        string
-		sess        *Session
+		name         string
+		sess         *Session
 		setupSession func(*Session)
-		args        []string
-		wantOK      bool
-		wantMessage string
-		wantState   State
+		args         []string
+		wantOK       bool
+		wantMessage  string
+		wantState    State
 	}{
 		{
 			name:        "QUIT in AUTHORIZATION",
@@ -389,8 +365,8 @@ func TestQuitCommand(t *testing.T) {
 			wantState:   StateAuthorization,
 		},
 		{
-			name:        "QUIT in TRANSACTION",
-			sess:        newTestSession(config.ModePop3s, true),
+			name: "QUIT in TRANSACTION",
+			sess: newTestSession(config.ModePop3s, true),
 			setupSession: func(s *Session) {
 				s.SetAuthenticated(&auth.AuthSession{
 					User: &auth.User{Username: "test"},
@@ -445,8 +421,8 @@ func TestCommandRegistry(t *testing.T) {
 	commandRegistry = make(map[string]Command)
 
 	// Register test commands
-	mockAuth := &mockAuthProvider{}
-	RegisterAuthCommands(mockAuth, nil, nil)
+	mockAuth := newSimpleAuth(nil)
+	RegisterAuthCommands(mockAuth, nil)
 
 	tests := []struct {
 		name      string
@@ -481,14 +457,14 @@ func TestCommandRegistry(t *testing.T) {
 
 func TestAuthCommand(t *testing.T) {
 	tests := []struct {
-		name            string
-		sess            *Session
-		args            []string
-		authFn          func(ctx context.Context, username, password string) (*auth.AuthSession, error)
-		wantOK          bool
+		name             string
+		sess             *Session
+		args             []string
+		authFn           func(ctx context.Context, username, password string) (*auth.AuthSession, error)
+		wantOK           bool
 		wantContinuation bool
-		wantMessage     string
-		wantState       State
+		wantMessage      string
+		wantState        State
 	}{
 		{
 			name:        "AUTH without TLS fails",
@@ -526,7 +502,7 @@ func TestAuthCommand(t *testing.T) {
 			sess: newTestSession(config.ModePop3s, true),
 			// Base64 of "\x00alice\x00secret"
 			args: []string{"PLAIN", "AGFsaWNlAHNlY3JldA=="},
-			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
 				if username == "alice" && password == "secret" {
 					return &auth.AuthSession{
 						User: &auth.User{
@@ -546,7 +522,7 @@ func TestAuthCommand(t *testing.T) {
 			sess: newTestSession(config.ModePop3s, true),
 			// Base64 of "\x00alice\x00wrongpassword"
 			args: []string{"PLAIN", "AGFsaWNlAHdyb25ncGFzc3dvcmQ="},
-			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
 				return nil, errors.New("invalid credentials")
 			},
 			wantOK:      false,
@@ -565,7 +541,7 @@ func TestAuthCommand(t *testing.T) {
 			name: "AUTH PLAIN with empty initial response (=) sends challenge",
 			sess: newTestSession(config.ModePop3s, true),
 			args: []string{"PLAIN", "="},
-			authFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
 				// Empty response is not valid PLAIN credentials
 				return nil, errors.New("invalid credentials")
 			},
@@ -577,13 +553,8 @@ func TestAuthCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockAuth := &mockAuthProvider{
-				authenticateFn: tt.authFn,
-			}
+			cmd := &authCommand{auth: newSimpleAuth(tt.authFn)}
 
-			cmd := &authCommand{authProvider: mockAuth}
-
-			// Create a minimal mock connection for logging
 			conn := newMockConnection()
 			resp, err := cmd.Execute(context.Background(), tt.sess, conn, tt.args)
 
@@ -616,8 +587,7 @@ func TestAuthCommandInTransaction(t *testing.T) {
 		User: &auth.User{Username: "test"},
 	})
 
-	mockAuth := &mockAuthProvider{}
-	cmd := &authCommand{authProvider: mockAuth}
+	cmd := &authCommand{auth: newSimpleAuth(nil)}
 	conn := newMockConnection()
 
 	resp, err := cmd.Execute(context.Background(), sess, conn, []string{"PLAIN"})
@@ -636,9 +606,8 @@ func TestAuthCommandInTransaction(t *testing.T) {
 
 func TestAuthSASLCancellation(t *testing.T) {
 	sess := newTestSession(config.ModePop3s, true)
-	mockAuth := &mockAuthProvider{}
 
-	cmd := &authCommand{authProvider: mockAuth}
+	cmd := &authCommand{auth: newSimpleAuth(nil)}
 	conn := newMockConnection()
 
 	// First, start AUTH to create SASL state
@@ -676,21 +645,19 @@ func TestAuthSASLCancellation(t *testing.T) {
 
 func TestAuthSASLMultiStep(t *testing.T) {
 	sess := newTestSession(config.ModePop3s, true)
-	mockAuth := &mockAuthProvider{
-		authenticateFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
-			if username == "alice" && password == "secret" {
-				return &auth.AuthSession{
-					User: &auth.User{
-						Username: username,
-						Mailbox:  "/var/mail/" + username,
-					},
-				}, nil
-			}
-			return nil, errors.New("invalid credentials")
-		},
-	}
+	mockAuth := newSimpleAuth(func(_ context.Context, username, password string) (*auth.AuthSession, error) {
+		if username == "alice" && password == "secret" {
+			return &auth.AuthSession{
+				User: &auth.User{
+					Username: username,
+					Mailbox:  "/var/mail/" + username,
+				},
+			}, nil
+		}
+		return nil, errors.New("invalid credentials")
+	})
 
-	cmd := &authCommand{authProvider: mockAuth}
+	cmd := &authCommand{auth: mockAuth}
 	conn := newMockConnection()
 
 	// Start AUTH without initial response
@@ -821,67 +788,33 @@ func TestResponseFormatting(t *testing.T) {
 	}
 }
 
-func TestSplitUsername(t *testing.T) {
-	tests := []struct {
-		input      string
-		wantLocal  string
-		wantDomain string
-	}{
-		{"alice@example.com", "alice", "example.com"},
-		{"bob@sub.example.com", "bob", "sub.example.com"},
-		{"plainuser", "plainuser", ""},
-		{"user@", "user", ""},
-		{"@example.com", "", "example.com"},
-		{"complex@user@example.com", "complex@user", "example.com"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			local, dom := splitUsername(tt.input)
-			if local != tt.wantLocal {
-				t.Errorf("splitUsername(%q) local = %q, want %q", tt.input, local, tt.wantLocal)
-			}
-			if dom != tt.wantDomain {
-				t.Errorf("splitUsername(%q) domain = %q, want %q", tt.input, dom, tt.wantDomain)
-			}
-		})
-	}
-}
-
 func TestPassCommandDomainAuth(t *testing.T) {
-	domainAuthFn := func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
-		if username == "alice" && password == "domainpass" {
-			return &auth.AuthSession{
-				User: &auth.User{
-					Username: username,
-					Mailbox:  "alice",
-				},
-			}, nil
-		}
-		return nil, errors.New("invalid credentials")
-	}
+	// Create a mock that routes domain auth via AuthResult.Domain
+	domainAuth := &mockDomainAuth{
+		authenticateFn: func(_ context.Context, username, password string) (*domain.AuthResult, error) {
+			local, domainName := domain.SplitUsername(username)
 
-	domainAuthAgent := &mockAuthAgent{authenticateFn: domainAuthFn}
+			if domainName == "example.com" {
+				if local == "alice" && password == "domainpass" {
+					return &domain.AuthResult{
+						Session: &auth.AuthSession{
+							User: &auth.User{Username: local, Mailbox: local},
+						},
+						Domain: &domain.Domain{Name: "example.com"},
+					}, nil
+				}
+				return nil, errors.New("invalid credentials")
+			}
 
-	dp := &mockDomainProvider{
-		domains: map[string]*domain.Domain{
-			"example.com": {
-				Name:      "example.com",
-				AuthAgent: domainAuthAgent,
-			},
-		},
-	}
-
-	globalAuth := &mockAuthProvider{
-		authenticateFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
+			// Simulate unknown domain falling through to global auth
 			if username == "globaluser" && password == "globalpass" {
-				return &auth.AuthSession{
-					User: &auth.User{
-						Username: username,
-						Mailbox:  "globaluser",
+				return &domain.AuthResult{
+					Session: &auth.AuthSession{
+						User: &auth.User{Username: username, Mailbox: username},
 					},
 				}, nil
 			}
+
 			return nil, errors.New("invalid credentials")
 		},
 	}
@@ -941,10 +874,7 @@ func TestPassCommandDomainAuth(t *testing.T) {
 			sess := newTestSession(config.ModePop3s, true)
 			sess.SetUsername(tt.username)
 
-			cmd := &passCommand{
-				authProvider:   globalAuth,
-				domainProvider: dp,
-			}
+			cmd := &passCommand{auth: domainAuth}
 
 			conn := newMockConnection()
 			resp, err := cmd.Execute(context.Background(), sess, conn, []string{tt.password})
@@ -968,26 +898,21 @@ func TestPassCommandDomainAuth(t *testing.T) {
 	}
 }
 
-func TestPassCommandNilDomainProviderIgnoresDomain(t *testing.T) {
-	// With nil domain provider, user@domain should go to global auth as-is
-	globalAuth := &mockAuthProvider{
-		authenticateFn: func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
-			if username == "alice@example.com" && password == "pass" {
-				return &auth.AuthSession{
-					User: &auth.User{
-						Username: username,
-						Mailbox:  "alice",
-					},
-				}, nil
-			}
-			return nil, errors.New("invalid credentials")
-		},
-	}
+func TestPassCommandNoDomainAuthFallsThrough(t *testing.T) {
+	// With no domain routing, user@domain goes to global auth as-is
+	mockAuth := newSimpleAuth(func(_ context.Context, username, password string) (*auth.AuthSession, error) {
+		if username == "alice@example.com" && password == "pass" {
+			return &auth.AuthSession{
+				User: &auth.User{Username: username, Mailbox: "alice"},
+			}, nil
+		}
+		return nil, errors.New("invalid credentials")
+	})
 
 	sess := newTestSession(config.ModePop3s, true)
 	sess.SetUsername("alice@example.com")
 
-	cmd := &passCommand{authProvider: globalAuth, domainProvider: nil}
+	cmd := &passCommand{auth: mockAuth}
 	conn := newMockConnection()
 
 	resp, err := cmd.Execute(context.Background(), sess, conn, []string{"pass"})
@@ -996,31 +921,28 @@ func TestPassCommandNilDomainProviderIgnoresDomain(t *testing.T) {
 	}
 
 	if !resp.OK {
-		t.Errorf("Execute() OK = false, want true (nil domainProvider should fall through to global auth)")
+		t.Errorf("Execute() OK = false, want true (no domain routing should fall through to global auth)")
 	}
 }
 
 func TestAuthCommandDomainAuth(t *testing.T) {
-	domainAuthFn := func(ctx context.Context, username, password string) (*auth.AuthSession, error) {
-		if username == "alice" && password == "secret" {
-			return &auth.AuthSession{
-				User: &auth.User{
-					Username: username,
-					Mailbox:  "alice",
-				},
-			}, nil
-		}
-		return nil, errors.New("invalid credentials")
-	}
+	domainAuth := &mockDomainAuth{
+		authenticateFn: func(_ context.Context, username, password string) (*domain.AuthResult, error) {
+			local, domainName := domain.SplitUsername(username)
 
-	domainAuthAgent := &mockAuthAgent{authenticateFn: domainAuthFn}
+			if domainName == "example.com" {
+				if local == "alice" && password == "secret" {
+					return &domain.AuthResult{
+						Session: &auth.AuthSession{
+							User: &auth.User{Username: local, Mailbox: local},
+						},
+						Domain: &domain.Domain{Name: "example.com"},
+					}, nil
+				}
+				return nil, errors.New("invalid credentials")
+			}
 
-	dp := &mockDomainProvider{
-		domains: map[string]*domain.Domain{
-			"example.com": {
-				Name:      "example.com",
-				AuthAgent: domainAuthAgent,
-			},
+			return nil, errors.New("invalid credentials")
 		},
 	}
 
@@ -1060,12 +982,8 @@ func TestAuthCommandDomainAuth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sess := newTestSession(config.ModePop3s, true)
-			globalAuth := &mockAuthProvider{}
 
-			cmd := &authCommand{
-				authProvider:   globalAuth,
-				domainProvider: dp,
-			}
+			cmd := &authCommand{auth: domainAuth}
 
 			conn := newMockConnection()
 			resp, err := cmd.Execute(context.Background(), sess, conn, tt.args)

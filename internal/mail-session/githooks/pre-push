@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "==> Running pre-push checks..."
+
+echo "--- go test -race"
+go test -race -count=1 ./...
+
+echo "--- go vet"
+go vet ./...
+
+echo "--- gofmt"
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+  echo "Files not formatted:"
+  echo "$unformatted"
+  exit 1
+fi
+
+echo "--- golangci-lint"
+golangci-lint run ./...
+
+echo "--- govulncheck"
+govulncheck ./...
+
+echo "==> All checks passed."

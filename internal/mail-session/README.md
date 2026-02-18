@@ -7,7 +7,8 @@ Opinionated Go project template with a battle-tested CI pipeline.
 1. Click **Use this template** on GitHub (or `gh repo create --template matthewjhunter/template-go`)
 2. Rename `cmd/appname/` to match your binary name
 3. Update `module` path in `go.mod`
-4. Update the binary name in `.gitignore`
+4. Update the `BINARY` var in `Taskfile.yml` and the binary name in `.gitignore`
+5. Run `task hooks:install` to set up the pre-push git hook
 
 ## What's Included
 
@@ -22,6 +23,25 @@ All jobs run on every push to `main` and on pull requests:
 | **fmt** | `gofmt -l .` — enforces canonical formatting |
 | **lint** | golangci-lint v2 with focused linter set (govet, staticcheck, unused, ineffassign) |
 | **govulncheck** | Scans stdlib and dependencies for known vulnerabilities |
+
+### Task Runner
+
+A [Taskfile](https://taskfile.dev/) wraps all CI checks for local use:
+
+```bash
+task check      # Run all CI checks locally
+task test       # Tests with race detector
+task lint       # golangci-lint
+task vulncheck  # govulncheck
+```
+
+### Git Hooks
+
+A pre-push hook runs the full CI check suite before pushing. Install with:
+
+```bash
+task hooks:install
+```
 
 ### Dependency Management
 

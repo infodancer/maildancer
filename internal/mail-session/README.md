@@ -37,7 +37,12 @@ task vulncheck  # govulncheck
 
 ### Git Hooks
 
-A pre-push hook runs the full CI check suite before pushing. Install with:
+Two git hooks keep code clean locally:
+
+- **Pre-commit**: auto-formats staged `.go` files with `gofmt`
+- **Pre-push**: runs test, vet, lint, and govulncheck before pushing
+
+Install both with:
 
 ```bash
 task hooks:install

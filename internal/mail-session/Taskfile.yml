@@ -59,10 +59,14 @@ tasks:
       - rm -f {{.BINARY}}
 
   hooks:install:
-    desc: Install git pre-push hook
+    desc: Install git hooks (pre-commit and pre-push)
     cmds:
+      - cp githooks/pre-commit .git/hooks/pre-commit
+      - chmod +x .git/hooks/pre-commit
       - cp githooks/pre-push .git/hooks/pre-push
       - chmod +x .git/hooks/pre-push
     status:
+      - test -f .git/hooks/pre-commit
+      - diff -q githooks/pre-commit .git/hooks/pre-commit
       - test -f .git/hooks/pre-push
       - diff -q githooks/pre-push .git/hooks/pre-push

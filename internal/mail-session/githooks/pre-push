@@ -9,14 +9,6 @@ go test -race -count=1 ./...
 echo "--- go vet"
 go vet ./...
 
-echo "--- gofmt"
-unformatted=$(gofmt -l .)
-if [ -n "$unformatted" ]; then
-  echo "Files not formatted:"
-  echo "$unformatted"
-  exit 1
-fi
-
 echo "--- golangci-lint"
 golangci-lint run ./...
 

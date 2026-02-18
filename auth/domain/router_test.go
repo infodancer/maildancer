@@ -80,6 +80,31 @@ func TestSplitUsername(t *testing.T) {
 	}
 }
 
+func TestParseLocalPart(t *testing.T) {
+	tests := []struct {
+		input     string
+		wantBase  string
+		wantExt   string
+	}{
+		{"user+folder", "user", "folder"},
+		{"user", "user", ""},
+		{"user+", "user", ""},
+		{"user+a+b", "user", "a+b"},
+		{"+folder", "", "folder"},
+		{"", "", ""},
+		{"plain", "plain", ""},
+		{"+", "", ""},
+	}
+
+	for _, tt := range tests {
+		base, ext := ParseLocalPart(tt.input)
+		if base != tt.wantBase || ext != tt.wantExt {
+			t.Errorf("ParseLocalPart(%q) = (%q, %q), want (%q, %q)",
+				tt.input, base, ext, tt.wantBase, tt.wantExt)
+		}
+	}
+}
+
 func TestAuthRouterAuthenticateDomain(t *testing.T) {
 	domainAgent := &mockAuthAgent{
 		authenticateFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
@@ -122,6 +147,9 @@ func TestAuthRouterAuthenticateDomain(t *testing.T) {
 	if result.Domain.Name != "example.com" {
 		t.Errorf("expected domain 'example.com', got %q", result.Domain.Name)
 	}
+	if result.Extension != "" {
+		t.Errorf("expected empty extension, got %q", result.Extension)
+	}
 
 	// Failed domain auth (wrong password)
 	_, err = router.AuthenticateWithDomain(ctx, "alice@example.com", "wrong")
@@ -154,6 +182,9 @@ func TestAuthRouterAuthenticateFallback(t *testing.T) {
 	if result.Domain != nil {
 		t.Error("expected domain to be nil for fallback auth")
 	}
+	if result.Extension != "" {
+		t.Errorf("expected empty extension, got %q", result.Extension)
+	}
 }
 
 func TestAuthRouterAuthenticateUnknownDomainFallback(t *testing.T) {
@@ -184,6 +215,9 @@ func TestAuthRouterAuthenticateUnknownDomainFallback(t *testing.T) {
 	}
 	if result.Domain != nil {
 		t.Error("expected domain to be nil for fallback auth")
+	}
+	if result.Extension != "" {
+		t.Errorf("expected empty extension, got %q", result.Extension)
 	}
 }
 
@@ -325,6 +359,135 @@ func TestAuthRouterClose(t *testing.T) {
 	// Verify fallback was NOT closed (lifecycle managed by caller)
 	if fallback.closed {
 		t.Error("AuthRouter should not close the fallback agent")
+	}
+}
+
+func TestAuthRouterAuthenticateSubaddress(t *testing.T) {
+	domainAgent := &mockAuthAgent{
+		authenticateFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
+			// Domain agent should receive "alice" (base only, no extension)
+			if username == "alice" && password == "secret" {
+				return &auth.AuthSession{User: &auth.User{Username: "alice"}}, nil
+			}
+			return nil, autherrors.ErrAuthFailed
+		},
+	}
+
+	provider := &mockDomainProvider{
+		domains: map[string]*Domain{
+			"example.com": {
+				Name:      "example.com",
+				AuthAgent: domainAgent,
+			},
+		},
+	}
+
+	router := NewAuthRouter(provider, nil)
+	ctx := context.Background()
+
+	result, err := router.AuthenticateWithDomain(ctx, "alice+folder@example.com", "secret")
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if result.Session.User.Username != "alice" {
+		t.Errorf("expected username 'alice', got %q", result.Session.User.Username)
+	}
+	if result.Extension != "folder" {
+		t.Errorf("expected extension 'folder', got %q", result.Extension)
+	}
+	if result.Domain == nil || result.Domain.Name != "example.com" {
+		t.Error("expected domain to be set to example.com")
+	}
+}
+
+func TestAuthRouterUserExistsSubaddress(t *testing.T) {
+	domainAgent := &mockAuthAgent{
+		userExistsFn: func(_ context.Context, username string) (bool, error) {
+			// Domain agent should receive "dave" (base only)
+			return username == "dave", nil
+		},
+	}
+
+	provider := &mockDomainProvider{
+		domains: map[string]*Domain{
+			"example.com": {
+				Name:      "example.com",
+				AuthAgent: domainAgent,
+			},
+		},
+	}
+
+	router := NewAuthRouter(provider, nil)
+	ctx := context.Background()
+
+	exists, err := router.UserExists(ctx, "dave+inbox@example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
+		t.Error("expected user to exist when using subaddress")
+	}
+
+	// Non-existent base user with subaddress
+	exists, err = router.UserExists(ctx, "nobody+tag@example.com")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exists {
+		t.Error("expected user to not exist")
+	}
+}
+
+func TestAuthRouterAuthenticateSubaddressFallback(t *testing.T) {
+	fallback := &mockAuthAgent{
+		authenticateFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
+			// Fallback should receive "bob@unknown.com" (extension stripped)
+			if username == "bob@unknown.com" && password == "pass" {
+				return &auth.AuthSession{User: &auth.User{Username: "bob@unknown.com"}}, nil
+			}
+			return nil, fmt.Errorf("unexpected fallback call with username %q", username)
+		},
+	}
+
+	provider := &mockDomainProvider{
+		domains: map[string]*Domain{}, // no domains configured
+	}
+
+	router := NewAuthRouter(provider, fallback)
+	ctx := context.Background()
+
+	result, err := router.AuthenticateWithDomain(ctx, "bob+tag@unknown.com", "pass")
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if result.Session.User.Username != "bob@unknown.com" {
+		t.Errorf("expected username 'bob@unknown.com', got %q", result.Session.User.Username)
+	}
+	if result.Extension != "tag" {
+		t.Errorf("expected extension 'tag', got %q", result.Extension)
+	}
+	if result.Domain != nil {
+		t.Error("expected domain to be nil for fallback auth")
+	}
+}
+
+func TestAuthRouterUserExistsSubaddressFallback(t *testing.T) {
+	fallback := &mockAuthAgent{
+		userExistsFn: func(_ context.Context, username string) (bool, error) {
+			// Fallback should receive "eve" (extension stripped, no domain)
+			return username == "eve", nil
+		},
+	}
+
+	router := NewAuthRouter(nil, fallback)
+	ctx := context.Background()
+
+	exists, err := router.UserExists(ctx, "eve+lists")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
+		t.Error("expected user to exist via fallback with subaddress stripped")
 	}
 }
 

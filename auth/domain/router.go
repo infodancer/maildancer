@@ -11,8 +11,9 @@ import (
 // AuthResult contains the authentication session and the resolved domain.
 // Domain is nil when authentication was handled by the global fallback agent.
 type AuthResult struct {
-	Session *auth.AuthSession
-	Domain  *Domain
+	Session   *auth.AuthSession
+	Domain    *Domain
+	Extension string // subaddress extension from "user+ext@domain", empty if none
 }
 
 // AuthRouter routes authentication requests to domain-specific agents or a
@@ -42,6 +43,18 @@ func NewAuthRouter(provider DomainProvider, fallback auth.AuthenticationAgent) *
 	}
 }
 
+// ParseLocalPart splits a local part on the first '+' into base and extension.
+// "user+folder" → ("user", "folder")
+// "user"        → ("user", "")
+// "user+"       → ("user", "")
+// "user+a+b"   → ("user", "a+b")
+func ParseLocalPart(localPart string) (base, extension string) {
+	if b, ext, ok := strings.Cut(localPart, "+"); ok {
+		return b, ext
+	}
+	return localPart, ""
+}
+
 // SplitUsername splits "user@domain" into local part and domain.
 // Returns the full username and empty domain if no @ is present.
 func SplitUsername(username string) (localPart, domainName string) {
@@ -66,24 +79,35 @@ func (r *AuthRouter) Authenticate(ctx context.Context, username, password string
 // to domain-specific resources (e.g., MessageStore for pop3d/imapd).
 func (r *AuthRouter) AuthenticateWithDomain(ctx context.Context, username, password string) (*AuthResult, error) {
 	localPart, domainName := SplitUsername(username)
+	base, extension := ParseLocalPart(localPart)
 
 	if r.provider != nil && domainName != "" {
 		d := r.provider.GetDomain(domainName)
 		if d != nil {
-			session, err := d.AuthAgent.Authenticate(ctx, localPart, password)
+			session, err := d.AuthAgent.Authenticate(ctx, base, password)
 			if err != nil {
 				return nil, err
 			}
-			return &AuthResult{Session: session, Domain: d}, nil
+			return &AuthResult{Session: session, Domain: d, Extension: extension}, nil
 		}
 	}
 
 	if r.fallback != nil {
-		session, err := r.fallback.Authenticate(ctx, username, password)
+		// Fallback receives the full username but with the extension stripped
+		// from the local part: "base@domain" or just "base" for bare usernames.
+		fallbackUser := username
+		if extension != "" {
+			if domainName != "" {
+				fallbackUser = base + "@" + domainName
+			} else {
+				fallbackUser = base
+			}
+		}
+		session, err := r.fallback.Authenticate(ctx, fallbackUser, password)
 		if err != nil {
 			return nil, err
 		}
-		return &AuthResult{Session: session, Domain: nil}, nil
+		return &AuthResult{Session: session, Domain: nil, Extension: extension}, nil
 	}
 
 	return nil, autherrors.ErrAuthFailed
@@ -93,16 +117,26 @@ func (r *AuthRouter) AuthenticateWithDomain(ctx context.Context, username, passw
 // auth agents as appropriate. Implements auth.AuthenticationAgent.
 func (r *AuthRouter) UserExists(ctx context.Context, username string) (bool, error) {
 	localPart, domainName := SplitUsername(username)
+	base, extension := ParseLocalPart(localPart)
 
 	if r.provider != nil && domainName != "" {
 		d := r.provider.GetDomain(domainName)
 		if d != nil {
-			return d.AuthAgent.UserExists(ctx, localPart)
+			return d.AuthAgent.UserExists(ctx, base)
 		}
 	}
 
 	if r.fallback != nil {
-		return r.fallback.UserExists(ctx, username)
+		// Strip extension from the fallback username too.
+		fallbackUser := username
+		if extension != "" {
+			if domainName != "" {
+				fallbackUser = base + "@" + domainName
+			} else {
+				fallbackUser = base
+			}
+		}
+		return r.fallback.UserExists(ctx, fallbackUser)
 	}
 
 	return false, nil

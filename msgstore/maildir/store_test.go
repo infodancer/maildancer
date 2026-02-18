@@ -268,6 +268,75 @@ func TestMaildirStore_MultipleRecipients(t *testing.T) {
 	}
 }
 
+func TestMaildirStore_DeliverSubaddress(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	// Deliver to a subaddressed recipient
+	envelope := msgstore.Envelope{
+		From:           "sender@example.com",
+		Recipients:     []string{"user+folder@example.com"},
+		ReceivedTime:   time.Now(),
+		ClientHostname: "test",
+	}
+	message := strings.NewReader("Subject: Subaddress Test\r\n\r\nTest body")
+
+	err := store.Deliver(ctx, envelope, message)
+	if err != nil {
+		t.Fatalf("Deliver failed: %v", err)
+	}
+
+	// Message should be in the base user's mailbox (user@example.com), not user+folder@example.com
+	messages, err := store.List(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message in user@example.com mailbox, got %d", len(messages))
+	}
+
+	// Verify that user+folder@example.com does NOT have its own separate mailbox
+	_, err = store.List(ctx, "user+folder@example.com")
+	if err == nil {
+		t.Error("expected error listing user+folder@example.com mailbox (should not exist separately)")
+	}
+}
+
+func TestMaildirStore_DeliverSubaddressWithTemplate(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "Maildir", "{domain}/users/{localpart}")
+	ctx := context.Background()
+
+	envelope := msgstore.Envelope{
+		From:           "sender@example.com",
+		Recipients:     []string{"testuser+archive@example.com"},
+		ReceivedTime:   time.Now(),
+		ClientHostname: "test",
+	}
+	message := strings.NewReader("Subject: Template Subaddress\r\n\r\nTest body")
+
+	err := store.Deliver(ctx, envelope, message)
+	if err != nil {
+		t.Fatalf("Deliver failed: %v", err)
+	}
+
+	// Should be delivered to testuser@example.com's mailbox
+	messages, err := store.List(ctx, "testuser@example.com")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(messages))
+	}
+
+	// Verify the path uses the base user, not the +tag
+	expectedPath := basePath + "/example.com/users/testuser/Maildir/new"
+	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
+		t.Errorf("expected path %s to exist", expectedPath)
+	}
+}
+
 func TestConvertFlags(t *testing.T) {
 	tests := []struct {
 		name     string

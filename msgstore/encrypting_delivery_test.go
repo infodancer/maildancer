@@ -219,6 +219,58 @@ func TestEncryptingDeliveryAgent_MixedRecipients(t *testing.T) {
 	}
 }
 
+func TestEncryptingDeliveryAgent_SubaddressRecipient(t *testing.T) {
+	underlying := &mockDeliveryAgent{}
+
+	// Key is stored under "encrypted" (the base username without +tag)
+	pubKey, privKey := generateTestKeyPair()
+	keyProvider := &mockKeyProvider{
+		keys: map[string][]byte{
+			"encrypted": pubKey,
+		},
+	}
+
+	agent := NewEncryptingDeliveryAgent(underlying, keyProvider)
+
+	ctx := context.Background()
+	envelope := Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"encrypted+folder@example.com"},
+	}
+	message := []byte("Subaddressed secret!")
+
+	err := agent.Deliver(ctx, envelope, bytes.NewReader(message))
+	if err != nil {
+		t.Fatalf("Deliver failed: %v", err)
+	}
+
+	if len(underlying.deliveries) != 1 {
+		t.Fatalf("expected 1 delivery, got %d", len(underlying.deliveries))
+	}
+
+	d := underlying.deliveries[0]
+	if d.envelope.Encryption == nil {
+		t.Fatal("expected encryption info for subaddressed recipient")
+	}
+	if !d.envelope.Encryption.Encrypted {
+		t.Error("expected Encrypted to be true")
+	}
+
+	// The envelope recipient should preserve the original +tag address
+	if d.envelope.Recipients[0] != "encrypted+folder@example.com" {
+		t.Errorf("recipient = %q, want %q", d.envelope.Recipients[0], "encrypted+folder@example.com")
+	}
+
+	// Verify we can decrypt with the base user's key
+	decrypted, err := DecryptMessage(d.message, privKey)
+	if err != nil {
+		t.Fatalf("DecryptMessage failed: %v", err)
+	}
+	if !bytes.Equal(decrypted, message) {
+		t.Errorf("decrypted message mismatch: got %q, want %q", decrypted, message)
+	}
+}
+
 func TestDecryptMessage_InvalidData(t *testing.T) {
 	_, privKey := generateTestKeyPair()
 

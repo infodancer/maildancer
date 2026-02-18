@@ -130,7 +130,10 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 	delivered := 0
 
 	for _, recipient := range envelope.Recipients {
-		dir, err := s.ensureMaildir(recipient)
+		// Strip subaddress extension so user+folder@example.com
+		// delivers to the user@example.com mailbox.
+		parsed := msgstore.ParseRecipient(recipient)
+		dir, err := s.ensureMaildir(parsed.Address)
 		if err != nil {
 			lastErr = err
 			continue

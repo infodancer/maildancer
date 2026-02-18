@@ -62,8 +62,9 @@ func (e *EncryptingDeliveryAgent) Deliver(ctx context.Context, envelope Envelope
 	recipientKeys := make(map[string][]byte)
 
 	for _, recipient := range envelope.Recipients {
-		// Extract local part of email for key lookup
-		username := extractUsername(recipient)
+		// Parse subaddress and extract the base username for key lookup
+		parsed := ParseRecipient(recipient)
+		username := extractUsername(parsed.Address)
 
 		hasEncryption, err := e.keyProvider.HasEncryption(ctx, username)
 		if err != nil {

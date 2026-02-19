@@ -5,20 +5,20 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/emersion/go-imap/v2"
+	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/auth/domain"
 	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd backend
+	"github.com/infodancer/maildancer/internal/imapd/backend"
 	"github.com/infodancer/maildancer/internal/imapd/config"
-	"github.com/infodancer/maildancer/internal/imapd/imap"
 	"github.com/infodancer/maildancer/internal/imapd/logging"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
-	"github.com/infodancer/maildancer/internal/imapd/server"
-	"github.com/infodancer/maildancer/msgstore"
-	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir backend
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -84,22 +84,6 @@ func main() {
 		logger.Info("authentication enabled", "type", cfg.Auth.Type)
 	}
 
-	// Create message store if configured
-	var msgStore msgstore.MessageStore
-	if cfg.Store.Type != "" {
-		store, err := msgstore.Open(msgstore.StoreConfig{
-			Type:     cfg.Store.Type,
-			BasePath: cfg.Store.BasePath,
-			Options:  cfg.Store.Options,
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error opening message store: %v\n", err)
-			os.Exit(1)
-		}
-		msgStore = store
-		logger.Info("message store enabled", "type", cfg.Store.Type, "path", cfg.Store.BasePath)
-	}
-
 	// Create domain provider if configured
 	var domainProvider domain.DomainProvider
 	if cfg.DomainsPath != "" {
@@ -116,20 +100,17 @@ func main() {
 	// Create auth router (centralizes domain-aware auth routing)
 	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
 
-	// Create server
-	srv, err := server.New(server.Config{
-		Cfg:       &cfg,
-		TLSConfig: tlsConfig,
-		Logger:    logger,
+	// Create IMAP server
+	srv := imapserver.New(&imapserver.Options{
+		NewSession: func(conn *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
+			collector.ConnectionOpened()
+			session := backend.NewSession(conn, &cfg, authRouter, collector, logger)
+			return session, &imapserver.GreetingData{}, nil
+		},
+		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}},
+		TLSConfig:    tlsConfig,
+		InsecureAuth: tlsConfig == nil,
 	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating server: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Set IMAP protocol handler
-	handler := imap.Handler(&cfg, tlsConfig, authRouter, msgStore, collector)
-	srv.SetHandler(handler)
 
 	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -142,6 +123,7 @@ func main() {
 		sig := <-sigChan
 		logger.Info("received signal, shutting down", "signal", sig.String())
 		cancel()
+		_ = srv.Close()
 	}()
 
 	// Start metrics server if enabled
@@ -157,11 +139,45 @@ func main() {
 
 	logger.Info("starting imapd", "hostname", cfg.Hostname, "listeners", len(cfg.Listeners))
 
-	// Run server
-	if err := srv.Run(ctx); err != nil && err != context.Canceled {
-		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
-		os.Exit(1)
+	// Start listeners
+	for _, listener := range cfg.Listeners {
+		listener := listener
+		listenerLogger := logging.WithListener(logger, listener.Address, string(listener.Mode))
+
+		switch listener.Mode {
+		case config.ModeImaps:
+			if tlsConfig == nil {
+				fmt.Fprintf(os.Stderr, "listener %s requires TLS but no certificate configured\n", listener.Address)
+				os.Exit(1)
+			}
+			go func() {
+				ln, err := tls.Listen("tcp", listener.Address, tlsConfig)
+				if err != nil {
+					listenerLogger.Error("failed to listen", "error", err)
+					return
+				}
+				listenerLogger.Info("listening", "mode", "imaps")
+				if err := srv.Serve(ln); err != nil {
+					listenerLogger.Error("server error", "error", err)
+				}
+			}()
+
+		default: // ModeImap
+			go func() {
+				ln, err := net.Listen("tcp", listener.Address)
+				if err != nil {
+					listenerLogger.Error("failed to listen", "error", err)
+					return
+				}
+				listenerLogger.Info("listening", "mode", "imap")
+				if err := srv.Serve(ln); err != nil {
+					listenerLogger.Error("server error", "error", err)
+				}
+			}()
+		}
 	}
 
+	// Wait for shutdown signal
+	<-ctx.Done()
 	logger.Info("IMAP server stopped")
 }

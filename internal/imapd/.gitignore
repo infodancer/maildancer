@@ -30,3 +30,10 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Build output
+imapd
+gotemplate
+
+# OMC agent state
+.omc/

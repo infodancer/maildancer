@@ -1,26 +1,38 @@
 version: '3'
 
 vars:
-  BINARY_NAME: gotemplate
-  BUILD_DIR: ./bin
+  BINARY: imapd
 
 tasks:
   default:
-    desc: Run all checks (build, lint, vulncheck, test)
+    desc: Show available tasks
     cmds:
-      - task: all
+      - task --list
 
   build:
-    desc: Build the Go binary
+    desc: Build the binary
     cmds:
-      - mkdir -p {{.BUILD_DIR}}
-      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/gotemplate
-    sources:
-      - ./**/*.go
-      - go.mod
-      - go.sum
-    generates:
-      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
+      - go build -o {{.BINARY}} ./cmd/{{.BINARY}}
+
+  test:
+    desc: Run tests with race detector
+    cmds:
+      - go test -race -count=1 ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  fmt:
+    desc: Check formatting
+    cmds:
+      - test -z "$(gofmt -l .)"
+
+  fmt:fix:
+    desc: Fix formatting
+    cmds:
+      - gofmt -w .
 
   lint:
     desc: Run golangci-lint
@@ -28,43 +40,33 @@ tasks:
       - golangci-lint run ./...
 
   vulncheck:
-    desc: Run govulncheck for security vulnerabilities
+    desc: Run govulncheck
     cmds:
       - govulncheck ./...
 
-  test:
-    desc: Run tests
+  check:
+    desc: Run all CI checks (test, vet, fmt, lint, vulncheck)
     cmds:
-      - go test -v ./...
-
-  test:coverage:
-    desc: Run tests with coverage
-    cmds:
-      - go test -v -coverprofile=coverage.out ./...
-      - go tool cover -html=coverage.out -o coverage.html
-
-  all:
-    desc: Run all checks (build, lint, vulncheck, test)
-    cmds:
-      - task: build
+      - task: test
+      - task: vet
+      - task: fmt
       - task: lint
       - task: vulncheck
-      - task: test
 
   clean:
-    desc: Clean build artifacts
+    desc: Remove build artifacts
     cmds:
-      - rm -rf {{.BUILD_DIR}}
-      - rm -f coverage.out coverage.html
-
-  install:deps:
-    desc: Install development dependencies
-    cmds:
-      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-      - go install golang.org/x/vuln/cmd/govulncheck@latest
+      - rm -f {{.BINARY}}
 
   hooks:install:
-    desc: Configure git to use the project hooks directory
+    desc: Install git hooks (pre-commit and pre-push)
     cmds:
-      - git config core.hooksPath .githooks
-      - echo "Git hooks installed from .githooks directory"
+      - cp githooks/pre-commit .git/hooks/pre-commit
+      - chmod +x .git/hooks/pre-commit
+      - cp githooks/pre-push .git/hooks/pre-push
+      - chmod +x .git/hooks/pre-push
+    status:
+      - test -f .git/hooks/pre-commit
+      - diff -q githooks/pre-commit .git/hooks/pre-commit
+      - test -f .git/hooks/pre-push
+      - diff -q githooks/pre-push .git/hooks/pre-push

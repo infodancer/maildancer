@@ -8,9 +8,11 @@ import (
 	"hash/fnv"
 	"io"
 	"log/slog"
+	"net/mail"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
@@ -25,14 +27,14 @@ import (
 
 // Session implements imapserver.Session backed by go-maildir.
 type Session struct {
-	conn       *imapserver.Conn
-	cfg        *config.Config
-	authRouter *domain.AuthRouter
-	username   string
+	conn        *imapserver.Conn
+	cfg         *config.Config
+	authRouter  *domain.AuthRouter
+	username    string
 	mailboxBase string // base dir for user (from User.Mailbox)
 	userDomain  string
-	collector  metrics.Collector
-	logger     *slog.Logger
+	collector   metrics.Collector
+	logger      *slog.Logger
 
 	// Selected state
 	selectedMailbox string
@@ -77,7 +79,10 @@ func (s *Session) Login(username, password string) error {
 
 // Select opens a mailbox.
 func (s *Session) Select(mailbox string, options *imap.SelectOptions) (*imap.SelectData, error) {
-	dir := s.maildirForMailbox(mailbox)
+	dir, err := s.maildirForMailbox(mailbox)
+	if err != nil {
+		return nil, err
+	}
 	if err := dir.Init(); err != nil && !os.IsExist(err) {
 		return nil, &imap.Error{Type: imap.StatusResponseTypeNo, Text: "No such mailbox"}
 	}
@@ -99,12 +104,11 @@ func (s *Session) Select(mailbox string, options *imap.SelectOptions) (*imap.Sel
 	s.tracker = tracker
 	s.sessionTracker = tracker.NewSession()
 
-	// Count recent and find first unseen
-	var recentCount uint32
+	// Count recent (new/ subdir) and find first unseen
+	recentCount := countNewMessages(dir)
 	var firstUnseen uint32
 	for i, msg := range msgs {
 		if !hasMaildirFlag(msg, maildir.FlagSeen) {
-			recentCount++
 			if firstUnseen == 0 {
 				firstUnseen = uint32(i + 1)
 			}
@@ -126,7 +130,10 @@ func (s *Session) Select(mailbox string, options *imap.SelectOptions) (*imap.Sel
 
 // Create creates a new mailbox.
 func (s *Session) Create(mailbox string, _ *imap.CreateOptions) error {
-	dir := s.maildirForMailbox(mailbox)
+	dir, err := s.maildirForMailbox(mailbox)
+	if err != nil {
+		return err
+	}
 	return dir.Init()
 }
 
@@ -135,7 +142,11 @@ func (s *Session) Delete(mailbox string) error {
 	if strings.EqualFold(mailbox, "INBOX") {
 		return &imap.Error{Type: imap.StatusResponseTypeNo, Text: "Cannot delete INBOX"}
 	}
-	return os.RemoveAll(string(s.maildirForMailbox(mailbox)))
+	dir, err := s.maildirForMailbox(mailbox)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(string(dir))
 }
 
 // Rename renames a mailbox.
@@ -143,9 +154,15 @@ func (s *Session) Rename(mailbox, newName string, _ *imap.RenameOptions) error {
 	if strings.EqualFold(mailbox, "INBOX") {
 		return &imap.Error{Type: imap.StatusResponseTypeNo, Text: "Cannot rename INBOX"}
 	}
-	oldPath := string(s.maildirForMailbox(mailbox))
-	newPath := string(s.maildirForMailbox(newName))
-	return os.Rename(oldPath, newPath)
+	oldDir, err := s.maildirForMailbox(mailbox)
+	if err != nil {
+		return err
+	}
+	newDir, err := s.maildirForMailbox(newName)
+	if err != nil {
+		return err
+	}
+	return os.Rename(string(oldDir), string(newDir))
 }
 
 // Subscribe is a no-op (maildir has no subscription state).
@@ -198,7 +215,10 @@ func (s *Session) List(w *imapserver.ListWriter, ref string, patterns []string, 
 
 // Status returns mailbox status data.
 func (s *Session) Status(mailbox string, options *imap.StatusOptions) (*imap.StatusData, error) {
-	dir := s.maildirForMailbox(mailbox)
+	dir, err := s.maildirForMailbox(mailbox)
+	if err != nil {
+		return nil, err
+	}
 	msgs, err := dir.Messages()
 	if err != nil {
 		return nil, err
@@ -232,13 +252,8 @@ func (s *Session) Status(mailbox string, options *imap.StatusOptions) (*imap.Sta
 	}
 
 	if options.NumRecent {
-		var count uint32
-		for _, msg := range msgs {
-			if !hasMaildirFlag(msg, maildir.FlagSeen) {
-				count++
-			}
-		}
-		data.NumRecent = &count
+		n := countNewMessages(dir)
+		data.NumRecent = &n
 	}
 
 	return data, nil
@@ -246,7 +261,10 @@ func (s *Session) Status(mailbox string, options *imap.StatusOptions) (*imap.Sta
 
 // Append adds a message to a mailbox.
 func (s *Session) Append(mailbox string, r imap.LiteralReader, options *imap.AppendOptions) (*imap.AppendData, error) {
-	dir := s.maildirForMailbox(mailbox)
+	dir, err := s.maildirForMailbox(mailbox)
+	if err != nil {
+		return nil, err
+	}
 	if err := dir.Init(); err != nil && !os.IsExist(err) {
 		return nil, err
 	}
@@ -457,7 +475,10 @@ func (s *Session) Store(w *imapserver.FetchWriter, numSet imap.NumSet, flags *im
 
 // Copy copies messages to another mailbox.
 func (s *Session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) {
-	destDir := s.maildirForMailbox(dest)
+	destDir, err := s.maildirForMailbox(dest)
+	if err != nil {
+		return nil, err
+	}
 	if err := destDir.Init(); err != nil && !os.IsExist(err) {
 		return nil, err
 	}
@@ -513,11 +534,26 @@ func (s *Session) unselect() {
 	s.selectedMailbox = ""
 }
 
-func (s *Session) maildirForMailbox(mailbox string) maildir.Dir {
+// maildirForMailbox resolves a mailbox name to a maildir.Dir, validating that
+// the resulting path stays within the user's mailbox base directory.
+func (s *Session) maildirForMailbox(mailbox string) (maildir.Dir, error) {
 	if strings.EqualFold(mailbox, "INBOX") {
-		return maildir.Dir(s.mailboxBase)
+		return maildir.Dir(s.mailboxBase), nil
 	}
-	return maildir.Dir(filepath.Join(s.mailboxBase, "."+mailbox))
+
+	base, err := filepath.Abs(s.mailboxBase)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Join(base, "."+mailbox)
+
+	// Ensure the resolved path is still under the user's base directory.
+	rel, err := filepath.Rel(base, target)
+	if err != nil || strings.HasPrefix(rel, "..") || strings.Contains(rel, string(filepath.Separator)+"..") {
+		return "", &imap.Error{Type: imap.StatusResponseTypeNo, Text: "Invalid mailbox name"}
+	}
+
+	return maildir.Dir(target), nil
 }
 
 func (s *Session) uidValidity(dir maildir.Dir) uint32 {
@@ -573,7 +609,7 @@ func (s *Session) fetchMessage(w *imapserver.FetchWriter, msg *maildir.Message, 
 		respW.WriteFlags(maildirFlagsToIMAP(msg.Flags()))
 	}
 
-	// Read message content if needed for envelope, body sections, or size
+	// Read message content if needed for envelope, body sections, size, or body structure
 	var content []byte
 	needContent := options.Envelope || options.RFC822Size || options.InternalDate || len(options.BodySection) > 0 || options.BodyStructure != nil
 
@@ -610,6 +646,10 @@ func (s *Session) fetchMessage(w *imapserver.FetchWriter, msg *maildir.Message, 
 		}
 	}
 
+	if options.BodyStructure != nil {
+		respW.WriteBodyStructure(imapserver.ExtractBodyStructure(bytes.NewReader(content)))
+	}
+
 	// Handle body sections
 	markSeen := false
 	for _, section := range options.BodySection {
@@ -625,8 +665,8 @@ func (s *Session) fetchMessage(w *imapserver.FetchWriter, msg *maildir.Message, 
 
 	// Mark as seen if a non-PEEK body section was fetched
 	if markSeen && !s.readOnly {
-		currentFlags := msg.Flags()
 		if !hasMaildirFlag(msg, maildir.FlagSeen) {
+			currentFlags := msg.Flags()
 			currentFlags = append(currentFlags, maildir.FlagSeen)
 			_ = msg.SetFlags(currentFlags)
 		}
@@ -683,6 +723,87 @@ func (s *Session) matchesCriteria(msg *maildir.Message, seqNum uint32, uid imap.
 		}
 	}
 
+	// Check arrival date criteria using file modification time
+	if !criteria.Since.IsZero() || !criteria.Before.IsZero() {
+		info, err := os.Stat(msg.Filename())
+		if err != nil {
+			return false
+		}
+		mtime := info.ModTime().Truncate(24 * time.Hour)
+		if !criteria.Since.IsZero() && mtime.Before(criteria.Since.Truncate(24*time.Hour)) {
+			return false
+		}
+		if !criteria.Before.IsZero() && !mtime.Before(criteria.Before.Truncate(24*time.Hour)) {
+			return false
+		}
+	}
+
+	// Check sent date, header, body, and text criteria — require opening the message
+	needContent := !criteria.SentSince.IsZero() || !criteria.SentBefore.IsZero() ||
+		len(criteria.Header) > 0 || len(criteria.Body) > 0 || len(criteria.Text) > 0
+	if needContent {
+		r, err := msg.Open()
+		if err != nil {
+			return false
+		}
+		content, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			return false
+		}
+
+		// Parse headers for sent date and header field checks
+		hdr, hdrErr := textproto.ReadHeader(bufio.NewReader(bytes.NewReader(content)))
+
+		// Sent date criteria
+		if !criteria.SentSince.IsZero() || !criteria.SentBefore.IsZero() {
+			var sentDate time.Time
+			if hdrErr == nil {
+				if dateStr := hdr.Get("Date"); dateStr != "" {
+					if t, err := mail.ParseDate(dateStr); err == nil {
+						sentDate = t
+					}
+				}
+			}
+			if sentDate.IsZero() {
+				// No parseable Date header — exclude from date-based searches
+				return false
+			}
+			sentDay := sentDate.Truncate(24 * time.Hour)
+			if !criteria.SentSince.IsZero() && sentDay.Before(criteria.SentSince.Truncate(24*time.Hour)) {
+				return false
+			}
+			if !criteria.SentBefore.IsZero() && !sentDay.Before(criteria.SentBefore.Truncate(24*time.Hour)) {
+				return false
+			}
+		}
+
+		// Header field criteria
+		for _, hf := range criteria.Header {
+			if hdrErr != nil {
+				return false
+			}
+			val := hdr.Get(hf.Key)
+			if !strings.Contains(strings.ToLower(val), strings.ToLower(hf.Value)) {
+				return false
+			}
+		}
+
+		// Body and Text criteria (case-insensitive substring match)
+		contentStr := strings.ToLower(string(content))
+		for _, term := range criteria.Body {
+			// Body searches message body only; use full content as approximation
+			if !strings.Contains(contentStr, strings.ToLower(term)) {
+				return false
+			}
+		}
+		for _, term := range criteria.Text {
+			if !strings.Contains(contentStr, strings.ToLower(term)) {
+				return false
+			}
+		}
+	}
+
 	// Check NOT criteria
 	for _, not := range criteria.Not {
 		if s.matchesCriteria(msg, seqNum, uid, &not) {
@@ -698,6 +819,22 @@ func (s *Session) matchesCriteria(msg *maildir.Message, seqNum uint32, uid imap.
 	}
 
 	return true
+}
+
+// countNewMessages returns the number of messages in the maildir new/ subdirectory,
+// which is the Maildir analog of the IMAP \Recent flag.
+func countNewMessages(dir maildir.Dir) uint32 {
+	entries, err := os.ReadDir(filepath.Join(string(dir), "new"))
+	if err != nil {
+		return 0
+	}
+	var count uint32
+	for _, e := range entries {
+		if !e.IsDir() {
+			count++
+		}
+	}
+	return count
 }
 
 // --- Flag conversion helpers ---

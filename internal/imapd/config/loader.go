@@ -3,6 +3,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 
 	toml "github.com/pelletier/go-toml/v2"
@@ -211,9 +212,7 @@ func mergeConfig(dst, src Config) Config {
 		if dst.Auth.Options == nil {
 			dst.Auth.Options = make(map[string]string)
 		}
-		for k, v := range src.Auth.Options {
-			dst.Auth.Options[k] = v
-		}
+		maps.Copy(dst.Auth.Options, src.Auth.Options)
 	}
 
 	// Merge store config
@@ -227,9 +226,7 @@ func mergeConfig(dst, src Config) Config {
 		if dst.Store.Options == nil {
 			dst.Store.Options = make(map[string]string)
 		}
-		for k, v := range src.Store.Options {
-			dst.Store.Options[k] = v
-		}
+		maps.Copy(dst.Store.Options, src.Store.Options)
 	}
 
 	return dst

@@ -31,9 +31,10 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Build output
-imapd
-gotemplate
+# Build output (root-level binaries only)
+/imapd
+/gotemplate
+!cmd/
 
 # OMC agent state
 .omc/

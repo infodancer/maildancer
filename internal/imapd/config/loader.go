@@ -181,6 +181,10 @@ func mergeConfig(dst, src Config) Config {
 		dst.Limits.MaxConnections = src.Limits.MaxConnections
 	}
 
+	if src.Limits.MaxMessageSize > 0 {
+		dst.Limits.MaxMessageSize = src.Limits.MaxMessageSize
+	}
+
 	// Metrics: enabled is a boolean so merge if source has any non-zero value
 	if src.Metrics.Enabled {
 		dst.Metrics.Enabled = src.Metrics.Enabled

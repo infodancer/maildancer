@@ -103,7 +103,8 @@ type TimeoutsConfig struct {
 
 // LimitsConfig defines resource limits for the server.
 type LimitsConfig struct {
-	MaxConnections int `toml:"max_connections"`
+	MaxConnections int   `toml:"max_connections"`
+	MaxMessageSize int64 `toml:"max_message_size"`
 }
 
 // MetricsConfig holds configuration for Prometheus metrics.
@@ -131,6 +132,7 @@ func Default() Config {
 		},
 		Limits: LimitsConfig{
 			MaxConnections: 200,
+			MaxMessageSize: 52428800, // 50 MiB
 		},
 		Metrics: MetricsConfig{
 			Enabled: false,

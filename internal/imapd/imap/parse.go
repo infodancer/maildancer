@@ -243,9 +243,10 @@ func ParseFetchItems(args string) ([]string, error) {
 		// Find matching close paren
 		depth := 0
 		for i := 0; i < len(args); i++ {
-			if args[i] == '(' {
+			switch args[i] {
+			case '(':
 				depth++
-			} else if args[i] == ')' {
+			case ')':
 				depth--
 				if depth == 0 {
 					inner := args[1:i]

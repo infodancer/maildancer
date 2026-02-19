@@ -46,11 +46,6 @@ func formatFlagList(flags []string) string {
 	return "(" + strings.Join(flags, " ") + ")"
 }
 
-// formatStringList formats a slice of strings as a space-separated parenthesised list.
-func formatStringList(items []string) string {
-	return "(" + strings.Join(items, " ") + ")"
-}
-
 // quoteString returns an IMAP quoted string.
 func quoteString(s string) string {
 	// Replace backslash and double-quote with escaped versions.

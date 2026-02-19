@@ -3,8 +3,10 @@ module github.com/infodancer/maildancer/internal/imapd
 go 1.24.0
 
 require (
+	github.com/emersion/go-imap/v2 v2.0.0-beta.8
+	github.com/emersion/go-maildir v0.6.0
+	github.com/emersion/go-message v0.18.2
 	github.com/infodancer/maildancer/auth v0.0.0-20260216002318-4966de2ee2e7
-	github.com/infodancer/maildancer/msgstore v0.0.0-20260119190950-8397c0fa98ca
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 )
@@ -12,6 +14,8 @@ require (
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
+	github.com/infodancer/maildancer/msgstore v0.0.0-20260119190950-8397c0fa98ca // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect

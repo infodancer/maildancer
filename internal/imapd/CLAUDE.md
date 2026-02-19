@@ -1,76 +1,72 @@
- CLAUDE.md
+# CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with code in this repository.
 
 ## Project Overview
 
-This is a template repository for go projects.
+`imapd` is an IMAP server implementation in Go. It implements the IMAP4rev1 protocol (RFC 3501) and integrates with the `msgstore` library for message storage and the shared `AuthProvider` interface for authentication.
+
+## Architecture
+
+```
+/cmd/imapd/         # Entrypoint only
+/internal/imap/     # IMAP protocol implementation
+/internal/session/  # Per-connection session state
+/errors/            # Centralized error definitions
+```
 
 ## Development Commands
 
-## Architecture
+```bash
+task build          # Build the binary
+task test           # Run tests with race detector
+task vet            # go vet
+task fmt            # Check formatting
+task fmt:fix        # Fix formatting
+task lint           # golangci-lint
+task vulncheck      # govulncheck
+task check          # Run all CI checks
+task hooks:install  # Install git hooks
+```
+
+### Running a Single Test
+
+```bash
+go test -v -run TestName ./path/to/package
+```
 
 ## Development Workflow
 
 ### Branch and Issue Protocol
 
-**This workflow is MANDATORY.** All significant work must follow this process with no exceptions:
+**This workflow is MANDATORY.** All significant work must follow this process:
 
-1. **Create a GitHub issue first** - Before creating a branch, draft an issue describing the purpose and design based on your understanding of the user's request. Assign the issue to the user who requested it. Ask the user to approve the issue before proceeding.  Refer back to the issue if necessary.
-
-2. **Create a feature or content branch** - Only after issue approval, create the branch. Use descriptive names that include the issue id like `feature/UUID` or `bug/UUID`.
-
-3. **Reference the issue in all commits** - Every commit message and pull request must include the issue URL.
-
-4. **Stay focused on the issue** - Make only changes directly related to the approved issue. Do not refactor unrelated code, fix unrelated bugs, or make "improvements" outside the scope.
-
-5. **Handle unrelated problems separately** - If you notice bugs, technical debt, or potential issues unrelated to your current work, ask the user to approve creating a separate GitHub issue. Do not address them in the current branch.
+1. **Create a GitHub issue first** — draft an issue describing the purpose and design. Assign to the requesting user. Ask for approval before proceeding.
+2. **Create a feature or content branch** — only after issue approval. Use `feature/UUID` or `bug/UUID` naming.
+3. **Reference the issue in all commits** — every commit message must include the issue URL.
+4. **Stay focused on the issue** — no unrelated refactors, fixes, or improvements.
+5. **Handle unrelated problems separately** — file a separate issue; don't address in the current branch.
 
 ## Best Practices
 
 ### Commit Practices
 
-- Atomic commits - one logical change per commit
-- Build/verify locally before committing 
+- Atomic commits — one logical change per commit
+- Build and verify locally before committing
 
 ### Pull Request Workflow
 
 - All branches merge to main via PR
-- PRs should reference the originating issue
-- Squash or rebase to keep history clean
-- **NEVER ask users to merge or approve a PR** - PR approval and merging must always be manual actions taken by the user. Do not prompt, suggest, or automate this step.
-- After creating a PR, checkout the main branch before starting any further work.
+- PRs must reference the originating issue
+- **NEVER ask users to merge or approve a PR** — that is always a manual user action
+- After creating a PR, check out main before starting further work
 
-### Security Best Practices
+### Security
 
-#### Secrets Management
-- Never commit secrets, API keys, credentials, or tokens
-- Use environment variables or secret management tools for sensitive configuration
-- Add sensitive file patterns to `.gitignore` (`.env`, `*.pem`, `*.key`, `credentials.*`)
-- Rotate secrets immediately if accidentally committed (treat as compromised)
-
-#### Input Validation & Sanitization
+- Never commit secrets, credentials, or tokens
 - Validate all external input at system boundaries
-- Sanitize user input before use in SQL queries, shell commands, or templates
-- Use parameterized queries to prevent SQL injection
-- Avoid constructing shell commands from user input (command injection risk)
+- Use `crypto/rand` for security-sensitive random generation
+- Set timeouts on all network operations
+- Never expose internal error details to IMAP clients
 
-#### Dependency Security
-- Regularly audit dependencies with `go mod tidy` and vulnerability scanners (`govulncheck`)
-- Pin dependency versions in `go.mod`
-- Review new dependencies before adding them to the project
-- Keep dependencies updated for security patches
-
-#### Secure Coding Practices
-- Avoid `unsafe` package unless absolutely necessary
-- Use `crypto/rand` for random number generation in security contexts (not `math/rand`)
-- Implement proper authentication and authorization checks
-- Plan for TLS in production; document when HTTP is intentionally used for local development
-- Set appropriate timeouts on network operations to prevent resource exhaustion
-
-#### Error Handling Security
-- Never expose internal error details to end users
-- Log detailed errors server-side only
-- Avoid leaking sensitive data in error messages or logs
-
-Read CONVENTIONS.md for language specific best practices.
+Read CONVENTIONS.md for Go coding standards.

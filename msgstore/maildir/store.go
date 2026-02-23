@@ -246,13 +246,29 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 	delivered := 0
 
 	for _, recipient := range envelope.Recipients {
-		// Strip subaddress extension so user+folder@example.com
-		// delivers to the user@example.com mailbox.
 		parsed := msgstore.ParseRecipient(recipient)
-		dir, err := s.ensureMaildir(parsed.Address)
-		if err != nil {
-			lastErr = err
-			continue
+
+		// Future: check per-user filter or delivery program config here first;
+		// a configured filter would take priority over folder routing.
+
+		// Resolve delivery target. If the recipient has a +extension, deliver
+		// to the matching Maildir++ folder — but only if it already exists.
+		// The user controls which folders accept subaddressed mail: if the
+		// folder does not exist, fall back to the inbox silently.
+		var dir maildir.Dir
+		if parsed.Extension != "" {
+			if folderDir, ok := s.folderIfExists(parsed.Address, parsed.Extension); ok {
+				dir = folderDir
+			}
+		}
+		if dir == "" {
+			// Deliver to inbox, creating it on first delivery.
+			var err error
+			dir, err = s.ensureMaildir(parsed.Address)
+			if err != nil {
+				lastErr = err
+				continue
+			}
 		}
 
 		// NewDelivery takes the directory path as a string
@@ -435,6 +451,19 @@ func (s *MaildirStore) folderPath(mailbox, folder string) (string, error) {
 	}
 
 	return cleanCandidate, nil
+}
+
+// folderIfExists returns the maildir.Dir for a folder if it already exists, without
+// creating it. Returns ("", false) if the folder does not exist or the name is invalid.
+func (s *MaildirStore) folderIfExists(mailbox, folder string) (maildir.Dir, bool) {
+	path, err := s.folderPath(mailbox, folder)
+	if err != nil {
+		return "", false
+	}
+	if _, err := os.Stat(filepath.Join(path, "cur")); err != nil {
+		return "", false
+	}
+	return maildir.Dir(path), true
 }
 
 // ensureFolderMaildir ensures the folder's maildir structure exists, creating it if necessary.

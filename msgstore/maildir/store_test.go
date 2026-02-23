@@ -343,6 +343,103 @@ func TestMaildirStore_DeliverSubaddressWithTemplate(t *testing.T) {
 	}
 }
 
+func TestMaildirStore_DeliverSubaddress_FolderExists(t *testing.T) {
+	// When the +extension folder already exists, delivery should go there.
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	// Pre-create the folder so delivery can route to it.
+	if err := store.CreateFolder(ctx, "user@example.com", "lists"); err != nil {
+		t.Fatalf("CreateFolder: %v", err)
+	}
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"user+lists@example.com"},
+	}
+	if err := store.Deliver(ctx, envelope, strings.NewReader("Subject: Folder\r\n\r\nBody")); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	// Inbox should be empty.
+	inbox, err := store.List(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("List inbox: %v", err)
+	}
+	if len(inbox) != 0 {
+		t.Errorf("expected inbox empty, got %d messages", len(inbox))
+	}
+
+	// Folder should have the message.
+	folderMsgs, err := store.ListInFolder(ctx, "user@example.com", "lists")
+	if err != nil {
+		t.Fatalf("ListInFolder: %v", err)
+	}
+	if len(folderMsgs) != 1 {
+		t.Errorf("expected 1 message in folder, got %d", len(folderMsgs))
+	}
+}
+
+func TestMaildirStore_DeliverSubaddress_FolderMissing(t *testing.T) {
+	// When the +extension folder does not exist, delivery falls back to inbox.
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"user+nonexistent@example.com"},
+	}
+	if err := store.Deliver(ctx, envelope, strings.NewReader("Subject: Fallback\r\n\r\nBody")); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	// Message should land in inbox.
+	inbox, err := store.List(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("List inbox: %v", err)
+	}
+	if len(inbox) != 1 {
+		t.Errorf("expected 1 message in inbox, got %d", len(inbox))
+	}
+
+	// The missing folder must NOT have been auto-created.
+	folders, err := store.ListFolders(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("ListFolders: %v", err)
+	}
+	for _, f := range folders {
+		if f == "nonexistent" {
+			t.Error("folder 'nonexistent' should not have been created")
+		}
+	}
+}
+
+func TestMaildirStore_DeliverSubaddress_InvalidExtension(t *testing.T) {
+	// An invalid extension (e.g. path traversal attempt) falls back to inbox.
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"user+../evil@example.com"},
+	}
+	if err := store.Deliver(ctx, envelope, strings.NewReader("Subject: Attack\r\n\r\nBody")); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	// Message must land in inbox, not escape the base path.
+	inbox, err := store.List(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("List inbox: %v", err)
+	}
+	if len(inbox) != 1 {
+		t.Errorf("expected 1 message in inbox, got %d", len(inbox))
+	}
+}
+
 func TestConvertFlags(t *testing.T) {
 	tests := []struct {
 		name     string

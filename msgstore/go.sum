@@ -2,8 +2,9 @@ git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9 h1:MaPyH1+nMX0az
 git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9/go.mod h1:ewD6qhJ+zMwEeAElDEJOYYdkpxZSHRodJwq9Z0OG30w=
 github.com/emersion/go-maildir v0.6.0 h1:MPx2RSS1Xq8j1cNOzfq7YyF+5Leoeif1XqSeuytdET8=
 github.com/emersion/go-maildir v0.6.0/go.mod h1:Wpgtt9EOIJWe++WKa+JRvDwv+qIV7MeFdvZu/VbsXN4=
+github.com/infodancer/auth v0.1.0 h1:/mK/qST+vHK5Q12Y0pK389Rp80D0cra96pp0FJNSPAI=
+github.com/infodancer/auth v0.1.0/go.mod h1:rMMSXMH8icBAACj40geMonedM5WBIcE1MUxvN9AJagg=
 golang.org/x/crypto v0.47.0 h1:V6e3FRj+n4dbpw86FJ8Fv7XVOql7TEwpHapKoMJ/GO8=
 golang.org/x/crypto v0.47.0/go.mod h1:ff3Y9VzzKbwSSEzWqJsJVBnWmRwRSHt/6Op5n9bQc4A=
-golang.org/x/sys v0.40.0 h1:DBZZqJ2Rkml6QMQsZywtnjnnGvHza6BTfYFWY9kjEWQ=
-golang.org/x/sys v0.40.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
+golang.org/x/sys v0.41.0 h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=
 golang.org/x/sys v0.41.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=

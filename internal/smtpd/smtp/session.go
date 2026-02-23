@@ -190,7 +190,7 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 		return &smtp.SMTPError{
 			Code:         452,
 			EnhancedCode: smtp.EnhancedCode{4, 5, 3},
-			Message:      "Only one recipient allowed per message",
+			Message:      "One recipient at a time",
 		}
 	}
 
@@ -277,8 +277,21 @@ func (s *Session) Data(r io.Reader) error {
 		s.backend.collector.CommandProcessed("DATA")
 	}
 
-	// Create temp file for message data
-	tmpFile, err := os.CreateTemp("", "smtp-msg-*")
+	// Create temp file for message data.
+	// Per the Maildir spec, temp files during delivery belong on the same
+	// filesystem as the mail store. Use the configured TempDir if set.
+	tmpDir := s.backend.tempDir
+	if tmpDir != "" {
+		if err := os.MkdirAll(tmpDir, 0700); err != nil {
+			s.logger.Debug("failed to create temp dir", slog.String("error", err.Error()))
+			return &smtp.SMTPError{
+				Code:         451,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+				Message:      "Internal error",
+			}
+		}
+	}
+	tmpFile, err := os.CreateTemp(tmpDir, "smtp-msg-*")
 	if err != nil {
 		s.logger.Debug("failed to create temp file", slog.String("error", err.Error()))
 		return &smtp.SMTPError{

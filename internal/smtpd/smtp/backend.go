@@ -28,6 +28,7 @@ type Backend struct {
 	collector      metrics.Collector
 	maxRecipients  int
 	maxMessageSize int64
+	tempDir        string
 	logger         *slog.Logger
 }
 
@@ -44,7 +45,11 @@ type BackendConfig struct {
 	Collector      metrics.Collector
 	MaxRecipients  int
 	MaxMessageSize int64
-	Logger         *slog.Logger
+	// TempDir is the directory for temporary message files during DATA.
+	// Should be on the same filesystem as the mail store to enable atomic renames.
+	// Defaults to os.TempDir() if empty.
+	TempDir string
+	Logger  *slog.Logger
 }
 
 // NewBackend creates a new Backend with the given configuration.
@@ -66,6 +71,7 @@ func NewBackend(cfg BackendConfig) *Backend {
 		collector:      cfg.Collector,
 		maxRecipients:  cfg.MaxRecipients,
 		maxMessageSize: cfg.MaxMessageSize,
+		tempDir:        cfg.TempDir,
 		logger:         logger,
 	}
 }

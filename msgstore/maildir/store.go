@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,9 +249,17 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 	for _, recipient := range envelope.Recipients {
 		parsed := msgstore.ParseRecipient(recipient)
 
-		// Future: check per-user filter or delivery program config here first;
-		// a configured filter would take priority over folder routing.
-		// See git.sr.ht/~emersion/go-sieve for a Sieve language parser.
+		// Load and parse the user's Sieve script (if any).
+		// TODO(msgstore#14): evaluate the parsed script against this message.
+		// See git.sr.ht/~emersion/go-sieve for the parser; interpreter is not yet implemented.
+		if sieveCmds, err := s.loadSieveScript(parsed.Address); err != nil {
+			slog.Debug("sieve script error, falling through to default delivery",
+				slog.String("mailbox", parsed.Address),
+				slog.String("error", err.Error()),
+			)
+		} else {
+			_ = sieveCmds // TODO(msgstore#14): interpret
+		}
 
 		// Resolve delivery target. If the recipient has a +extension, deliver
 		// to the matching Maildir++ folder — but only if it already exists.

@@ -250,6 +250,7 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 
 		// Future: check per-user filter or delivery program config here first;
 		// a configured filter would take priority over folder routing.
+		// See git.sr.ht/~emersion/go-sieve for a Sieve language parser.
 
 		// Resolve delivery target. If the recipient has a +extension, deliver
 		// to the matching Maildir++ folder — but only if it already exists.

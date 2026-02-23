@@ -111,6 +111,7 @@ base_path = %q
 
 [msgstore.options]
 maildir_subdir = "Maildir"
+path_template = "{localpart}"
 `, mailDir)
 	if err := os.WriteFile(filepath.Join(domainConfigDir, "config.toml"), []byte(configTOML), 0644); err != nil {
 		t.Fatalf("write config.toml: %v", err)

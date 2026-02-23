@@ -456,6 +456,39 @@ base_path = "/var/smtpmail"
 	}
 }
 
+func TestLoadDomainsPath(t *testing.T) {
+	// Regression: DomainsPath was missing from mergeConfig so it was silently
+	// dropped even when set in [smtpd].domains_path, leaving domainProvider nil.
+	tomlContent := `
+[smtpd]
+hostname = "mail.example.com"
+domains_path = "/etc/mail/domains"
+
+[[smtpd.listeners]]
+address = ":25"
+mode = "smtp"
+`
+	f, err := os.CreateTemp(t.TempDir(), "*.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(tomlContent); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(f.Name())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if cfg.DomainsPath != "/etc/mail/domains" {
+		t.Errorf("DomainsPath = %q, want /etc/mail/domains", cfg.DomainsPath)
+	}
+}
+
 func createTempConfig(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()

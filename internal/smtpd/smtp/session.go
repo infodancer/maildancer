@@ -3,7 +3,6 @@ package smtp
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -83,15 +82,16 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // Session implements the go-smtp Session interface.
 // It also implements AuthSession for AUTH support.
 type Session struct {
-	backend    *Backend
-	conn       *smtp.Conn
-	clientIP   string
-	helo       string
-	from       string
-	recipients []string
-	authUser   string
-	domain     *domain.Domain // Set during RCPT TO for delivery
-	logger     *slog.Logger
+	backend      *Backend
+	conn         *smtp.Conn
+	clientIP     string
+	helo         string
+	from         string
+	mailFromSeen bool // true once MAIL FROM is accepted (from may be "" for bounces)
+	recipients   []string
+	authUser     string
+	domain       *domain.Domain // Set during RCPT TO for delivery
+	logger       *slog.Logger
 }
 
 // AuthMechanisms returns the available authentication mechanisms.
@@ -222,6 +222,7 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 // Implements smtp.Session interface.
 func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 	s.from = from
+	s.mailFromSeen = true
 
 	if s.backend.collector != nil {
 		s.backend.collector.CommandProcessed("MAIL")
@@ -288,6 +289,17 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 			}
 		}
 
+		// Fail early: verify delivery is possible before accepting the recipient.
+		// Returning a temp fail lets the sender retry rather than lose the message.
+		if d.DeliveryAgent == nil && s.backend.delivery == nil {
+			s.logger.Debug("no delivery agent for domain", slog.String("domain", domainName))
+			return &smtp.SMTPError{
+				Code:         452,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 5},
+				Message:      "Delivery not available, try again later",
+			}
+		}
+
 		s.domain = d // Store for delivery
 	}
 
@@ -324,6 +336,41 @@ func (s *Session) Data(r io.Reader) error {
 
 	if s.backend.collector != nil {
 		s.backend.collector.CommandProcessed("DATA")
+	}
+
+	// Validate session state before reading any message data (fail early).
+	// Note: s.from may be "" for bounce messages (MAIL FROM:<>), so we track
+	// whether MAIL FROM was seen separately.
+	if !s.mailFromSeen {
+		return &smtp.SMTPError{
+			Code:         503,
+			EnhancedCode: smtp.EnhancedCode{5, 5, 1},
+			Message:      "Bad sequence of commands: MAIL FROM required",
+		}
+	}
+	if len(s.recipients) == 0 {
+		return &smtp.SMTPError{
+			Code:         503,
+			EnhancedCode: smtp.EnhancedCode{5, 5, 1},
+			Message:      "Bad sequence of commands: RCPT TO required",
+		}
+	}
+
+	// Resolve the delivery agent before reading data. Failing here avoids
+	// consuming the message body only to discard it.
+	var deliveryAgent msgstore.DeliveryAgent
+	if s.domain != nil && s.domain.DeliveryAgent != nil {
+		deliveryAgent = s.domain.DeliveryAgent
+	} else if s.backend.delivery != nil {
+		deliveryAgent = s.backend.delivery
+	}
+	if deliveryAgent == nil {
+		s.logger.Debug("no delivery agent configured")
+		return &smtp.SMTPError{
+			Code:         451,
+			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+			Message:      "Delivery not configured, try again later",
+		}
 	}
 
 	// Buffer the message data. Prefer a temp file on the mail store filesystem
@@ -411,14 +458,14 @@ func (s *Session) Data(r io.Reader) error {
 					domain := sessionExtractRecipientDomain(s.recipients)
 					s.backend.collector.MessageRejected(domain, "spam")
 				}
-				rejectMsg := checkResult.RejectMessage
-				if rejectMsg == "" {
-					rejectMsg = fmt.Sprintf("Message rejected as spam (score %.1f)", checkResult.Score)
-				}
+				s.logger.Debug("message rejected as spam",
+					slog.Float64("score", checkResult.Score),
+					slog.String("action", string(checkResult.Action)),
+					slog.String("reason", checkResult.RejectMessage))
 				return &smtp.SMTPError{
 					Code:         550,
 					EnhancedCode: smtp.EnhancedCode{5, 7, 1},
-					Message:      rejectMsg,
+					Message:      "Message rejected",
 				}
 			}
 
@@ -428,14 +475,14 @@ func (s *Session) Data(r io.Reader) error {
 					domain := sessionExtractRecipientDomain(s.recipients)
 					s.backend.collector.MessageRejected(domain, "soft_reject")
 				}
-				rejectMsg := checkResult.RejectMessage
-				if rejectMsg == "" {
-					rejectMsg = "Message deferred, please try again later"
-				}
+				s.logger.Debug("message deferred by spam check",
+					slog.Float64("score", checkResult.Score),
+					slog.String("action", string(checkResult.Action)),
+					slog.String("reason", checkResult.RejectMessage))
 				return &smtp.SMTPError{
 					Code:         451,
 					EnhancedCode: smtp.EnhancedCode{4, 7, 1},
-					Message:      rejectMsg,
+					Message:      "Message deferred, please try again later",
 				}
 			}
 
@@ -454,59 +501,38 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
-	// Determine which delivery agent to use
-	var deliveryAgent msgstore.DeliveryAgent
-	if s.domain != nil && s.domain.DeliveryAgent != nil {
-		deliveryAgent = s.domain.DeliveryAgent
-	} else if s.backend.delivery != nil {
-		deliveryAgent = s.backend.delivery
+	// Deliver the message (deliveryAgent is guaranteed non-nil; checked above).
+	envelope := msgstore.Envelope{
+		From:           s.from,
+		Recipients:     s.recipients,
+		ReceivedTime:   time.Now(),
+		ClientIP:       net.ParseIP(s.clientIP),
+		ClientHostname: s.helo,
 	}
 
-	// Deliver the message
-	if deliveryAgent != nil {
-		envelope := msgstore.Envelope{
-			From:           s.from,
-			Recipients:     s.recipients,
-			ReceivedTime:   time.Now(),
-			ClientIP:       net.ParseIP(s.clientIP),
-			ClientHostname: s.helo,
-		}
-
-		if err := deliveryAgent.Deliver(ctx, envelope, tmp.reader()); err != nil {
-			s.logger.Debug("delivery failed", slog.String("error", err.Error()))
-
-			if s.backend.collector != nil {
-				recipientDomain := sessionExtractRecipientDomain(s.recipients)
-				s.backend.collector.MessageRejected(recipientDomain, "delivery_error")
-			}
-
-			return &smtp.SMTPError{
-				Code:         451,
-				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
-				Message:      "Delivery failed",
-			}
-		}
+	if err := deliveryAgent.Deliver(ctx, envelope, tmp.reader()); err != nil {
+		s.logger.Debug("delivery failed", slog.String("error", err.Error()))
 
 		if s.backend.collector != nil {
 			recipientDomain := sessionExtractRecipientDomain(s.recipients)
-			s.backend.collector.MessageReceived(recipientDomain, counter.n)
+			s.backend.collector.MessageRejected(recipientDomain, "delivery_error")
 		}
 
-		s.logger.Debug("message delivered",
-			slog.Int64("size", counter.n),
-			slog.Int("recipients", len(s.recipients)))
-	} else {
-		// No delivery agent - reject all mail
-		if s.backend.collector != nil {
-			recipientDomain := sessionExtractRecipientDomain(s.recipients)
-			s.backend.collector.MessageRejected(recipientDomain, "no_delivery_agent")
-		}
 		return &smtp.SMTPError{
-			Code:         550,
-			EnhancedCode: smtp.EnhancedCode{5, 7, 1},
-			Message:      "Mail delivery not configured",
+			Code:         451,
+			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+			Message:      "Delivery failed",
 		}
 	}
+
+	if s.backend.collector != nil {
+		recipientDomain := sessionExtractRecipientDomain(s.recipients)
+		s.backend.collector.MessageReceived(recipientDomain, counter.n)
+	}
+
+	s.logger.Debug("message delivered",
+		slog.Int64("size", counter.n),
+		slog.Int("recipients", len(s.recipients)))
 
 	return nil
 }
@@ -515,6 +541,7 @@ func (s *Session) Data(r io.Reader) error {
 // Implements smtp.Session interface.
 func (s *Session) Reset() {
 	s.from = ""
+	s.mailFromSeen = false
 	s.recipients = nil
 	s.domain = nil
 	s.logger.Debug("session reset")

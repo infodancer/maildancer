@@ -11,6 +11,9 @@ func ApplyEnv(cfg Config) Config {
 	if v := os.Getenv("SMTPD_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}
+	if v := os.Getenv("SMTPD_DOMAINS_PATH"); v != "" {
+		cfg.DomainsPath = v
+	}
 	if v := os.Getenv("SMTPD_TLS_CERT_FILE"); v != "" {
 		cfg.TLS.CertFile = v
 	}

@@ -3,12 +3,14 @@ package smtp
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"testing"
 
 	gosmtp "github.com/emersion/go-smtp"
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/auth/domain"
+	"github.com/infodancer/maildancer/msgstore"
 )
 
 func TestSessionHelperFunctions(t *testing.T) {
@@ -136,6 +138,13 @@ func (m *mockDomainProvider) Close() error {
 	return nil
 }
 
+// mockDeliveryAgent implements msgstore.DeliveryAgent for testing.
+type mockDeliveryAgent struct{}
+
+func (m *mockDeliveryAgent) Deliver(_ context.Context, _ msgstore.Envelope, _ io.Reader) error {
+	return nil
+}
+
 // newTestBackend creates a Backend with a DomainProvider and matching AuthRouter for tests.
 func newTestBackend(provider *mockDomainProvider, logger *slog.Logger) *Backend {
 	return NewBackend(BackendConfig{
@@ -213,8 +222,9 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 		provider := &mockDomainProvider{
 			domains: map[string]*domain.Domain{
 				"example.com": {
-					Name:      "example.com",
-					AuthAgent: &mockAuthAgent{users: map[string]bool{"validuser": true}},
+					Name:          "example.com",
+					AuthAgent:     &mockAuthAgent{users: map[string]bool{"validuser": true}},
+					DeliveryAgent: &mockDeliveryAgent{},
 				},
 			},
 		}
@@ -240,8 +250,9 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 		provider := &mockDomainProvider{
 			domains: map[string]*domain.Domain{
 				"example.com": {
-					Name:      "example.com",
-					AuthAgent: &mockAuthAgent{users: map[string]bool{"user1": true, "user2": true}},
+					Name:          "example.com",
+					AuthAgent:     &mockAuthAgent{users: map[string]bool{"user1": true, "user2": true}},
+					DeliveryAgent: &mockDeliveryAgent{},
 				},
 			},
 		}

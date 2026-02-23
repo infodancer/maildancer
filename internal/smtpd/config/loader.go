@@ -20,6 +20,7 @@ type Flags struct {
 	MaxRecipients  int
 	DeliveryType   string
 	DeliveryPath   string
+	DomainsPath    string
 }
 
 // ParseFlags parses command-line flags and returns a Flags struct.
@@ -36,6 +37,7 @@ func ParseFlags() *Flags {
 	flag.IntVar(&f.MaxRecipients, "max-recipients", 0, "Maximum recipients per message")
 	flag.StringVar(&f.DeliveryType, "delivery-type", "", "Delivery storage type (e.g., maildir)")
 	flag.StringVar(&f.DeliveryPath, "delivery-path", "", "Delivery storage base path")
+	flag.StringVar(&f.DomainsPath, "domains-path", "", "Path to per-domain configuration directories")
 
 	flag.Parse()
 	return f
@@ -115,6 +117,10 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 		cfg.Delivery.BasePath = f.DeliveryPath
 	}
 
+	if f.DomainsPath != "" {
+		cfg.DomainsPath = f.DomainsPath
+	}
+
 	return cfg
 }
 
@@ -176,6 +182,10 @@ func mergeConfig(dst, src Config) Config {
 
 	if src.LogLevel != "" {
 		dst.LogLevel = src.LogLevel
+	}
+
+	if src.DomainsPath != "" {
+		dst.DomainsPath = src.DomainsPath
 	}
 
 	if len(src.Listeners) > 0 {

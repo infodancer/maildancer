@@ -801,7 +801,7 @@ func TestRoundTrip_SMTP_NoDeliveryAgent_Rejected(t *testing.T) {
 		t.Fatalf("write data: %v", err)
 	}
 	code, msg := c.readResponse(t)
-	if code/100 < 4 {
-		t.Errorf("expected 4xx or 5xx for delivery with no agent, got %d (%s)", code, msg)
+	if code/100 != 4 {
+		t.Errorf("expected 4xx (config error is temporary) for delivery with no agent, got %d (%s)", code, msg)
 	}
 }

@@ -234,17 +234,40 @@ func (s *Session) Cleanup() {
 
 // InitializeMailbox loads the message list for the authenticated user's mailbox.
 // Should be called after successful authentication.
-func (s *Session) InitializeMailbox(ctx context.Context, store msgstore.MessageStore) error {
+//
+// If folder is non-empty (from a +extension subaddress), the session attempts to
+// present that folder as the inbox. If the store supports FolderStore and the
+// folder exists, all POP3 operations are transparently redirected to it.
+// If the folder does not exist or the store does not support folders, the session
+// falls back to the normal inbox — consistent with delivery behavior.
+func (s *Session) InitializeMailbox(ctx context.Context, store msgstore.MessageStore, folder string) error {
 	if s.authSession == nil || s.authSession.User == nil {
 		return ErrMailboxNotInitialized
 	}
 
 	s.mailbox = s.authSession.User.Mailbox
-	s.store = store
 	s.deletedSet = make(map[int]bool)
 
+	// If a +extension was specified, try to route to the corresponding folder.
+	effectiveStore := store
+	if folder != "" {
+		if fs, ok := store.(msgstore.FolderStore); ok {
+			folders, err := fs.ListFolders(ctx, s.mailbox)
+			if err == nil {
+				for _, f := range folders {
+					if f == folder {
+						effectiveStore = &folderMessageStore{fs: fs, folder: folder}
+						break
+					}
+				}
+			}
+			// If folder not found or ListFolders failed, fall through to inbox.
+		}
+	}
+	s.store = effectiveStore
+
 	// Load message list
-	messages, err := store.List(ctx, s.mailbox)
+	messages, err := effectiveStore.List(ctx, s.mailbox)
 	if err != nil {
 		return err
 	}

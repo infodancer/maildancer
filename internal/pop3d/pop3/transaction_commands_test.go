@@ -86,7 +86,7 @@ func newTransactionSession(store msgstore.MessageStore) *Session {
 		},
 	})
 	if store != nil {
-		_ = sess.InitializeMailbox(context.Background(), store)
+		_ = sess.InitializeMailbox(context.Background(), store, "")
 	}
 	return sess
 }

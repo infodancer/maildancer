@@ -155,7 +155,7 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 		store = result.Domain.MessageStore
 	}
 	if store != nil {
-		if err := sess.InitializeMailbox(ctx, store); err != nil {
+		if err := sess.InitializeMailbox(ctx, store, result.Extension); err != nil {
 			conn.Logger().Error("failed to initialize mailbox",
 				"username", username,
 				"mailbox", result.Session.User.Mailbox,
@@ -270,7 +270,7 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 				store = result.Domain.MessageStore
 			}
 			if store != nil {
-				if err := sess.InitializeMailbox(ctx, store); err != nil {
+				if err := sess.InitializeMailbox(ctx, store, result.Extension); err != nil {
 					conn.Logger().Error("failed to initialize mailbox",
 						"mechanism", mechanism,
 						"username", username,

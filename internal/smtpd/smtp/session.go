@@ -3,7 +3,6 @@ package smtp
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -459,14 +458,14 @@ func (s *Session) Data(r io.Reader) error {
 					domain := sessionExtractRecipientDomain(s.recipients)
 					s.backend.collector.MessageRejected(domain, "spam")
 				}
-				rejectMsg := checkResult.RejectMessage
-				if rejectMsg == "" {
-					rejectMsg = fmt.Sprintf("Message rejected as spam (score %.1f)", checkResult.Score)
-				}
+				s.logger.Debug("message rejected as spam",
+					slog.Float64("score", checkResult.Score),
+					slog.String("action", string(checkResult.Action)),
+					slog.String("reason", checkResult.RejectMessage))
 				return &smtp.SMTPError{
 					Code:         550,
 					EnhancedCode: smtp.EnhancedCode{5, 7, 1},
-					Message:      rejectMsg,
+					Message:      "Message rejected",
 				}
 			}
 
@@ -476,14 +475,14 @@ func (s *Session) Data(r io.Reader) error {
 					domain := sessionExtractRecipientDomain(s.recipients)
 					s.backend.collector.MessageRejected(domain, "soft_reject")
 				}
-				rejectMsg := checkResult.RejectMessage
-				if rejectMsg == "" {
-					rejectMsg = "Message deferred, please try again later"
-				}
+				s.logger.Debug("message deferred by spam check",
+					slog.Float64("score", checkResult.Score),
+					slog.String("action", string(checkResult.Action)),
+					slog.String("reason", checkResult.RejectMessage))
 				return &smtp.SMTPError{
 					Code:         451,
 					EnhancedCode: smtp.EnhancedCode{4, 7, 1},
-					Message:      rejectMsg,
+					Message:      "Message deferred, please try again later",
 				}
 			}
 

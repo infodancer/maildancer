@@ -2,10 +2,10 @@
 //
 // Usage:
 //
-//	userctl [--domains <path>] add    <user@domain>   add user (prompts for password)
-//	userctl [--domains <path>] del    <user@domain>   remove user
-//	userctl [--domains <path>] list   <domain>        list users and mailboxes
-//	userctl [--domains <path>] verify <user@domain>   verify user password
+//	userctl [--domains <path>] [--verbose] add    <user@domain>   add user (prompts for password)
+//	userctl [--domains <path>] [--verbose] del    <user@domain>   remove user
+//	userctl [--domains <path>] [--verbose] list   <domain>        list users and mailboxes
+//	userctl [--domains <path>] [--verbose] verify <user@domain>   verify user password
 //
 // The domains path is resolved in order:
 //  1. --domains flag
@@ -18,6 +18,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,10 +42,17 @@ type serverConfig struct {
 func main() {
 	fs := flag.NewFlagSet("userctl", flag.ExitOnError)
 	domainsFlag := fs.String("domains", "", "path to domains directory")
+	verboseFlag := fs.Bool("verbose", true, "enable debug logging")
 	fs.Usage = usage
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		os.Exit(1)
+	}
+
+	if *verboseFlag {
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+			Level: slog.LevelDebug,
+		})))
 	}
 
 	args := fs.Args()
@@ -59,6 +67,8 @@ func main() {
 		os.Exit(1)
 	}
 
+	slog.Debug("resolved domains path", "path", domainsPath)
+
 	subcmd := args[0]
 	target := args[1]
 
@@ -66,24 +76,31 @@ func main() {
 	case "add":
 		username, domainDir, err := parseEmailTarget(domainsPath, target)
 		if err == nil {
-			err = cmdAdd(filepath.Join(domainDir, "passwd"), username)
+			passwdPath := filepath.Join(domainDir, "passwd")
+			slog.Debug("adding user", "username", username, "passwd", passwdPath)
+			err = cmdAdd(passwdPath, username)
 		}
 		exitOnErr(err)
 
 	case "del":
 		username, domainDir, err := parseEmailTarget(domainsPath, target)
 		if err == nil {
-			err = cmdDel(filepath.Join(domainDir, "passwd"), username)
+			passwdPath := filepath.Join(domainDir, "passwd")
+			slog.Debug("deleting user", "username", username, "passwd", passwdPath)
+			err = cmdDel(passwdPath, username)
 		}
 		exitOnErr(err)
 
 	case "list":
 		domainDir := filepath.Join(domainsPath, target)
-		exitOnErr(cmdList(filepath.Join(domainDir, "passwd")))
+		passwdPath := filepath.Join(domainDir, "passwd")
+		slog.Debug("listing users", "domain", target, "passwd", passwdPath)
+		exitOnErr(cmdList(passwdPath))
 
 	case "verify":
 		username, domainDir, err := parseEmailTarget(domainsPath, target)
 		if err == nil {
+			slog.Debug("verifying user", "username", username, "domain_dir", domainDir)
 			err = cmdVerify(domainDir, username)
 		}
 		exitOnErr(err)
@@ -99,13 +116,16 @@ func main() {
 // flag > env > /etc/infodancer/config.toml > error.
 func resolveDomainsPath(flagValue string) (string, error) {
 	if flagValue != "" {
+		slog.Debug("domains path from --domains flag", "path", flagValue)
 		return flagValue, nil
 	}
 
 	if v := os.Getenv("INFODANCER_DOMAINS_PATH"); v != "" {
+		slog.Debug("domains path from INFODANCER_DOMAINS_PATH", "path", v)
 		return v, nil
 	}
 
+	slog.Debug("trying config file", "path", defaultConfigPath)
 	path, err := domainsPathFromConfig(defaultConfigPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -114,6 +134,7 @@ func resolveDomainsPath(flagValue string) (string, error) {
 		return "", fmt.Errorf("read %s: %w", defaultConfigPath, err)
 	}
 
+	slog.Debug("domains path from config file", "path", path, "config", defaultConfigPath)
 	return path, nil
 }
 
@@ -161,6 +182,7 @@ func cmdAdd(passwdPath, username string) error {
 	}
 
 	if err := passwd.AddUser(passwdPath, username, password); err != nil {
+		slog.Debug("AddUser failed", "passwd", passwdPath, "username", username, "error", err)
 		return err
 	}
 
@@ -170,6 +192,7 @@ func cmdAdd(passwdPath, username string) error {
 
 func cmdDel(passwdPath, username string) error {
 	if err := passwd.DeleteUser(passwdPath, username); err != nil {
+		slog.Debug("DeleteUser failed", "passwd", passwdPath, "username", username, "error", err)
 		return err
 	}
 	fmt.Printf("Deleted user %q\n", username)
@@ -179,6 +202,7 @@ func cmdDel(passwdPath, username string) error {
 func cmdList(passwdPath string) error {
 	users, err := passwd.ListUsers(passwdPath)
 	if err != nil {
+		slog.Debug("ListUsers failed", "passwd", passwdPath, "error", err)
 		return err
 	}
 
@@ -203,8 +227,11 @@ func cmdVerify(domainDir, username string) error {
 	passwdPath := filepath.Join(domainDir, "passwd")
 	keyDir := filepath.Join(domainDir, "keys")
 
+	slog.Debug("loading passwd agent", "passwd", passwdPath, "keys", keyDir)
+
 	agent, err := passwd.NewAgent(passwdPath, keyDir)
 	if err != nil {
+		slog.Debug("NewAgent failed", "passwd", passwdPath, "error", err)
 		return fmt.Errorf("load passwd: %w", err)
 	}
 	defer func() { _ = agent.Close() }()
@@ -216,6 +243,7 @@ func cmdVerify(domainDir, username string) error {
 
 	session, err := agent.Authenticate(context.Background(), username, password)
 	if err != nil {
+		slog.Debug("Authenticate failed", "username", username, "error", err)
 		return fmt.Errorf("authentication failed: %w", err)
 	}
 	defer session.Clear()
@@ -243,10 +271,14 @@ func exitOnErr(err error) {
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  userctl [--domains <path>] add    <user@domain>   add user (prompts for password)
-  userctl [--domains <path>] del    <user@domain>   remove user
-  userctl [--domains <path>] list   <domain>        list users and mailboxes
-  userctl [--domains <path>] verify <user@domain>   verify user password
+  userctl [--domains <path>] [--verbose] add    <user@domain>   add user (prompts for password)
+  userctl [--domains <path>] [--verbose] del    <user@domain>   remove user
+  userctl [--domains <path>] [--verbose] list   <domain>        list users and mailboxes
+  userctl [--domains <path>] [--verbose] verify <user@domain>   verify user password
+
+Flags:
+  --domains   path to domains directory (overrides env and config)
+  --verbose   enable debug logging (default: true)
 
 Domains path resolution order:
   1. --domains flag

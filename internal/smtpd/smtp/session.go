@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -18,6 +19,54 @@ import (
 	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
+
+// tempBuffer abstracts temporary message storage during DATA processing.
+// The preferred implementation writes to a temp file on the mail store
+// filesystem so the delivery agent can do an atomic rename. If filesystem
+// access fails, the fallback holds the message in memory.
+type tempBuffer interface {
+	io.Writer
+	// reader returns an io.Reader positioned at the start of the written data.
+	reader() io.Reader
+	// cleanup releases any held resources (close + unlink for file; noop for mem).
+	cleanup()
+}
+
+type fileTempBuf struct{ f *os.File }
+
+func (b *fileTempBuf) Write(p []byte) (int, error) { return b.f.Write(p) }
+func (b *fileTempBuf) reader() io.Reader {
+	_, _ = b.f.Seek(0, io.SeekStart)
+	return b.f
+}
+func (b *fileTempBuf) cleanup() {
+	_ = b.f.Close()
+	_ = os.Remove(b.f.Name())
+}
+
+type memTempBuf struct{ buf bytes.Buffer }
+
+func (b *memTempBuf) Write(p []byte) (int, error) { return b.buf.Write(p) }
+func (b *memTempBuf) reader() io.Reader            { return bytes.NewReader(b.buf.Bytes()) }
+func (b *memTempBuf) cleanup()                     {}
+
+// newTempBuffer tries to create a temp file in dir (falling back to os.TempDir
+// when dir is ""). If file creation fails for any reason, it returns an
+// in-memory buffer so message delivery can still proceed.
+func newTempBuffer(dir string) tempBuffer {
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0700); err == nil {
+			if f, err := os.CreateTemp(dir, "smtp-msg-*"); err == nil {
+				return &fileTempBuf{f: f}
+			}
+		}
+	} else {
+		if f, err := os.CreateTemp("", "smtp-msg-*"); err == nil {
+			return &fileTempBuf{f: f}
+		}
+	}
+	return &memTempBuf{}
+}
 
 // countingReader wraps an io.Reader and counts bytes read.
 type countingReader struct {
@@ -190,7 +239,7 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 		return &smtp.SMTPError{
 			Code:         452,
 			EnhancedCode: smtp.EnhancedCode{4, 5, 3},
-			Message:      "Only one recipient allowed per message",
+			Message:      "One recipient at a time",
 		}
 	}
 
@@ -277,21 +326,15 @@ func (s *Session) Data(r io.Reader) error {
 		s.backend.collector.CommandProcessed("DATA")
 	}
 
-	// Create temp file for message data
-	tmpFile, err := os.CreateTemp("", "smtp-msg-*")
-	if err != nil {
-		s.logger.Debug("failed to create temp file", slog.String("error", err.Error()))
-		return &smtp.SMTPError{
-			Code:         451,
-			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
-			Message:      "Internal error",
-		}
-	}
-	defer func() { _ = os.Remove(tmpFile.Name()) }()
-	defer func() { _ = tmpFile.Close() }()
+	// Buffer the message data. Prefer a temp file on the mail store filesystem
+	// (Maildir spec: tmp/ on same device enables atomic rename). Falls back to
+	// an in-memory buffer if file creation fails (e.g. read-only filesystem,
+	// scratch container with no /tmp configured).
+	tmp := newTempBuffer(s.backend.tempDir)
+	defer tmp.cleanup()
 
-	// TeeReader writes to tmpFile as data is read
-	tee := io.TeeReader(r, tmpFile)
+	// TeeReader writes to tmp as data is read
+	tee := io.TeeReader(r, tmp)
 
 	// Wrap in countingReader to track message size
 	counter := &countingReader{r: tee}
@@ -400,8 +443,8 @@ func (s *Session) Data(r io.Reader) error {
 			// Spam check can reject but cannot modify the message.
 		}
 	} else {
-		// No spam check - read the entire message into tmpFile
-		if _, err := io.Copy(tmpFile, counter); err != nil {
+		// No spam check - read the entire message into tmp
+		if _, err := io.Copy(tmp, counter); err != nil {
 			s.logger.Debug("failed to read message data", slog.String("error", err.Error()))
 			return &smtp.SMTPError{
 				Code:         451,
@@ -421,16 +464,6 @@ func (s *Session) Data(r io.Reader) error {
 
 	// Deliver the message
 	if deliveryAgent != nil {
-		// Seek to beginning of temp file for delivery
-		if _, err := tmpFile.Seek(0, io.SeekStart); err != nil {
-			s.logger.Debug("failed to seek temp file", slog.String("error", err.Error()))
-			return &smtp.SMTPError{
-				Code:         451,
-				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
-				Message:      "Internal error",
-			}
-		}
-
 		envelope := msgstore.Envelope{
 			From:           s.from,
 			Recipients:     s.recipients,
@@ -439,7 +472,7 @@ func (s *Session) Data(r io.Reader) error {
 			ClientHostname: s.helo,
 		}
 
-		if err := deliveryAgent.Deliver(ctx, envelope, tmpFile); err != nil {
+		if err := deliveryAgent.Deliver(ctx, envelope, tmp.reader()); err != nil {
 			s.logger.Debug("delivery failed", slog.String("error", err.Error()))
 
 			if s.backend.collector != nil {

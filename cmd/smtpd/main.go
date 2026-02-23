@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/infodancer/maildancer/auth"
@@ -128,6 +129,13 @@ func main() {
 	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
 
 	// Create the go-smtp backend
+	// Build temp dir path: on the same filesystem as the mail store so
+	// temp files can be renamed atomically into the maildir.
+	var tempDir string
+	if cfg.Delivery.BasePath != "" {
+		tempDir = filepath.Join(cfg.Delivery.BasePath, "tmp")
+	}
+
 	backend := smtp.NewBackend(smtp.BackendConfig{
 		Hostname:       cfg.Hostname,
 		Delivery:       delivery,
@@ -139,6 +147,7 @@ func main() {
 		Collector:      collector,
 		MaxRecipients:  cfg.Limits.MaxRecipients,
 		MaxMessageSize: int64(cfg.Limits.MaxMessageSize),
+		TempDir:        tempDir,
 		Logger:         logger,
 	})
 

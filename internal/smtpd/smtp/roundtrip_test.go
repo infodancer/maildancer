@@ -146,6 +146,7 @@ path_template = "{localpart}"
 		AuthRouter:     authRouter,
 		MaxRecipients:  10,
 		MaxMessageSize: 10 * 1024 * 1024,
+		TempDir:        t.TempDir(),
 	})
 
 	srv, err := smtpserver.NewServer(smtpserver.ServerConfig{

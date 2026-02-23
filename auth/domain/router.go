@@ -88,14 +88,14 @@ func (r *AuthRouter) AuthenticateWithDomain(ctx context.Context, username, passw
 			if err != nil {
 				return nil, err
 			}
-			// Normalize Mailbox to the canonical full email address.
-			// Auth agents are called with just the localpart; they may set Mailbox
-			// to the localpart or leave it empty. Normalizing here ensures smtpd
-			// (which delivers to user@domain) and pop3d/imapd (which read via
-			// User.Mailbox) always pass the same key into the message store.
-			// path_template in msgstore then maps user@domain to the filesystem path.
+			// Normalize Mailbox to the canonical localpart.
+			// Auth agents receive only the localpart and may set Mailbox to that
+			// value or leave it empty. Normalizing here ensures pop3d/imapd always
+			// open the same mailbox path as smtpd delivers to. The domain is already
+			// encoded in the per-domain msgstore base_path, so the localpart is the
+			// correct key into the message store (matching path_template = "{localpart}").
 			if session.User != nil {
-				session.User.Mailbox = base + "@" + domainName
+				session.User.Mailbox = base
 			}
 			return &AuthResult{Session: session, Domain: d, Extension: extension}, nil
 		}

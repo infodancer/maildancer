@@ -42,6 +42,19 @@ var (
 	ErrStoreConfigInvalid = errors.New("invalid store configuration")
 )
 
+// Folder errors.
+var (
+	// ErrFolderNotFound indicates the requested folder does not exist.
+	ErrFolderNotFound = errors.New("folder not found")
+
+	// ErrFolderExists indicates the folder already exists.
+	ErrFolderExists = errors.New("folder already exists")
+
+	// ErrInvalidFolderName indicates the folder name contains invalid characters
+	// or conflicts with reserved names.
+	ErrInvalidFolderName = errors.New("invalid folder name")
+)
+
 // Maildir errors.
 var (
 	// ErrMaildirNotFound indicates the maildir directory does not exist.

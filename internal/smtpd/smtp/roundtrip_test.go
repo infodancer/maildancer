@@ -135,7 +135,9 @@ path_template = "{localpart}"
 		t.Fatalf("find free port: %v", err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
 
 	backend := smtpserver.NewBackend(smtpserver.BackendConfig{
 		Hostname:       "test.local",
@@ -183,7 +185,7 @@ path_template = "{localpart}"
 	for time.Now().Before(deadline) {
 		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 		if err == nil {
-			c.Close()
+			_ = c.Close()
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -255,7 +257,7 @@ func (env *testEnv) retrieveMessage(t *testing.T, username, uid string) string {
 	if err != nil {
 		t.Fatalf("retrieve message %s/%s: %v", username, uid, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	var sb strings.Builder
 	buf := make([]byte, 4096)
 	for {
@@ -282,7 +284,7 @@ func dialSMTP(t *testing.T, addr string) *smtpClient {
 	if err != nil {
 		t.Fatalf("dial %s: %v", addr, err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	return &smtpClient{conn: conn, r: bufio.NewReader(conn)}
 }
 
@@ -348,7 +350,7 @@ func (c *smtpClient) Ehlo(t *testing.T) string {
 
 func (c *smtpClient) Quit(t *testing.T) {
 	c.mustCode(t, "QUIT", 221)
-	c.conn.Close()
+	_ = c.conn.Close()
 }
 
 func (c *smtpClient) Rset(t *testing.T) {
@@ -706,8 +708,12 @@ base_path = %q
 maildir_subdir = "Maildir"
 path_template = "{localpart}"
 `, otherMailDir)
-	os.WriteFile(filepath.Join(otherConfigDir, "config.toml"), []byte(otherConfig), 0644)
-	os.WriteFile(filepath.Join(otherConfigDir, "passwd"), []byte(""), 0644)
+	if err := os.WriteFile(filepath.Join(otherConfigDir, "config.toml"), []byte(otherConfig), 0644); err != nil {
+		t.Fatalf("write other config.toml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(otherConfigDir, "passwd"), []byte(""), 0644); err != nil {
+		t.Fatalf("write other passwd: %v", err)
+	}
 
 	c := dialSMTP(t, env.addr)
 	c.Greeting(t)
@@ -732,7 +738,9 @@ func TestRoundTrip_SMTP_NoDeliveryAgent_Rejected(t *testing.T) {
 		t.Fatalf("find free port: %v", err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
 
 	backend := smtpserver.NewBackend(smtpserver.BackendConfig{
 		Hostname:      "test.local",
@@ -761,7 +769,7 @@ func TestRoundTrip_SMTP_NoDeliveryAgent_Rejected(t *testing.T) {
 	for time.Now().Before(deadline) {
 		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 		if err == nil {
-			c.Close()
+			_ = c.Close()
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

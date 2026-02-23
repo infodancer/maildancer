@@ -13,6 +13,8 @@ github.com/infodancer/maildancer/auth v0.0.0-20260216002318-4966de2ee2e7 h1:rQPq
 github.com/infodancer/maildancer/auth v0.0.0-20260216002318-4966de2ee2e7/go.mod h1:W1e8Vl2E4m0idnY/+H+CDJCoqxD2mnPc8kfI7SRNLXE=
 github.com/infodancer/maildancer/msgstore v0.0.0-20260119190950-8397c0fa98ca h1:vFKaO6G7lV9nH9YcCUn3GKCiyy/0ZzRusbefOw/Mve0=
 github.com/infodancer/maildancer/msgstore v0.0.0-20260119190950-8397c0fa98ca/go.mod h1:rAI37O/GFfseVCrMSVkZPQtLFgAuUctKRkEFAWGlutQ=
+github.com/infodancer/maildancer/msgstore v0.0.0-20260223074941-9cda8268dd36 h1:GFvJmzGWNOBN4ReedbKynpMlAhF04omt9lJxXR2bvfo=
+github.com/infodancer/maildancer/msgstore v0.0.0-20260223074941-9cda8268dd36/go.mod h1:tYSPy8mPjYYamIdEoABTsx4wdUXESGrBJVnPIfy3lhY=
 github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=

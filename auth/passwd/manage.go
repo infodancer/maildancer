@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -53,7 +54,7 @@ func AddUser(passwdPath, username, password string) error {
 		return err
 	}
 
-	f, err := os.OpenFile(passwdPath, os.O_APPEND|os.O_WRONLY, 0o640)
+	f, err := os.OpenFile(passwdPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o640)
 	if err != nil {
 		return fmt.Errorf("open passwd file: %w", err)
 	}
@@ -82,9 +83,13 @@ func ListUsers(passwdPath string) ([]UserInfo, error) {
 }
 
 // parsePasswd reads the passwd file and returns all user entries.
+// Returns an empty slice if the file does not exist.
 func parsePasswd(passwdPath string) ([]UserInfo, error) {
 	f, err := os.Open(passwdPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("open passwd file: %w", err)
 	}
 	defer func() { _ = f.Close() }()

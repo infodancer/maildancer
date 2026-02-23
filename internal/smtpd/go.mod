@@ -8,7 +8,7 @@ require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.24.0
 	github.com/infodancer/maildancer/auth v0.0.0-20260223075158-6488f6b149df
-	github.com/infodancer/maildancer/msgstore v0.0.0-20260119190950-8397c0fa98ca
+	github.com/infodancer/maildancer/msgstore v0.0.0-20260223100245-e375bb8d1646
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 )
@@ -17,6 +17,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
+	github.com/emersion/go-maildir v0.6.0 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.3 // indirect

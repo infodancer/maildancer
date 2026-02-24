@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,16 +11,25 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
 	"golang.org/x/crypto/argon2"
-
-	"crypto/rand"
-	"encoding/base64"
 
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
 	"github.com/infodancer/maildancer/internal/webadmin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
+
+// passwdMu serializes passwd file access per domain path to prevent concurrent corruption.
+var passwdMu sync.Map // map[string]*sync.Mutex
+
+// lockPasswd returns a per-domain mutex and locks it. The caller must call the returned unlock func.
+func lockPasswd(domainPath string) func() {
+	v, _ := passwdMu.LoadOrStore(domainPath, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 const (
 	// Argon2id parameters matching auth/passwd
@@ -123,13 +134,18 @@ func (h *UserHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	passwdPath := filepath.Join(domainPath, "passwd")
+
+	// Lock per-domain to prevent concurrent passwd corruption.
+	unlock := lockPasswd(domainPath)
 	if userExistsInPasswd(passwdPath, req.Username) {
+		unlock()
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "user already exists"})
 		return
 	}
 
 	hash, err := hashPassword(req.Password)
 	if err != nil {
+		unlock()
 		h.logger.Error("failed to hash password", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
@@ -137,25 +153,33 @@ func (h *UserHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 
 	line := fmt.Sprintf("%s:%s:%s\n", req.Username, hash, req.Username)
 	if err := appendToFile(passwdPath, line); err != nil {
+		unlock()
 		h.logger.Error("failed to write passwd", "error", err)
 		h.logAudit(r, "create_user", req.Username+"@"+domain, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create user"})
 		return
 	}
+	unlock()
 
+	keysGenerated := false
 	if req.GenerateKeys {
 		keysDir := filepath.Join(domainPath, "keys")
 		pub, encPriv, err := keys.GenerateKeypair(req.Password)
 		if err != nil {
 			h.logger.Error("failed to generate keys", "user", req.Username, "error", err)
-			// User was created but key generation failed - log but don't fail
 		} else if err := keys.SaveKeypair(keysDir, req.Username, pub, encPriv); err != nil {
 			h.logger.Error("failed to save keys", "user", req.Username, "error", err)
+		} else {
+			keysGenerated = true
 		}
 	}
 
 	h.logAudit(r, "create_user", req.Username+"@"+domain, "success", "")
-	writeJSON(w, http.StatusCreated, map[string]string{"username": req.Username, "status": "created"})
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"username":       req.Username,
+		"status":         "created",
+		"keys_generated": keysGenerated,
+	})
 }
 
 // HandleDeleteUser removes a user from a domain.
@@ -179,17 +203,22 @@ func (h *UserHandler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	passwdPath := filepath.Join(domainPath, "passwd")
+
+	unlock := lockPasswd(domainPath)
 	if !userExistsInPasswd(passwdPath, username) {
+		unlock()
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
 		return
 	}
 
 	if err := removeUserFromPasswd(passwdPath, username); err != nil {
+		unlock()
 		h.logger.Error("failed to remove user from passwd", "error", err)
 		h.logAudit(r, "delete_user", username+"@"+domain, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete user"})
 		return
 	}
+	unlock()
 
 	// Remove key files if they exist
 	keysDir := filepath.Join(domainPath, "keys")
@@ -239,12 +268,15 @@ func (h *UserHandler) HandleResetPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	unlock := lockPasswd(domainPath)
 	if err := updatePasswordInPasswd(passwdPath, username, hash); err != nil {
+		unlock()
 		h.logger.Error("failed to update password", "error", err)
 		h.logAudit(r, "reset_password", username+"@"+domain, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update password"})
 		return
 	}
+	unlock()
 
 	h.logAudit(r, "reset_password", username+"@"+domain, "success", "")
 	writeJSON(w, http.StatusOK, map[string]string{"username": username, "status": "password_updated"})
@@ -303,6 +335,12 @@ func (h *UserHandler) HandleCreateKeys(w http.ResponseWriter, r *http.Request) {
 	}
 
 	domainPath := filepath.Join(h.domainsPath, domain)
+	passwdPath := filepath.Join(domainPath, "passwd")
+	if !dirExists(domainPath) || !userExistsInPasswd(passwdPath, username) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+		return
+	}
+
 	keysDir := filepath.Join(domainPath, "keys")
 
 	pub, encPriv, err := keys.GenerateKeypair(req.Password)
@@ -483,7 +521,7 @@ func removeUserFromPasswd(path, username string) error {
 		}
 	}
 
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o640)
+	return writePasswdFile(path, lines)
 }
 
 // updatePasswordInPasswd updates the hash for a user in the passwd file.
@@ -512,7 +550,20 @@ func updatePasswordInPasswd(path, username, newHash string) error {
 		}
 	}
 
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o640)
+	return writePasswdFile(path, lines)
+}
+
+// writePasswdFile writes lines to a passwd file with a trailing newline.
+func writePasswdFile(path string, lines []string) error {
+	// Strip trailing empty lines that result from splitting a newline-terminated file.
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	data := strings.Join(lines, "\n")
+	if data != "" {
+		data += "\n"
+	}
+	return os.WriteFile(path, []byte(data), 0o640)
 }
 
 // appendToFile appends text to a file.

@@ -356,6 +356,11 @@ func (h *WebHandler) HandleUserStats(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("name")
 	username := r.PathValue("username")
 
+	if !isValidDomainName(domain) || !isValidUsername(username) {
+		http.Error(w, "invalid parameters", http.StatusBadRequest)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.render.RenderPartial(w, "user-stats", struct {
 		Username  string
@@ -364,5 +369,4 @@ func (h *WebHandler) HandleUserStats(w http.ResponseWriter, r *http.Request) {
 	}{username, 0, "-"}); err != nil {
 		_, _ = w.Write([]byte("-"))
 	}
-	_ = domain
 }

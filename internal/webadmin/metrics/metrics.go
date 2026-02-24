@@ -1,6 +1,10 @@
 package metrics
 
-import "github.com/prometheus/client_golang/prometheus"
+import (
+	"errors"
+
+	"github.com/prometheus/client_golang/prometheus"
+)
 
 var (
 	// AdminAuthAttempts counts login attempts. Labels: status ("success"/"failure")
@@ -79,7 +83,11 @@ func Register(reg prometheus.Registerer) error {
 		AuditLogEntries,
 	} {
 		if err := reg.Register(c); err != nil {
-			return err
+			var are prometheus.AlreadyRegisteredError
+			if !errors.As(err, &are) {
+				return err
+			}
+			// Collector already registered (e.g., in tests) — this is fine.
 		}
 	}
 

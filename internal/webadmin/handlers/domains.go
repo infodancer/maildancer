@@ -496,11 +496,11 @@ func extractTOMLValue(content, key, section string) string {
 			inSection = true
 			continue
 		}
-		if strings.HasPrefix(trimmed, "[") {
+		if strings.HasPrefix(trimmed, "[[") || (strings.HasPrefix(trimmed, "[") && !strings.HasPrefix(trimmed, "[[")) {
 			inSection = false
 			continue
 		}
-		if inSection && strings.HasPrefix(trimmed, key+" ") || inSection && strings.HasPrefix(trimmed, key+"=") {
+		if inSection && (strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=")) {
 			parts := strings.SplitN(trimmed, "=", 2)
 			if len(parts) == 2 {
 				val := strings.TrimSpace(parts[1])

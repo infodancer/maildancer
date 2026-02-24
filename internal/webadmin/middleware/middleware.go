@@ -5,10 +5,13 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/infodancer/maildancer/internal/webadmin/audit"
+	"github.com/infodancer/maildancer/internal/webadmin/rbac"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
 // RequireAuth redirects unauthenticated requests to /login.
+// It also injects the admin username into the request context for audit logging.
 func RequireAuth(store *session.Store, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -20,7 +23,8 @@ func RequireAuth(store *session.Store, logger *slog.Logger) func(http.Handler) h
 				http.Redirect(w, r, "/login", http.StatusSeeOther)
 				return
 			}
-			next.ServeHTTP(w, r)
+			ctx := audit.WithAdmin(r.Context(), sess.Username)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -55,6 +59,53 @@ func RequireCSRF(store *session.Store, logger *slog.Logger) func(http.Handler) h
 	}
 }
 
+// RequireDomainAccess checks that the authenticated user has RBAC access to the domain
+// extracted from the named path value. If roles is nil, all access is allowed.
+func RequireDomainAccess(store *session.Store, roles *rbac.RoleStore, domainParam string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if roles == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			sess := store.Get(r)
+			if sess == nil {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			domain := r.PathValue(domainParam)
+			if domain != "" && !roles.IsSuperAdmin(sess.Username) && !roles.CanAccessDomain(sess.Username, domain) {
+				http.Error(w, "Forbidden: insufficient domain access", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequireSuperAdmin checks that the authenticated user has super_admin role.
+// If roles is nil (no roles file configured), all authenticated users are allowed.
+func RequireSuperAdmin(store *session.Store, roles *rbac.RoleStore) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if roles == nil {
+				next.ServeHTTP(w, r)
+				return
+			}
+			sess := store.Get(r)
+			if sess == nil {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+			if !roles.IsSuperAdmin(sess.Username) {
+				http.Error(w, "Forbidden: super_admin required", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // SecurityHeaders adds standard security headers to all responses.
 func SecurityHeaders(next http.Handler) http.Handler {
 	return SecurityHeadersWithHSTS(false)(next)
@@ -67,11 +118,11 @@ func SecurityHeadersWithHSTS(tlsEnabled bool) func(http.Handler) http.Handler {
 			w.Header().Set("X-Content-Type-Options", "nosniff")
 			w.Header().Set("X-Frame-Options", "DENY")
 			w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-			// CSP compatible with Pico CSS (CDN) and HTMX (CDN + json-enc extension)
+			// CSP: allows HTMX (unpkg), Chart.js and Pico CSS (jsdelivr), inline styles/scripts for templates
 			w.Header().Set("Content-Security-Policy",
 				"default-src 'self'; "+
 					"style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "+
-					"script-src 'self' https://unpkg.com; "+
+					"script-src 'self' https://unpkg.com https://cdn.jsdelivr.net 'unsafe-inline'; "+
 					"img-src 'self' data:; "+
 					"font-src 'self'")
 			if tlsEnabled {

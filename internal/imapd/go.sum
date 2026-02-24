@@ -1,3 +1,5 @@
+git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9 h1:MaPyH1+nMX0azKxKQ+X6IiFWTlQokcKO5DKchAR9x5A=
+git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9/go.mod h1:ewD6qhJ+zMwEeAElDEJOYYdkpxZSHRodJwq9Z0OG30w=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
@@ -15,10 +17,10 @@ github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 h1:oP4q0fw+fOSWn3
 github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6/go.mod h1:iL2twTeMvZnrg54ZoPDNfJaJaqy0xIQFuBdrLsmspwQ=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
-github.com/infodancer/maildancer/auth v0.0.0-20260216002318-4966de2ee2e7 h1:rQPqF3rZj35qq5aB6IA1ITooFJfwFOUGuM65C6cBk8w=
-github.com/infodancer/maildancer/auth v0.0.0-20260216002318-4966de2ee2e7/go.mod h1:W1e8Vl2E4m0idnY/+H+CDJCoqxD2mnPc8kfI7SRNLXE=
-github.com/infodancer/maildancer/msgstore v0.0.0-20260119190950-8397c0fa98ca h1:vFKaO6G7lV9nH9YcCUn3GKCiyy/0ZzRusbefOw/Mve0=
-github.com/infodancer/maildancer/msgstore v0.0.0-20260119190950-8397c0fa98ca/go.mod h1:rAI37O/GFfseVCrMSVkZPQtLFgAuUctKRkEFAWGlutQ=
+github.com/infodancer/maildancer/auth v0.1.2 h1:F51ZBrjlecJ5v0WLJyzJcaDU6C/oDrHkORm5tpWl36g=
+github.com/infodancer/maildancer/auth v0.1.2/go.mod h1:rMMSXMH8icBAACj40geMonedM5WBIcE1MUxvN9AJagg=
+github.com/infodancer/maildancer/msgstore v0.1.0 h1:f4p/xxBUGgVE//iHWkJQw044gPaIf0JF9MxghTdCBKs=
+github.com/infodancer/maildancer/msgstore v0.1.0/go.mod h1:koJxoBZnPilimtfw0lSOVmP7nF52ONdwcbgQjNuqci8=
 github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
 github.com/kr/pretty v0.3.1 h1:flRD4NNwYAUpkphVc1HcthR4KEIFJ65n8Mw5qdRn3LE=
@@ -69,8 +71,8 @@ golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1/go.mod h1:oPkhp1MJrh7nUepCBc
 golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.5.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
-golang.org/x/sys v0.40.0 h1:DBZZqJ2Rkml6QMQsZywtnjnnGvHza6BTfYFWY9kjEWQ=
-golang.org/x/sys v0.40.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
+golang.org/x/sys v0.41.0 h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=
+golang.org/x/sys v0.41.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=
 golang.org/x/term v0.0.0-20210927222741-03fcf44c2211/go.mod h1:jbD1KX2456YbFQfuXm/mYQcufACuNUgVhRMnK/tPxf8=
 golang.org/x/term v0.5.0/go.mod h1:jMB1sMXY+tzblOD4FWmEbocvup2/aLOaQEp7JmGp78k=

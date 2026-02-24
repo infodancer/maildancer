@@ -1,0 +1,107 @@
+// Package config handles TOML configuration for the webadmin server.
+package config
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/pelletier/go-toml/v2"
+)
+
+// Config is the top-level configuration structure.
+type Config struct {
+	WebAdmin WebAdminConfig `toml:"webadmin"`
+}
+
+// WebAdminConfig holds all webadmin-specific settings.
+type WebAdminConfig struct {
+	// ListenAddress is the address to listen on (default: "localhost:8080").
+	ListenAddress string `toml:"listen_address"`
+
+	// DomainsPath is the base directory containing per-domain config directories.
+	DomainsPath string `toml:"domains_path"`
+
+	// LogLevel controls logging verbosity (debug, info, warn, error).
+	LogLevel string `toml:"log_level"`
+
+	// TLS holds optional TLS configuration.
+	TLS TLSConfig `toml:"tls"`
+
+	// Auth holds admin authentication configuration.
+	Auth AuthConfig `toml:"auth"`
+
+	// Session holds session management configuration.
+	Session SessionConfig `toml:"session"`
+}
+
+// TLSConfig holds TLS certificate configuration.
+type TLSConfig struct {
+	// CertFile is the path to the TLS certificate file.
+	CertFile string `toml:"cert_file"`
+
+	// KeyFile is the path to the TLS private key file.
+	KeyFile string `toml:"key_file"`
+}
+
+// AuthConfig holds admin authentication settings.
+type AuthConfig struct {
+	// PasswdFile is the path to the admin passwd file.
+	PasswdFile string `toml:"passwd_file"`
+}
+
+// SessionConfig holds session management settings.
+type SessionConfig struct {
+	// TimeoutMinutes is the session timeout in minutes (default: 30).
+	TimeoutMinutes int `toml:"timeout_minutes"`
+}
+
+// Defaults applies default values to unset fields.
+func (c *Config) Defaults() {
+	if c.WebAdmin.ListenAddress == "" {
+		c.WebAdmin.ListenAddress = "localhost:8080"
+	}
+	if c.WebAdmin.LogLevel == "" {
+		c.WebAdmin.LogLevel = "info"
+	}
+	if c.WebAdmin.Session.TimeoutMinutes == 0 {
+		c.WebAdmin.Session.TimeoutMinutes = 30
+	}
+}
+
+// Validate checks the configuration for required fields.
+func (c *Config) Validate() error {
+	if c.WebAdmin.DomainsPath == "" {
+		return fmt.Errorf("webadmin.domains_path is required")
+	}
+	if c.WebAdmin.Auth.PasswdFile == "" {
+		return fmt.Errorf("webadmin.auth.passwd_file is required")
+	}
+	if c.WebAdmin.TLS.CertFile != "" && c.WebAdmin.TLS.KeyFile == "" {
+		return fmt.Errorf("webadmin.tls.key_file is required when cert_file is set")
+	}
+	if c.WebAdmin.TLS.KeyFile != "" && c.WebAdmin.TLS.CertFile == "" {
+		return fmt.Errorf("webadmin.tls.cert_file is required when key_file is set")
+	}
+	return nil
+}
+
+// TLSEnabled returns whether TLS is configured.
+func (c *WebAdminConfig) TLSEnabled() bool {
+	return c.TLS.CertFile != "" && c.TLS.KeyFile != ""
+}
+
+// Load reads and parses a TOML configuration file.
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config file: %w", err)
+	}
+
+	var cfg Config
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse config file: %w", err)
+	}
+
+	cfg.Defaults()
+	return &cfg, nil
+}

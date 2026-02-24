@@ -1,0 +1,17 @@
+# Web Admin Configuration
+
+[webadmin]
+listen_address = "localhost:8080"
+domains_path = "/etc/mail/domains"
+log_level = "info"
+
+[webadmin.auth]
+passwd_file = "/etc/mail/admin-passwd"
+
+[webadmin.session]
+timeout_minutes = 30
+
+# Optional TLS configuration
+# [webadmin.tls]
+# cert_file = "/etc/ssl/certs/mail.pem"
+# key_file = "/etc/ssl/private/mail.key"

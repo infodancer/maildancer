@@ -1,0 +1,16 @@
+{{define "title"}}Login{{end}}
+{{define "content"}}
+<article style="max-width:400px;margin:2rem auto">
+  <header><h2>Admin Login</h2></header>
+  {{if .Error}}
+  <div class="flash flash-error">{{.Error}}</div>
+  {{end}}
+  <form method="post" action="/login">
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" required autofocus>
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" required>
+    <button type="submit">Login</button>
+  </form>
+</article>
+{{end}}

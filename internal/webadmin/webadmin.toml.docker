@@ -1,0 +1,18 @@
+# Docker configuration for webadmin
+# Bind 0.0.0.0 so the container port is reachable from the host.
+
+[webadmin]
+listen_address = "0.0.0.0:8080"
+domains_path = "/var/mail/domains"
+log_level = "info"
+
+[webadmin.auth]
+passwd_file = "/etc/webadmin/admin-passwd"
+
+[webadmin.session]
+timeout_minutes = 30
+
+# Optional TLS — uncomment and mount certs via docker-compose volumes.
+# [webadmin.tls]
+# cert_file = "/etc/ssl/certs/mail.pem"
+# key_file = "/etc/ssl/private/mail.key"

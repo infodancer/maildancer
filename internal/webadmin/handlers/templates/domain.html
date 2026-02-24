@@ -1,0 +1,81 @@
+{{define "title"}}{{.Data.Domain.Name}}{{end}}
+{{define "content"}}
+<nav aria-label="breadcrumb">
+  <ul>
+    <li><a href="/">Domains</a></li>
+    <li>{{.Data.Domain.Name}}</li>
+  </ul>
+</nav>
+
+<hgroup>
+  <h1>{{.Data.Domain.Name}}</h1>
+  <p>{{.Data.Domain.UserCount}} user{{if ne .Data.Domain.UserCount 1}}s{{end}} &middot; Auth: {{.Data.Domain.AuthType}} &middot; Store: {{.Data.Domain.StoreType}}</p>
+</hgroup>
+
+<h2>Users</h2>
+<div style="margin-bottom:1rem">
+  <button hx-get="/ui/domains/{{.Data.Domain.Name}}/users/new" hx-target="#create-user-form" hx-swap="innerHTML">Add User</button>
+</div>
+<div id="create-user-form"></div>
+
+{{if .Data.Users}}
+<table>
+  <thead>
+    <tr>
+      <th>Username</th>
+      <th>Encryption</th>
+      <th>Messages</th>
+      <th>Size</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody id="user-list">
+    {{range .Data.Users}}
+    <tr id="user-{{.Username}}">
+      <td>{{.Username}}</td>
+      <td>
+        {{if .EncryptionEnabled}}
+        <kbd class="badge badge-yes">encrypted</kbd>
+        {{else}}
+        <kbd class="badge badge-no">plain</kbd>
+        {{end}}
+      </td>
+      <td class="stats-cell"
+          hx-get="/ui/domains/{{$.Data.Domain.Name}}/users/{{.Username}}/stats"
+          hx-trigger="load"
+          hx-swap="innerHTML">
+        <span aria-busy="true"></span>
+      </td>
+      <td class="stats-cell" id="size-{{.Username}}">-</td>
+      <td class="actions">
+        <button class="outline" style="padding:0.25em 0.5em;font-size:0.875rem"
+                hx-get="/ui/domains/{{$.Data.Domain.Name}}/users/{{.Username}}/reset-password"
+                hx-target="#user-{{.Username}}"
+                hx-swap="afterend">Password</button>
+        {{if .EncryptionEnabled}}
+        <button class="outline secondary" style="padding:0.25em 0.5em;font-size:0.875rem"
+                hx-delete="/api/domains/{{$.Data.Domain.Name}}/users/{{.Username}}/keys"
+                hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
+                hx-confirm="Remove encryption keys for {{.Username}}?"
+                hx-target="#user-{{.Username}}"
+                hx-swap="outerHTML"
+                hx-on::after-request="location.reload()">Keys</button>
+        {{else}}
+        <button class="outline" style="padding:0.25em 0.5em;font-size:0.875rem"
+                hx-get="/ui/domains/{{$.Data.Domain.Name}}/users/{{.Username}}/generate-keys"
+                hx-target="#user-{{.Username}}"
+                hx-swap="afterend">Keys</button>
+        {{end}}
+        <button class="outline secondary" style="padding:0.25em 0.5em;font-size:0.875rem"
+                hx-get="/ui/domains/{{$.Data.Domain.Name}}/users/{{.Username}}/confirm-delete"
+                hx-target="#user-{{.Username}}"
+                hx-swap="afterend">Delete</button>
+      </td>
+    </tr>
+    {{end}}
+  </tbody>
+</table>
+{{else}}
+<p>No users in this domain. Add one to get started.</p>
+{{end}}
+{{end}}

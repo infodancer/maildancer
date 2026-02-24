@@ -22,3 +22,8 @@ timeout_minutes = 30
 # [webadmin.tls]
 # cert_file = "/etc/ssl/certs/mail.pem"
 # key_file = "/etc/ssl/private/mail.key"
+
+# Optional: path to a shared rspamd settings file.
+# webadmin reads and writes this file; smtpd reads it for rspamd connection settings.
+# Both services must point to the same file.
+# rspamd_file = "/etc/mail/rspamd.toml"

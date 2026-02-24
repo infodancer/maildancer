@@ -125,6 +125,8 @@ func (s *Server) registerRoutes() {
 	statsHandler := handlers.NewStatsHandler(s.cfg.DomainsPath, s.sessions, s.logger, nil)
 	webHandler := handlers.NewWebHandler(s.cfg.DomainsPath, s.sessions, s.logger, currentRoles)
 	dashboardHandler := handlers.NewDashboardHandler(s.cfg.DomainsPath, s.sessions, s.logger)
+	rspamdHandler := handlers.NewRspamdHandler(s.cfg.RspamdFile, s.sessions, s.logger)
+	webHandler.SetRspamdFile(s.cfg.RspamdFile)
 
 	requireAuth := middleware.RequireAuth(s.sessions, s.logger)
 	requireCSRF := middleware.RequireCSRF(s.sessions, s.logger)
@@ -275,6 +277,22 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("GET /api/domains/{domain}/users/{username}/stats", middleware.Chain(
 		http.HandlerFunc(statsHandler.HandleGetStats),
 		requireAuth, requireDomainAccessByDomain,
+	))
+
+	// Rspamd settings API
+	s.mux.Handle("GET /api/rspamd", middleware.Chain(
+		http.HandlerFunc(rspamdHandler.HandleGetRspamd),
+		requireAuth,
+	))
+	s.mux.Handle("POST /api/rspamd", middleware.Chain(
+		http.HandlerFunc(rspamdHandler.HandleSetRspamd),
+		requireAuth, requireCSRF, requireSuperAdmin,
+	))
+
+	// Settings UI page
+	s.mux.Handle("GET /settings", middleware.Chain(
+		http.HandlerFunc(webHandler.HandleSettings),
+		requireAuth,
 	))
 
 	// Audit log API (super_admin only)

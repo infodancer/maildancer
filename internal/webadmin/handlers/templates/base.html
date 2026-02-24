@@ -29,6 +29,7 @@
     <ul><li><a href="/"><strong>Mail Admin</strong></a></li></ul>
     <ul>
       {{if .Username}}
+      <li><a href="/settings" class="secondary">Settings</a></li>
       <li>{{.Username}}</li>
       <li>
         <form method="post" action="/logout" style="margin:0">

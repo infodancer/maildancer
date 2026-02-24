@@ -1,0 +1,49 @@
+{{define "title"}}Settings{{end}}
+{{define "content"}}
+<hgroup>
+  <h1>Settings</h1>
+  <p>Server configuration</p>
+</hgroup>
+
+<h2>Spam Filter</h2>
+<article>
+  <header>
+    <strong>rspamd</strong>
+    {{if .Data.Rspamd.URL}}
+    &mdash; <a href="{{.Data.Rspamd.URL}}" target="_blank" rel="noopener noreferrer">Open rspamd admin</a>
+    {{end}}
+  </header>
+
+  {{if .Data.IsSuperAdmin}}
+  <form hx-post="/api/rspamd" hx-target="#rspamd-result" hx-swap="innerHTML"
+        hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-on::after-request="if(event.detail.successful) showFlash('Settings saved', 'success')">
+    <div class="grid">
+      <label>
+        URL
+        <input type="url" name="url" value="{{.Data.Rspamd.URL}}"
+               placeholder="http://localhost:11334" required>
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" placeholder="{{if .Data.Rspamd.HasPassword}}(unchanged){{else}}optional{{end}}">
+      </label>
+    </div>
+    <small>Leave password blank to keep the existing value.</small>
+    <div class="grid" style="margin-top:1rem">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+  <div id="rspamd-result"></div>
+  {{else}}
+  <p>
+    {{if .Data.Rspamd.URL}}
+    URL: <code>{{.Data.Rspamd.URL}}</code> &mdash;
+    Password: {{if .Data.Rspamd.HasPassword}}<kbd class="badge badge-yes">set</kbd>{{else}}<kbd class="badge badge-no">not set</kbd>{{end}}
+    {{else}}
+    <em>Not configured. Ask a super_admin to set the rspamd URL.</em>
+    {{end}}
+  </p>
+  {{end}}
+</article>
+{{end}}

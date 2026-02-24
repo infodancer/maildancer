@@ -35,6 +35,11 @@ type WebAdminConfig struct {
 
 	// Audit holds audit logging configuration.
 	Audit AuditConfig `toml:"audit"`
+
+	// RspamdFile is the optional path to a TOML file storing rspamd connection
+	// settings (url and password). Shared with smtpd so that webadmin can manage
+	// the settings and smtpd can read them.
+	RspamdFile string `toml:"rspamd_file"`
 }
 
 // TLSConfig holds TLS certificate configuration.

@@ -13,6 +13,12 @@ import (
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
+// uiRspamdSettings holds rspamd display data for the settings page.
+type uiRspamdSettings struct {
+	URL         string
+	HasPassword bool
+}
+
 // uiDomainRow holds domain data for dashboard rendering.
 type uiDomainRow struct {
 	Name      string
@@ -35,6 +41,7 @@ type WebHandler struct {
 	logger      *slog.Logger
 	render      *Renderer
 	roles       *rbac.RoleStore
+	rspamdFile  string // path to rspamd.toml for display on settings page
 }
 
 // NewWebHandler creates a new web UI handler.
@@ -47,6 +54,12 @@ func NewWebHandler(domainsPath string, sessions *session.Store, logger *slog.Log
 		render:      NewRenderer(),
 		roles:       roles,
 	}
+}
+
+// SetRspamdFile sets the path to rspamd.toml so the settings page can show
+// the current rspamd URL. Called after construction when the config is available.
+func (h *WebHandler) SetRspamdFile(path string) {
+	h.rspamdFile = path
 }
 
 // pageData builds common PageData from the request session.
@@ -348,6 +361,32 @@ func (h *WebHandler) HandleGenerateDomainKeysForm(w http.ResponseWriter, r *http
 		CSRFToken string
 	}{domain, csrfToken}); err != nil {
 		h.logger.Error("failed to render partial", "error", err)
+	}
+}
+
+// HandleSettings renders the settings page (rspamd connection, etc.).
+func (h *WebHandler) HandleSettings(w http.ResponseWriter, r *http.Request) {
+	// Load rspamd settings for display (read-only; writes go through /api/rspamd).
+	rspamd := uiRspamdSettings{}
+	if h.rspamdFile != "" {
+		if rh := NewRspamdHandler(h.rspamdFile, h.sessions, h.logger); rh != nil {
+			if s, err := rh.loadSettings(); err == nil {
+				rspamd.URL = s.URL
+				rspamd.HasPassword = s.Password != ""
+			}
+		}
+	}
+
+	isSuperAdmin := h.roles == nil || h.roles.IsSuperAdmin(h.currentUsername(r))
+	pd := h.pageData(r, struct {
+		IsSuperAdmin bool
+		Rspamd       uiRspamdSettings
+	}{
+		IsSuperAdmin: isSuperAdmin,
+		Rspamd:       rspamd,
+	})
+	if err := h.render.Render(w, "settings", pd); err != nil {
+		h.logger.Error("failed to render settings page", "error", err)
 	}
 }
 

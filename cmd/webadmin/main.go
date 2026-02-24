@@ -54,9 +54,13 @@ func main() {
 		}
 	}()
 
-	srv := server.New(cfg.WebAdmin, server.Deps{
+	srv, err := server.New(cfg.WebAdmin, server.Deps{
 		AuthAgent: authAgent,
 	}, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating server: %v\n", err)
+		os.Exit(1)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

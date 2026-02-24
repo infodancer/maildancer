@@ -22,17 +22,23 @@ func (m *mockAuthAgent) Authenticate(_ context.Context, _, _ string) (*auth.Auth
 func (m *mockAuthAgent) UserExists(_ context.Context, _ string) (bool, error) { return false, nil }
 func (m *mockAuthAgent) Close() error                                         { return nil }
 
-func testServer() *Server {
+func testServer(t *testing.T) *Server {
+	t.Helper()
 	cfg := config.WebAdminConfig{
 		ListenAddress: "localhost:0",
+		DomainsPath:   t.TempDir(),
 		Session:       config.SessionConfig{TimeoutMinutes: 30},
 	}
 	deps := Deps{AuthAgent: &mockAuthAgent{}}
-	return New(cfg, deps, slog.Default())
+	srv, err := New(cfg, deps, slog.Default())
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
+	return srv
 }
 
 func TestServerStartStop(t *testing.T) {
-	srv := testServer()
+	srv := testServer(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -49,7 +55,7 @@ func TestServerStartStop(t *testing.T) {
 }
 
 func TestHealthHandler(t *testing.T) {
-	srv := testServer()
+	srv := testServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rr := httptest.NewRecorder()
@@ -64,7 +70,7 @@ func TestHealthHandler(t *testing.T) {
 }
 
 func TestLoginPageRendered(t *testing.T) {
-	srv := testServer()
+	srv := testServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/login", nil)
 	rr := httptest.NewRecorder()
@@ -76,7 +82,7 @@ func TestLoginPageRendered(t *testing.T) {
 }
 
 func TestDashboardRequiresAuth(t *testing.T) {
-	srv := testServer()
+	srv := testServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rr := httptest.NewRecorder()

@@ -32,6 +32,9 @@ type WebAdminConfig struct {
 
 	// Session holds session management configuration.
 	Session SessionConfig `toml:"session"`
+
+	// Audit holds audit logging configuration.
+	Audit AuditConfig `toml:"audit"`
 }
 
 // TLSConfig holds TLS certificate configuration.
@@ -47,6 +50,17 @@ type TLSConfig struct {
 type AuthConfig struct {
 	// PasswdFile is the path to the admin passwd file.
 	PasswdFile string `toml:"passwd_file"`
+
+	// RolesFile is the optional path to roles.toml for RBAC.
+	// If empty, all authenticated admins are treated as super_admin.
+	RolesFile string `toml:"roles_file"`
+}
+
+// AuditConfig holds audit logging settings.
+type AuditConfig struct {
+	// LogFile is the path to write JSON audit log lines.
+	// If empty, audit events go to slog only.
+	LogFile string `toml:"log_file"`
 }
 
 // SessionConfig holds session management settings.

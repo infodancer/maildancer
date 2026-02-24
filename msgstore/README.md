@@ -55,11 +55,18 @@ type MessageStore interface {
 }
 ```
 
-## Encryption
+## Planned Storage Backends
 
-msgstore supports encrypted message storage as a pure blob store. **msgstore never sees decrypted data** - encryption and decryption are the responsibility of the protocol daemons.
+- Maildir (current implementation)
+- Database-backed storage (future)
 
-### Security Boundaries
+## Planned Features
+
+### End-to-End Encryption
+
+The intended design treats msgstore as a pure blob store — **msgstore never sees decrypted data**. Encryption and decryption are the responsibility of the protocol daemons, using the recipient's keys from the `auth` module.
+
+Intended security boundaries:
 
 | Component | Responsibility |
 |-----------|---------------|
@@ -68,7 +75,7 @@ msgstore supports encrypted message storage as a pure blob store. **msgstore nev
 | pop3d | Decrypts messages using user's private key after retrieval |
 | automation | Connects as a client with its own keypair |
 
-### Data Flow
+Intended data flow:
 
 ```
 ┌────────────────────────────────────────────────────────────────┐
@@ -84,9 +91,7 @@ msgstore supports encrypted message storage as a pure blob store. **msgstore nev
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### Encryption Metadata
-
-The `Envelope.Encryption` field tracks encryption state:
+The planned algorithm is X25519 key exchange with XSalsa20-Poly1305 authenticated encryption (NaCl/libsodium box). The `Envelope.Encryption` field is reserved for this metadata:
 
 ```go
 type EncryptionInfo struct {
@@ -95,25 +100,23 @@ type EncryptionInfo struct {
 }
 ```
 
-### Protocol Support
+Note: IMAP SEARCH/SORT require plaintext access and are incompatible with encrypted storage; IMAP support will require a separate design.
 
-| Protocol | Status | Notes |
-|----------|--------|-------|
-| POP3 | Supported | Full message retrieval, client decrypts |
-| IMAP | Deferred | SEARCH/SORT require plaintext access |
+### Sieve Filtering
 
-### Automation Services
+Sieve script evaluation (RFC 5228) is planned for per-user mail filtering rules. The current implementation parses Sieve scripts but does not evaluate them; delivery falls through to default routing. Full evaluation support is a future milestone.
 
-Automation services (mailing lists, etc.) operate as clients with their own keypairs. They retrieve encrypted messages, decrypt with their service key, process, re-encrypt for each recipient, and deliver back through msgstore.
+## Concurrency
 
-### Recommended Algorithm
+### Delivery
 
-X25519 key exchange with XSalsa20-Poly1305 authenticated encryption (NaCl/libsodium box).
+Concurrent delivery to the same mailbox from multiple goroutines or processes is safe. The Maildir format guarantees atomicity through unique filename generation and atomic filesystem rename; no additional locking is required at the msgstore layer.
 
-## Planned Storage Backends
+### Retrieval and Deletion
 
-- Maildir (initial implementation)
-- Database-backed storage (future)
+Soft-delete state (marking messages for deletion before `Expunge`) is tracked in memory and protected by a per-`MaildirStore` mutex. This state is **not shared across instances** — each `MaildirStore` opened independently (e.g., in separate processes) maintains its own deletion tracking. Protocol-level locking (such as POP3's exclusive mailbox lock during a session) is the responsibility of the daemon, not msgstore.
+
+`Expunge` permanently removes deleted messages from disk and is safe to call from a single goroutine within a session. Concurrent `Expunge` calls across sessions against the same mailbox are not recommended without external coordination.
 
 ## Observability
 

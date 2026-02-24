@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	"html"
 	"log/slog"
 	"net/http"
 
@@ -95,7 +96,7 @@ func writeLoginPage(w http.ResponseWriter, username, errorMsg string) {
 
 	errHTML := ""
 	if errorMsg != "" {
-		errHTML = `<p style="color: var(--pico-del-color);">` + errorMsg + `</p>`
+		errHTML = `<p style="color: var(--pico-del-color);">` + html.EscapeString(errorMsg) + `</p>`
 	}
 
 	// Minimal login page using Pico CSS
@@ -116,7 +117,7 @@ func writeLoginPage(w http.ResponseWriter, username, errorMsg string) {
       ` + errHTML + `
       <form method="post" action="/login">
         <label for="username">Username</label>
-        <input type="text" id="username" name="username" value="` + username + `" required autofocus>
+        <input type="text" id="username" name="username" value="` + html.EscapeString(username) + `" required autofocus>
         <label for="password">Password</label>
         <input type="password" id="password" name="password" required>
         <button type="submit">Log In</button>

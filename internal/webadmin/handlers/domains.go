@@ -10,6 +10,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/infodancer/maildancer/internal/webadmin/audit"
+	"github.com/infodancer/maildancer/internal/webadmin/keys"
+	"github.com/infodancer/maildancer/internal/webadmin/rbac"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
@@ -21,14 +24,19 @@ type DomainHandler struct {
 	domainsPath string
 	sessions    *session.Store
 	logger      *slog.Logger
+	roles       *rbac.RoleStore
+	auditLog    *audit.Logger
 }
 
 // NewDomainHandler creates a new domain handler.
-func NewDomainHandler(domainsPath string, sessions *session.Store, logger *slog.Logger) *DomainHandler {
+// roles and auditLog may be nil (RBAC disabled / audit file disabled).
+func NewDomainHandler(domainsPath string, sessions *session.Store, logger *slog.Logger, roles *rbac.RoleStore, auditLog *audit.Logger) *DomainHandler {
 	return &DomainHandler{
 		domainsPath: domainsPath,
 		sessions:    sessions,
 		logger:      logger,
+		roles:       roles,
+		auditLog:    auditLog,
 	}
 }
 
@@ -46,6 +54,14 @@ type DomainDetail struct {
 	UserCount int    `json:"user_count"`
 }
 
+// DomainKeyStatus is the JSON response for GET /api/domains/{name}/keys.
+type DomainKeyStatus struct {
+	Exists      bool   `json:"exists"`
+	Algorithm   string `json:"algorithm,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	HasPrivate  bool   `json:"has_private"`
+}
+
 // HandleListDomains returns a JSON list of configured domains.
 func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request) {
 	domains, err := h.listDomains()
@@ -53,6 +69,31 @@ func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request
 		h.logger.Error("failed to list domains", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list domains"})
 		return
+	}
+
+	// Filter by RBAC if configured
+	if h.roles != nil {
+		username := audit.AdminFromContext(r.Context())
+		names := make([]string, len(domains))
+		for i, d := range domains {
+			names[i] = d.Name
+		}
+		allowed := h.roles.FilterDomains(username, names)
+		allowedSet := make(map[string]bool, len(allowed))
+		for _, n := range allowed {
+			allowedSet[n] = true
+		}
+		filtered := domains[:0]
+		for _, d := range domains {
+			if allowedSet[d.Name] {
+				filtered = append(filtered, d)
+			}
+		}
+		domains = filtered
+	}
+
+	if domains == nil {
+		domains = []DomainSummary{}
 	}
 	writeJSON(w, http.StatusOK, domains)
 }
@@ -62,6 +103,11 @@ func (h *DomainHandler) HandleGetDomain(w http.ResponseWriter, r *http.Request) 
 	name := r.PathValue("name")
 	if !isValidDomainName(name) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid domain name"})
+		return
+	}
+
+	if err := h.checkDomainAccess(r, name); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -83,6 +129,15 @@ func (h *DomainHandler) HandleGetDomain(w http.ResponseWriter, r *http.Request) 
 
 // HandleCreateDomain creates a new domain directory with default config.
 func (h *DomainHandler) HandleCreateDomain(w http.ResponseWriter, r *http.Request) {
+	// Only super_admins can create domains
+	if h.roles != nil {
+		username := audit.AdminFromContext(r.Context())
+		if !h.roles.IsSuperAdmin(username) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "super_admin required to create domains"})
+			return
+		}
+	}
+
 	var req struct {
 		Name string `json:"name"`
 	}
@@ -106,20 +161,12 @@ func (h *DomainHandler) HandleCreateDomain(w http.ResponseWriter, r *http.Reques
 
 	if err := h.createDomain(req.Name, domainPath); err != nil {
 		h.logger.Error("failed to create domain", "domain", req.Name, "error", err)
+		h.logAudit(r, "create_domain", req.Name, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create domain"})
 		return
 	}
 
-	sess := h.sessions.Get(r)
-	admin := ""
-	if sess != nil {
-		admin = sess.Username
-	}
-	h.logger.Info("domain created",
-		slog.String("domain", req.Name),
-		slog.String("admin", admin),
-		slog.String("remote", r.RemoteAddr))
-
+	h.logAudit(r, "create_domain", req.Name, "success", "")
 	writeJSON(w, http.StatusCreated, map[string]string{"name": req.Name, "status": "created"})
 }
 
@@ -129,6 +176,15 @@ func (h *DomainHandler) HandleDeleteDomain(w http.ResponseWriter, r *http.Reques
 	if !isValidDomainName(name) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid domain name"})
 		return
+	}
+
+	// Only super_admins can delete domains
+	if h.roles != nil {
+		username := audit.AdminFromContext(r.Context())
+		if !h.roles.IsSuperAdmin(username) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "super_admin required to delete domains"})
+			return
+		}
 	}
 
 	domainPath := filepath.Join(h.domainsPath, name)
@@ -152,21 +208,159 @@ func (h *DomainHandler) HandleDeleteDomain(w http.ResponseWriter, r *http.Reques
 
 	if err := os.RemoveAll(domainPath); err != nil {
 		h.logger.Error("failed to delete domain", "domain", name, "error", err)
+		h.logAudit(r, "delete_domain", name, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete domain"})
 		return
 	}
 
-	sess := h.sessions.Get(r)
-	admin := ""
-	if sess != nil {
-		admin = sess.Username
-	}
-	h.logger.Info("domain deleted",
-		slog.String("domain", name),
-		slog.String("admin", admin),
-		slog.String("remote", r.RemoteAddr))
-
+	h.logAudit(r, "delete_domain", name, "success", "")
 	writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "deleted"})
+}
+
+// HandleGetDomainKeys returns the key status for a domain.
+func (h *DomainHandler) HandleGetDomainKeys(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !isValidDomainName(name) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid domain name"})
+		return
+	}
+	if err := h.checkDomainAccess(r, name); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+
+	domainPath := filepath.Join(h.domainsPath, name)
+	if !dirExists(domainPath) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+		return
+	}
+
+	keysDir := filepath.Join(domainPath, "keys")
+	pub, err := keys.LoadPublicKey(keysDir, "domain")
+	if err != nil {
+		writeJSON(w, http.StatusOK, DomainKeyStatus{Exists: false})
+		return
+	}
+
+	_, privErr := os.Stat(filepath.Join(keysDir, "domain.key"))
+	writeJSON(w, http.StatusOK, DomainKeyStatus{
+		Exists:      true,
+		Algorithm:   "x25519",
+		Fingerprint: keys.PublicKeyFingerprint(pub),
+		HasPrivate:  privErr == nil,
+	})
+}
+
+// HandleCreateDomainKeys generates a new keypair for a domain.
+func (h *DomainHandler) HandleCreateDomainKeys(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !isValidDomainName(name) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid domain name"})
+		return
+	}
+	if err := h.checkDomainAccess(r, name); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+
+	domainPath := filepath.Join(h.domainsPath, name)
+	if !dirExists(domainPath) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if req.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password is required to encrypt the private key"})
+		return
+	}
+
+	pub, encPriv, err := keys.GenerateKeypair(req.Password)
+	if err != nil {
+		h.logger.Error("failed to generate domain keypair", "domain", name, "error", err)
+		h.logAudit(r, "generate_domain_keys", name, "failure", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
+		return
+	}
+
+	keysDir := filepath.Join(domainPath, "keys")
+	if err := keys.SaveKeypair(keysDir, "domain", pub, encPriv); err != nil {
+		h.logger.Error("failed to save domain keypair", "domain", name, "error", err)
+		h.logAudit(r, "generate_domain_keys", name, "failure", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save keys"})
+		return
+	}
+
+	h.logAudit(r, "generate_domain_keys", name, "success", "")
+	writeJSON(w, http.StatusCreated, map[string]string{"domain": name, "status": "keys_generated", "fingerprint": keys.PublicKeyFingerprint(pub)})
+}
+
+// HandleDeleteDomainKeys removes the domain keypair.
+func (h *DomainHandler) HandleDeleteDomainKeys(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !isValidDomainName(name) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid domain name"})
+		return
+	}
+	if err := h.checkDomainAccess(r, name); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+
+	domainPath := filepath.Join(h.domainsPath, name)
+	if !dirExists(domainPath) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+		return
+	}
+
+	keysDir := filepath.Join(domainPath, "keys")
+	if err := keys.DeleteKeypair(keysDir, "domain"); err != nil {
+		h.logger.Error("failed to delete domain keys", "domain", name, "error", err)
+		h.logAudit(r, "delete_domain_keys", name, "failure", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete keys"})
+		return
+	}
+
+	h.logAudit(r, "delete_domain_keys", name, "success", "")
+	writeJSON(w, http.StatusOK, map[string]string{"domain": name, "status": "keys_deleted"})
+}
+
+// checkDomainAccess returns an error if the current user cannot access the domain.
+func (h *DomainHandler) checkDomainAccess(r *http.Request, domain string) error {
+	if h.roles == nil {
+		return nil
+	}
+	username := audit.AdminFromContext(r.Context())
+	if h.roles.IsSuperAdmin(username) || h.roles.CanAccessDomain(username, domain) {
+		return nil
+	}
+	return fmt.Errorf("access denied to domain %s", domain)
+}
+
+// logAudit writes an audit entry via the audit logger (if configured) and slog.
+func (h *DomainHandler) logAudit(r *http.Request, operation, target, result, detail string) {
+	if h.auditLog != nil {
+		h.auditLog.Log(r.Context(), audit.Entry{
+			Operation: operation,
+			Target:    target,
+			Result:    result,
+			Detail:    detail,
+		})
+	} else {
+		admin := audit.AdminFromContext(r.Context())
+		h.logger.Info("audit",
+			slog.String("operation", operation),
+			slog.String("target", target),
+			slog.String("result", result),
+			slog.String("admin", admin),
+			slog.String("remote", r.RemoteAddr))
+	}
 }
 
 // listDomains reads the domains directory and returns summaries.

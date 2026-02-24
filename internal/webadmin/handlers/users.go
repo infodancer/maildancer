@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,9 +11,12 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/nacl/box"
-	"golang.org/x/crypto/nacl/secretbox"
 
+	"crypto/rand"
+	"encoding/base64"
+
+	"github.com/infodancer/maildancer/internal/webadmin/audit"
+	"github.com/infodancer/maildancer/internal/webadmin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
@@ -27,8 +28,7 @@ const (
 	argon2KeyLen  = 32
 
 	// Key encryption constants matching auth/passwd
-	saltSize  = 32
-	nonceSize = 24
+	saltSize = 32
 
 	minPasswordLength = 8
 )
@@ -41,14 +41,17 @@ type UserHandler struct {
 	domainsPath string
 	sessions    *session.Store
 	logger      *slog.Logger
+	auditLog    *audit.Logger
 }
 
 // NewUserHandler creates a new user handler.
-func NewUserHandler(domainsPath string, sessions *session.Store, logger *slog.Logger) *UserHandler {
+// auditLog may be nil (audit file logging disabled).
+func NewUserHandler(domainsPath string, sessions *session.Store, logger *slog.Logger, auditLog *audit.Logger) *UserHandler {
 	return &UserHandler{
 		domainsPath: domainsPath,
 		sessions:    sessions,
 		logger:      logger,
+		auditLog:    auditLog,
 	}
 }
 
@@ -135,19 +138,23 @@ func (h *UserHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	line := fmt.Sprintf("%s:%s:%s\n", req.Username, hash, req.Username)
 	if err := appendToFile(passwdPath, line); err != nil {
 		h.logger.Error("failed to write passwd", "error", err)
+		h.logAudit(r, "create_user", req.Username+"@"+domain, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create user"})
 		return
 	}
 
 	if req.GenerateKeys {
 		keysDir := filepath.Join(domainPath, "keys")
-		if err := generateUserKeys(keysDir, req.Username, req.Password); err != nil {
+		pub, encPriv, err := keys.GenerateKeypair(req.Password)
+		if err != nil {
 			h.logger.Error("failed to generate keys", "user", req.Username, "error", err)
 			// User was created but key generation failed - log but don't fail
+		} else if err := keys.SaveKeypair(keysDir, req.Username, pub, encPriv); err != nil {
+			h.logger.Error("failed to save keys", "user", req.Username, "error", err)
 		}
 	}
 
-	h.logAudit(r, "user_created", slog.String("domain", domain), slog.String("user", req.Username))
+	h.logAudit(r, "create_user", req.Username+"@"+domain, "success", "")
 	writeJSON(w, http.StatusCreated, map[string]string{"username": req.Username, "status": "created"})
 }
 
@@ -179,16 +186,16 @@ func (h *UserHandler) HandleDeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	if err := removeUserFromPasswd(passwdPath, username); err != nil {
 		h.logger.Error("failed to remove user from passwd", "error", err)
+		h.logAudit(r, "delete_user", username+"@"+domain, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete user"})
 		return
 	}
 
 	// Remove key files if they exist
 	keysDir := filepath.Join(domainPath, "keys")
-	_ = os.Remove(filepath.Join(keysDir, username+".pub"))
-	_ = os.Remove(filepath.Join(keysDir, username+".key"))
+	_ = keys.DeleteKeypair(keysDir, username)
 
-	h.logAudit(r, "user_deleted", slog.String("domain", domain), slog.String("user", username))
+	h.logAudit(r, "delete_user", username+"@"+domain, "success", "")
 	writeJSON(w, http.StatusOK, map[string]string{"username": username, "status": "deleted"})
 }
 
@@ -234,11 +241,12 @@ func (h *UserHandler) HandleResetPassword(w http.ResponseWriter, r *http.Request
 
 	if err := updatePasswordInPasswd(passwdPath, username, hash); err != nil {
 		h.logger.Error("failed to update password", "error", err)
+		h.logAudit(r, "reset_password", username+"@"+domain, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update password"})
 		return
 	}
 
-	h.logAudit(r, "password_reset", slog.String("domain", domain), slog.String("user", username))
+	h.logAudit(r, "reset_password", username+"@"+domain, "success", "")
 	writeJSON(w, http.StatusOK, map[string]string{"username": username, "status": "password_updated"})
 }
 
@@ -255,18 +263,20 @@ func (h *UserHandler) HandleGetKeys(w http.ResponseWriter, r *http.Request) {
 	domainPath := filepath.Join(h.domainsPath, domain)
 	keysDir := filepath.Join(domainPath, "keys")
 
-	pubKeyPath := filepath.Join(keysDir, username+".pub")
-	privKeyPath := filepath.Join(keysDir, username+".key")
+	pub, err := keys.LoadPublicKey(keysDir, username)
+	hasKeys := err == nil
+	_, privErr := os.Stat(filepath.Join(keysDir, username+".key"))
 
-	_, pubErr := os.Stat(pubKeyPath)
-	_, privErr := os.Stat(privKeyPath)
-	hasKeys := pubErr == nil && privErr == nil
-
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"username":           username,
 		"encryption_enabled": hasKeys,
-		"has_public_key":     pubErr == nil,
-	})
+		"has_public_key":     hasKeys,
+	}
+	if hasKeys {
+		resp["fingerprint"] = keys.PublicKeyFingerprint(pub)
+		resp["has_private_key"] = privErr == nil
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // HandleCreateKeys generates a new keypair for a user.
@@ -295,18 +305,22 @@ func (h *UserHandler) HandleCreateKeys(w http.ResponseWriter, r *http.Request) {
 	domainPath := filepath.Join(h.domainsPath, domain)
 	keysDir := filepath.Join(domainPath, "keys")
 
-	if err := os.MkdirAll(keysDir, 0o750); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create keys directory"})
-		return
-	}
-
-	if err := generateUserKeys(keysDir, username, req.Password); err != nil {
+	pub, encPriv, err := keys.GenerateKeypair(req.Password)
+	if err != nil {
 		h.logger.Error("failed to generate keys", "user", username, "error", err)
+		h.logAudit(r, "generate_user_keys", username+"@"+domain, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
 		return
 	}
 
-	h.logAudit(r, "keys_generated", slog.String("domain", domain), slog.String("user", username))
+	if err := keys.SaveKeypair(keysDir, username, pub, encPriv); err != nil {
+		h.logger.Error("failed to save keys", "user", username, "error", err)
+		h.logAudit(r, "generate_user_keys", username+"@"+domain, "failure", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save keys"})
+		return
+	}
+
+	h.logAudit(r, "generate_user_keys", username+"@"+domain, "success", "")
 	writeJSON(w, http.StatusCreated, map[string]string{"username": username, "status": "keys_generated"})
 }
 
@@ -323,34 +337,35 @@ func (h *UserHandler) HandleDeleteKeys(w http.ResponseWriter, r *http.Request) {
 	domainPath := filepath.Join(h.domainsPath, domain)
 	keysDir := filepath.Join(domainPath, "keys")
 
-	pubKeyPath := filepath.Join(keysDir, username+".pub")
-	privKeyPath := filepath.Join(keysDir, username+".key")
+	if err := keys.DeleteKeypair(keysDir, username); err != nil {
+		h.logger.Error("failed to delete keys", "user", username, "error", err)
+		h.logAudit(r, "delete_user_keys", username+"@"+domain, "failure", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete keys"})
+		return
+	}
 
-	_ = os.Remove(pubKeyPath)
-	_ = os.Remove(privKeyPath)
-
-	h.logAudit(r, "keys_removed", slog.String("domain", domain), slog.String("user", username))
+	h.logAudit(r, "delete_user_keys", username+"@"+domain, "success", "")
 	writeJSON(w, http.StatusOK, map[string]string{"username": username, "status": "keys_removed"})
 }
 
-// logAudit logs an audit event with admin username and remote IP.
-func (h *UserHandler) logAudit(r *http.Request, action string, attrs ...slog.Attr) {
-	sess := h.sessions.Get(r)
-	admin := ""
-	if sess != nil {
-		admin = sess.Username
+// logAudit writes an audit entry.
+func (h *UserHandler) logAudit(r *http.Request, operation, target, result, detail string) {
+	if h.auditLog != nil {
+		h.auditLog.Log(r.Context(), audit.Entry{
+			Operation: operation,
+			Target:    target,
+			Result:    result,
+			Detail:    detail,
+		})
+	} else {
+		admin := audit.AdminFromContext(r.Context())
+		h.logger.Info("audit",
+			slog.String("operation", operation),
+			slog.String("target", target),
+			slog.String("result", result),
+			slog.String("admin", admin),
+			slog.String("remote", r.RemoteAddr))
 	}
-	allAttrs := append([]slog.Attr{
-		slog.String("action", action),
-		slog.String("admin", admin),
-		slog.String("remote", r.RemoteAddr),
-	}, attrs...)
-
-	args := make([]any, len(allAttrs))
-	for i, a := range allAttrs {
-		args[i] = a
-	}
-	h.logger.Info("audit", args...)
 }
 
 // listUsers reads the passwd file and checks for key files.
@@ -382,8 +397,7 @@ func (h *UserHandler) listUsers(domainPath string) ([]UserSummary, error) {
 			mailbox = parts[2]
 		}
 
-		pubKeyPath := filepath.Join(keysDir, username+".pub")
-		_, pubErr := os.Stat(pubKeyPath)
+		_, pubErr := keys.LoadPublicKey(keysDir, username)
 
 		users = append(users, UserSummary{
 			Username:          username,
@@ -510,50 +524,4 @@ func appendToFile(path, text string) error {
 	defer func() { _ = f.Close() }()
 	_, err = f.WriteString(text)
 	return err
-}
-
-// generateUserKeys generates a NaCl box keypair and stores it.
-// The private key is encrypted with the user's password using the same
-// format as auth/passwd: salt (32B) || nonce (24B) || ciphertext.
-func generateUserKeys(keysDir, username, password string) error {
-	pubKey, privKey, err := box.GenerateKey(rand.Reader)
-	if err != nil {
-		return fmt.Errorf("generate keypair: %w", err)
-	}
-
-	// Write public key
-	pubKeyPath := filepath.Join(keysDir, username+".pub")
-	if err := os.WriteFile(pubKeyPath, pubKey[:], 0o640); err != nil {
-		return fmt.Errorf("write public key: %w", err)
-	}
-
-	// Encrypt private key with password
-	salt := make([]byte, saltSize)
-	if _, err := rand.Read(salt); err != nil {
-		return fmt.Errorf("generate salt: %w", err)
-	}
-
-	var nonce [nonceSize]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return fmt.Errorf("generate nonce: %w", err)
-	}
-
-	var key [32]byte
-	derivedKey := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
-	copy(key[:], derivedKey)
-
-	encrypted := secretbox.Seal(nil, privKey[:], &nonce, &key)
-
-	// Format: salt || nonce || ciphertext
-	encryptedKey := make([]byte, 0, saltSize+nonceSize+len(encrypted))
-	encryptedKey = append(encryptedKey, salt...)
-	encryptedKey = append(encryptedKey, nonce[:]...)
-	encryptedKey = append(encryptedKey, encrypted...)
-
-	privKeyPath := filepath.Join(keysDir, username+".key")
-	if err := os.WriteFile(privKeyPath, encryptedKey, 0o600); err != nil {
-		return fmt.Errorf("write private key: %w", err)
-	}
-
-	return nil
 }

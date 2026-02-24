@@ -15,7 +15,7 @@ func newTestWebHandler(t *testing.T) (*WebHandler, string) {
 	t.Helper()
 	dir := t.TempDir()
 	store := session.NewStore(30 * time.Minute)
-	return NewWebHandler(dir, store, slog.Default()), dir
+	return NewWebHandler(dir, store, slog.Default(), nil), dir
 }
 
 func TestHandleDashboard_EmptyDomains(t *testing.T) {

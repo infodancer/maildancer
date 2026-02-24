@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/infodancer/maildancer/internal/webadmin/audit"
+	"github.com/infodancer/maildancer/internal/webadmin/keys"
+	"github.com/infodancer/maildancer/internal/webadmin/rbac"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
@@ -16,6 +19,7 @@ type uiDomainRow struct {
 	UserCount int
 	AuthType  string
 	StoreType string
+	HasKeys   bool
 }
 
 // uiUserRow holds user data for domain detail rendering.
@@ -30,15 +34,18 @@ type WebHandler struct {
 	sessions    *session.Store
 	logger      *slog.Logger
 	render      *Renderer
+	roles       *rbac.RoleStore
 }
 
 // NewWebHandler creates a new web UI handler.
-func NewWebHandler(domainsPath string, sessions *session.Store, logger *slog.Logger) *WebHandler {
+// roles may be nil (RBAC disabled — all authenticated users treated as super_admin).
+func NewWebHandler(domainsPath string, sessions *session.Store, logger *slog.Logger, roles *rbac.RoleStore) *WebHandler {
 	return &WebHandler{
 		domainsPath: domainsPath,
 		sessions:    sessions,
 		logger:      logger,
 		render:      NewRenderer(),
+		roles:       roles,
 	}
 }
 
@@ -52,6 +59,11 @@ func (h *WebHandler) pageData(r *http.Request, data any) PageData {
 	return pd
 }
 
+// currentUsername returns the authenticated admin's username from session.
+func (h *WebHandler) currentUsername(r *http.Request) string {
+	return audit.AdminFromContext(r.Context())
+}
+
 // HandleDashboard renders the main dashboard with domain list.
 func (h *WebHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 	entries, err := os.ReadDir(h.domainsPath)
@@ -61,14 +73,22 @@ func (h *WebHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	username := h.currentUsername(r)
+
 	var domains []uiDomainRow
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		domainPath := filepath.Join(h.domainsPath, entry.Name())
+		domainName := entry.Name()
+		domainPath := filepath.Join(h.domainsPath, domainName)
 		configPath := filepath.Join(domainPath, "config.toml")
 		if _, err := os.Stat(configPath); err != nil {
+			continue
+		}
+
+		// Apply RBAC filter
+		if h.roles != nil && !h.roles.IsSuperAdmin(username) && !h.roles.CanAccessDomain(username, domainName) {
 			continue
 		}
 
@@ -77,11 +97,15 @@ func (h *WebHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		storeType := extractTOMLValue(string(data), "type", "msgstore")
 		userCount := countPasswdEntries(filepath.Join(domainPath, "passwd"))
 
+		// Check for domain-level keys
+		_, pubErr := keys.LoadPublicKey(filepath.Join(domainPath, "keys"), "domain")
+
 		domains = append(domains, uiDomainRow{
-			Name:      entry.Name(),
+			Name:      domainName,
 			UserCount: userCount,
 			AuthType:  authType,
 			StoreType: storeType,
+			HasKeys:   pubErr == nil,
 		})
 	}
 
@@ -89,8 +113,13 @@ func (h *WebHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		domains = []uiDomainRow{}
 	}
 
+	isSuperAdmin := h.roles == nil || h.roles.IsSuperAdmin(username)
+
 	pd := h.pageData(r, nil)
-	pd.Data = struct{ Domains []uiDomainRow }{Domains: domains}
+	pd.Data = struct {
+		Domains      []uiDomainRow
+		IsSuperAdmin bool
+	}{Domains: domains, IsSuperAdmin: isSuperAdmin}
 	if err := h.render.Render(w, "dashboard", pd); err != nil {
 		h.logger.Error("failed to render dashboard", "error", err)
 	}
@@ -102,6 +131,15 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 	if !isValidDomainName(name) {
 		http.Error(w, "Invalid domain name", http.StatusBadRequest)
 		return
+	}
+
+	// RBAC check
+	if h.roles != nil {
+		username := h.currentUsername(r)
+		if !h.roles.IsSuperAdmin(username) && !h.roles.CanAccessDomain(username, name) {
+			http.Error(w, "Forbidden: insufficient domain access", http.StatusForbidden)
+			return
+		}
 	}
 
 	domainPath := filepath.Join(h.domainsPath, name)
@@ -116,20 +154,33 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 	storeType := extractTOMLValue(string(configData), "type", "msgstore")
 	userCount := countPasswdEntries(filepath.Join(domainPath, "passwd"))
 
+	// Domain key status
+	keysDir := filepath.Join(domainPath, "keys")
+	domainPub, pubErr := keys.LoadPublicKey(keysDir, "domain")
+	domainKeyFingerprint := ""
+	if pubErr == nil {
+		domainKeyFingerprint = keys.PublicKeyFingerprint(domainPub)
+	}
+
 	users := h.listUsersForUI(domainPath)
 
 	pd := h.pageData(r, nil)
 	pd.Data = struct {
-		Domain uiDomainRow
-		Users  []uiUserRow
+		Domain               uiDomainRow
+		Users                []uiUserRow
+		DomainKeyFingerprint string
+		IsSuperAdmin         bool
 	}{
 		Domain: uiDomainRow{
 			Name:      name,
 			UserCount: userCount,
 			AuthType:  authType,
 			StoreType: storeType,
+			HasKeys:   pubErr == nil,
 		},
-		Users: users,
+		Users:                users,
+		DomainKeyFingerprint: domainKeyFingerprint,
+		IsSuperAdmin:         h.roles == nil || h.roles.IsSuperAdmin(h.currentUsername(r)),
 	}
 
 	if err := h.render.Render(w, "domain", pd); err != nil {
@@ -159,15 +210,11 @@ func (h *WebHandler) listUsersForUI(domainPath string) []uiUserRow {
 			continue
 		}
 
-		hasKeys := false
-		pubKeyPath := filepath.Join(keysDir, username+".pub")
-		if _, err := os.Stat(pubKeyPath); err == nil {
-			hasKeys = true
-		}
+		_, err := keys.LoadPublicKey(keysDir, username)
 
 		users = append(users, uiUserRow{
 			Username:          username,
-			EncryptionEnabled: hasKeys,
+			EncryptionEnabled: err == nil,
 		})
 	}
 	return users
@@ -268,7 +315,7 @@ func (h *WebHandler) HandleResetPasswordForm(w http.ResponseWriter, r *http.Requ
 	}
 }
 
-// HandleGenerateKeysForm returns the HTMX partial for the key generation form.
+// HandleGenerateKeysForm returns the HTMX partial for the user key generation form.
 func (h *WebHandler) HandleGenerateKeysForm(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("name")
 	username := r.PathValue("username")
@@ -287,21 +334,35 @@ func (h *WebHandler) HandleGenerateKeysForm(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+// HandleGenerateDomainKeysForm returns the HTMX partial for domain key generation.
+func (h *WebHandler) HandleGenerateDomainKeysForm(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("name")
+	sess := h.sessions.Get(r)
+	csrfToken := ""
+	if sess != nil {
+		csrfToken = sess.CSRFToken
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := h.render.RenderPartial(w, "generate-domain-keys-form", struct {
+		Domain    string
+		CSRFToken string
+	}{domain, csrfToken}); err != nil {
+		h.logger.Error("failed to render partial", "error", err)
+	}
+}
+
 // HandleUserStats returns the HTMX partial for inline user stats.
 func (h *WebHandler) HandleUserStats(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("name")
 	username := r.PathValue("username")
 
-	// Return placeholder stats - the real stats come from the stats API
-	// but for the UI we just show a simple count + size
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.render.RenderPartial(w, "user-stats", struct {
 		Username  string
 		Count     int
 		SizeHuman string
 	}{username, 0, "-"}); err != nil {
-		// Fallback: if stats can't be loaded, just show dashes
 		_, _ = w.Write([]byte("-"))
 	}
-	_ = domain // used for future store integration
+	_ = domain
 }

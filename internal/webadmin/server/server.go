@@ -10,6 +10,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/infodancer/maildancer/auth"
@@ -38,7 +41,8 @@ type Server struct {
 	deps          Deps
 	sessions      *session.Store
 	logger        *slog.Logger
-	roles         *rbac.RoleStore
+	roles         atomic.Pointer[rbac.RoleStore] // read atomically; written only under rolesMu
+	rolesMu       sync.Mutex                     // serializes updateRolesFile
 	auditLog      *audit.Logger
 	rolesFilePath string
 }
@@ -77,6 +81,10 @@ func New(cfg config.WebAdminConfig, deps Deps, logger *slog.Logger) (*Server, er
 		logger.Warn("failed to register metrics (already registered?)", slog.String("error", err.Error()))
 	}
 
+	if cfg.Auth.RolesFile == "" {
+		logger.Warn("RBAC disabled: roles_file not configured — all authenticated users have super_admin access")
+	}
+
 	mux := http.NewServeMux()
 	s := &Server{
 		mux:           mux,
@@ -84,10 +92,10 @@ func New(cfg config.WebAdminConfig, deps Deps, logger *slog.Logger) (*Server, er
 		deps:          deps,
 		sessions:      session.NewStore(sessionTimeout),
 		logger:        logger,
-		roles:         roles,
 		auditLog:      auditLog,
 		rolesFilePath: cfg.Auth.RolesFile,
 	}
+	s.roles.Store(roles)
 
 	s.registerRoutes()
 
@@ -109,18 +117,22 @@ func New(cfg config.WebAdminConfig, deps Deps, logger *slog.Logger) (*Server, er
 
 // registerRoutes sets up the HTTP route handlers.
 func (s *Server) registerRoutes() {
+	// Snapshot current roles for handler constructors (secondary defence-in-depth checks).
+	currentRoles := s.roles.Load()
 	authHandler := handlers.NewAuthHandler(s.deps.AuthAgent, s.sessions, s.logger)
-	domainHandler := handlers.NewDomainHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.roles, s.auditLog)
+	domainHandler := handlers.NewDomainHandler(s.cfg.DomainsPath, s.sessions, s.logger, currentRoles, s.auditLog)
 	userHandler := handlers.NewUserHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.auditLog)
 	statsHandler := handlers.NewStatsHandler(s.cfg.DomainsPath, s.sessions, s.logger, nil)
-	webHandler := handlers.NewWebHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.roles)
+	webHandler := handlers.NewWebHandler(s.cfg.DomainsPath, s.sessions, s.logger, currentRoles)
 	dashboardHandler := handlers.NewDashboardHandler(s.cfg.DomainsPath, s.sessions, s.logger)
 
 	requireAuth := middleware.RequireAuth(s.sessions, s.logger)
 	requireCSRF := middleware.RequireCSRF(s.sessions, s.logger)
-	requireSuperAdmin := middleware.RequireSuperAdmin(s.sessions, s.roles)
-	requireDomainAccessByName := middleware.RequireDomainAccess(s.sessions, s.roles, "name")
-	requireDomainAccessByDomain := middleware.RequireDomainAccess(s.sessions, s.roles, "domain")
+	// getRoles is called on every request so role updates take effect immediately in middleware.
+	getRoles := func() *rbac.RoleStore { return s.roles.Load() }
+	requireSuperAdmin := middleware.RequireSuperAdmin(s.sessions, getRoles)
+	requireDomainAccessByName := middleware.RequireDomainAccess(s.sessions, getRoles, "name")
+	requireDomainAccessByDomain := middleware.RequireDomainAccess(s.sessions, getRoles, "domain")
 
 	loginLimiter := middleware.NewRateLimiter(5, time.Minute)
 
@@ -132,8 +144,12 @@ func (s *Server) registerRoutes() {
 		middleware.RateLimit(loginLimiter, s.logger),
 	))
 
-	// Prometheus metrics
-	s.mux.Handle("GET /metrics", promhttp.Handler())
+	// Prometheus metrics — requires authentication.
+	// Configure Prometheus with basic_auth if scraping this endpoint externally.
+	s.mux.Handle("GET /metrics", middleware.Chain(
+		promhttp.Handler(),
+		requireAuth,
+	))
 
 	// Authenticated routes
 	s.mux.Handle("POST /logout", middleware.Chain(
@@ -302,11 +318,12 @@ func (s *Server) handleGetAuditLog(w http.ResponseWriter, r *http.Request) {
 
 // handleGetRoles returns the current RBAC role assignments (super_admin only).
 func (s *Server) handleGetRoles(w http.ResponseWriter, r *http.Request) {
-	if s.roles == nil {
+	roles := s.roles.Load()
+	if roles == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"admins": map[string]any{}})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"admins": s.roles.Admins})
+	writeJSON(w, http.StatusOK, map[string]any{"admins": roles.Admins})
 }
 
 // handleSetRole assigns a role and domains to an admin (super_admin only).
@@ -343,12 +360,14 @@ func (s *Server) handleSetRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.auditLog.Log(r.Context(), audit.Entry{
-		Operation: "set_role",
-		Target:    username,
-		Result:    "success",
-		Detail:    string(req.Role),
-	})
+	if s.auditLog != nil {
+		s.auditLog.Log(r.Context(), audit.Entry{
+			Operation: "set_role",
+			Target:    username,
+			Result:    "success",
+			Detail:    string(req.Role),
+		})
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"username": username, "status": "role_set"})
 }
 
@@ -373,17 +392,22 @@ func (s *Server) handleDeleteRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.auditLog.Log(r.Context(), audit.Entry{
-		Operation: "delete_role",
-		Target:    username,
-		Result:    "success",
-	})
+	if s.auditLog != nil {
+		s.auditLog.Log(r.Context(), audit.Entry{
+			Operation: "delete_role",
+			Target:    username,
+			Result:    "success",
+		})
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"username": username, "status": "role_deleted"})
 }
 
-// updateRolesFile applies a mutation to the role store and persists it.
+// updateRolesFile applies a mutation to the role store and persists it atomically.
+// The full load→mutate→write→reload sequence is serialized under rolesMu.
 func (s *Server) updateRolesFile(mutate func(*rbac.RoleStore)) error {
-	// Load fresh copy to avoid races
+	s.rolesMu.Lock()
+	defer s.rolesMu.Unlock()
+
 	store, err := rbac.LoadRoles(s.rolesFilePath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("load roles: %w", err)
@@ -394,18 +418,39 @@ func (s *Server) updateRolesFile(mutate func(*rbac.RoleStore)) error {
 
 	mutate(store)
 
-	// Serialize as TOML
 	data, err := toml.Marshal(store)
 	if err != nil {
 		return fmt.Errorf("marshal roles: %w", err)
 	}
-	if err := os.WriteFile(s.rolesFilePath, data, 0o640); err != nil {
-		return fmt.Errorf("write roles file: %w", err)
+
+	// Write to a temp file then rename for crash-safe atomic update.
+	dir := filepath.Dir(s.rolesFilePath)
+	tmp, err := os.CreateTemp(dir, ".roles-*.toml.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp roles file: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("write temp roles file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("close temp roles file: %w", err)
+	}
+	if err := os.Rename(tmpName, s.rolesFilePath); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("rename roles file: %w", err)
 	}
 
-	// Reload in-memory store
-	s.roles, err = rbac.LoadRoles(s.rolesFilePath)
-	return err
+	// Reload and publish atomically.
+	reloaded, err := rbac.LoadRoles(s.rolesFilePath)
+	if err != nil {
+		return fmt.Errorf("reload roles: %w", err)
+	}
+	s.roles.Store(reloaded)
+	return nil
 }
 
 // writeJSON writes a JSON response.

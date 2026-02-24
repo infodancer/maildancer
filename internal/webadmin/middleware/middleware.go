@@ -60,10 +60,13 @@ func RequireCSRF(store *session.Store, logger *slog.Logger) func(http.Handler) h
 }
 
 // RequireDomainAccess checks that the authenticated user has RBAC access to the domain
-// extracted from the named path value. If roles is nil, all access is allowed.
-func RequireDomainAccess(store *session.Store, roles *rbac.RoleStore, domainParam string) func(http.Handler) http.Handler {
+// extracted from the named path value. getRoles is called on every request so that
+// role updates (via POST /api/roles) take effect without a server restart.
+// If getRoles returns nil, all access is allowed (no roles file configured).
+func RequireDomainAccess(store *session.Store, getRoles func() *rbac.RoleStore, domainParam string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			roles := getRoles()
 			if roles == nil {
 				next.ServeHTTP(w, r)
 				return
@@ -84,10 +87,12 @@ func RequireDomainAccess(store *session.Store, roles *rbac.RoleStore, domainPara
 }
 
 // RequireSuperAdmin checks that the authenticated user has super_admin role.
-// If roles is nil (no roles file configured), all authenticated users are allowed.
-func RequireSuperAdmin(store *session.Store, roles *rbac.RoleStore) func(http.Handler) http.Handler {
+// getRoles is called on every request so role updates take effect immediately.
+// If getRoles returns nil (no roles file configured), all authenticated users are allowed.
+func RequireSuperAdmin(store *session.Store, getRoles func() *rbac.RoleStore) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			roles := getRoles()
 			if roles == nil {
 				next.ServeHTTP(w, r)
 				return

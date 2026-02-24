@@ -8,6 +8,13 @@ log_level = "info"
 [webadmin.auth]
 passwd_file = "/etc/mail/admin-passwd"
 
+# Optional: RBAC roles file. If omitted, all authenticated admins have super_admin access.
+# roles_file = "/etc/mail/admin-roles.toml"
+
+[webadmin.audit]
+# Optional: write JSON audit log lines to this file. If omitted, audit events go to slog only.
+# log_file = "/var/log/webadmin/audit.log"
+
 [webadmin.session]
 timeout_minutes = 30
 

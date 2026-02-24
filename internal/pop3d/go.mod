@@ -7,12 +7,13 @@ toolchain go1.24.4
 require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/infodancer/maildancer/auth v0.1.2
-	github.com/infodancer/maildancer/msgstore v0.0.0-20260223100245-e375bb8d1646
+	github.com/infodancer/maildancer/msgstore v0.1.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 )
 
 require (
+	git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/emersion/go-maildir v0.6.0 // indirect

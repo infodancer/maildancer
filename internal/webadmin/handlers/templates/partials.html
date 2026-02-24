@@ -19,7 +19,7 @@
 
 {{define "confirm-delete-domain"}}
 <tr>
-  <td colspan="5">
+  <td colspan="6">
     <div class="confirm-delete">
       <p><strong>Delete {{.Name}}?</strong> This cannot be undone.
         {{if gt .UserCount 0}} This domain has {{.UserCount}} user{{if ne .UserCount 1}}s{{end}}.{{end}}</p>
@@ -124,6 +124,24 @@
     </article>
   </td>
 </tr>
+{{end}}
+
+{{define "generate-domain-keys-form"}}
+<article style="margin:0.5rem 0">
+  <form hx-post="/api/domains/{{.Domain}}/keys"
+        hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-on::after-request="if(event.detail.successful) location.reload()">
+    <div class="grid" style="align-items:end">
+      <label>
+        Domain key password (to encrypt private key)
+        <input type="password" name="password" required minlength="8" placeholder="min 8 characters">
+      </label>
+      <button type="submit" style="margin-bottom:0">Generate Domain Keys</button>
+      <button type="button" class="secondary" style="margin-bottom:0"
+              onclick="this.closest('article').remove()">Cancel</button>
+    </div>
+  </form>
+</article>
 {{end}}
 
 {{define "user-stats"}}{{.Count}} msg{{if ne .Count 1}}s{{end}}<script>

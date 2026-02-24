@@ -12,6 +12,29 @@
   <p>{{.Data.Domain.UserCount}} user{{if ne .Data.Domain.UserCount 1}}s{{end}} &middot; Auth: {{.Data.Domain.AuthType}} &middot; Store: {{.Data.Domain.StoreType}}</p>
 </hgroup>
 
+<h2>Domain Keys</h2>
+<div id="domain-keys-status">
+  {{if .Data.Domain.HasKeys}}
+  <p>
+    <kbd class="badge badge-yes">encrypted</kbd>
+    Fingerprint: <code>{{.Data.DomainKeyFingerprint}}</code>
+  </p>
+  {{if .Data.IsSuperAdmin}}
+  <button class="outline secondary" style="padding:0.25em 0.5em;font-size:0.875rem"
+          hx-delete="/api/domains/{{.Data.Domain.Name}}/keys"
+          hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
+          hx-confirm="Remove domain encryption keys for {{.Data.Domain.Name}}?"
+          hx-on::after-request="if(event.detail.successful) location.reload()">Remove Domain Keys</button>
+  {{end}}
+  {{else}}
+  <p><kbd class="badge badge-no">no domain keys</kbd></p>
+  <button class="outline" style="padding:0.25em 0.5em;font-size:0.875rem"
+          hx-get="/ui/domains/{{.Data.Domain.Name}}/generate-keys"
+          hx-target="#domain-keys-status"
+          hx-swap="afterend">Generate Domain Keys</button>
+  {{end}}
+</div>
+
 <h2>Users</h2>
 <div style="margin-bottom:1rem">
   <button hx-get="/ui/domains/{{.Data.Domain.Name}}/users/new" hx-target="#create-user-form" hx-swap="innerHTML">Add User</button>
@@ -57,8 +80,6 @@
                 hx-delete="/api/domains/{{$.Data.Domain.Name}}/users/{{.Username}}/keys"
                 hx-headers='{"X-CSRF-Token": "{{$.CSRFToken}}"}'
                 hx-confirm="Remove encryption keys for {{.Username}}?"
-                hx-target="#user-{{.Username}}"
-                hx-swap="outerHTML"
                 hx-on::after-request="location.reload()">Keys</button>
         {{else}}
         <button class="outline" style="padding:0.25em 0.5em;font-size:0.875rem"

@@ -297,8 +297,8 @@ func TestValidateMaxConnectionsMustBePositive(t *testing.T) {
 // TestValidateInvalidTimeoutStrings verifies that unparseable timeout values fail validation.
 func TestValidateInvalidTimeoutStrings(t *testing.T) {
 	tests := []struct {
-		name    string
-		mutate  func(*Config)
+		name   string
+		mutate func(*Config)
 	}{
 		{"bad connection timeout", func(c *Config) { c.Timeouts.Connection = "notaduration" }},
 		{"bad command timeout", func(c *Config) { c.Timeouts.Command = "notaduration" }},
@@ -392,7 +392,7 @@ func TestMinTLSVersionReturnsCryptoConstants(t *testing.T) {
 		{"1.1", tls.VersionTLS11},
 		{"1.2", tls.VersionTLS12},
 		{"1.3", tls.VersionTLS13},
-		{"", tls.VersionTLS12},     // default for empty
+		{"", tls.VersionTLS12},      // default for empty
 		{"bogus", tls.VersionTLS12}, // default for invalid
 	}
 

@@ -28,15 +28,15 @@ func newTestSession(t *testing.T, store *mockStore) *Session {
 // noopCollector satisfies metrics.Collector for tests.
 type noopCollector struct{}
 
-func (n *noopCollector) ConnectionOpened()                        {}
-func (n *noopCollector) ConnectionClosed()                        {}
-func (n *noopCollector) TLSConnectionEstablished()                {}
-func (n *noopCollector) AuthAttempt(_ string, _ bool)             {}
-func (n *noopCollector) CommandProcessed(_ string)                {}
-func (n *noopCollector) MessageFetched(_ string, _ int64)         {}
-func (n *noopCollector) MessageStored(_ string)                   {}
-func (n *noopCollector) MessageExpunged(_ string)                 {}
-func (n *noopCollector) FolderSelected(_ string)                  {}
+func (n *noopCollector) ConnectionOpened()                {}
+func (n *noopCollector) ConnectionClosed()                {}
+func (n *noopCollector) TLSConnectionEstablished()        {}
+func (n *noopCollector) AuthAttempt(_ string, _ bool)     {}
+func (n *noopCollector) CommandProcessed(_ string)        {}
+func (n *noopCollector) MessageFetched(_ string, _ int64) {}
+func (n *noopCollector) MessageStored(_ string)           {}
+func (n *noopCollector) MessageExpunged(_ string)         {}
+func (n *noopCollector) FolderSelected(_ string)          {}
 
 func TestHasFlag(t *testing.T) {
 	flags := []string{"\\Seen", "\\Flagged"}

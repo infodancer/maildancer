@@ -14,10 +14,10 @@ import (
 // mockStore implements msgstore.MsgStore and msgstore.FolderStore for testing.
 type mockStore struct {
 	mu      sync.Mutex
-	inbox   map[string][]msgstore.MessageInfo                // mailbox -> inbox messages
-	folders map[string]map[string][]msgstore.MessageInfo     // mailbox -> folder -> messages
-	content map[string]string                                // uid -> content
-	deleted map[string]bool                                  // uid -> pending deletion
+	inbox   map[string][]msgstore.MessageInfo            // mailbox -> inbox messages
+	folders map[string]map[string][]msgstore.MessageInfo // mailbox -> folder -> messages
+	content map[string]string                            // uid -> content
+	deleted map[string]bool                              // uid -> pending deletion
 	uidSeq  uint64
 }
 

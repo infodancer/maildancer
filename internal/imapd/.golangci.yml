@@ -7,3 +7,15 @@ linters:
     - staticcheck
     - unused
     - ineffassign
+    - depguard
+  settings:
+    depguard:
+      rules:
+        backend-no-maildir:
+          files:
+            - "**/internal/backend/**"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/msgstore/maildir"
+              desc: "backend must use msgstore.FolderStore interface, not the maildir backend directly"
+            - pkg: "github.com/emersion/go-maildir"
+              desc: "backend must use msgstore.FolderStore interface, not go-maildir directly"

@@ -557,8 +557,13 @@ func (s *Session) maildirForMailbox(mailbox string) (maildir.Dir, error) {
 }
 
 func (s *Session) uidValidity(dir maildir.Dir) uint32 {
+	name := filepath.Base(string(dir))
+	// Strip maildir++ flag suffix (e.g. ":2,FS") if present.
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		name = name[:i]
+	}
 	h := fnv.New32a()
-	h.Write([]byte(string(dir)))
+	h.Write([]byte(name))
 	v := h.Sum32()
 	if v == 0 {
 		return 1

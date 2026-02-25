@@ -5,7 +5,149 @@
   <p>Server configuration</p>
 </hgroup>
 
+<h2>Server</h2>
+<article>
+  <header><strong>Mail server settings</strong></header>
+  {{if .Data.IsSuperAdmin}}
+  <form hx-post="/api/settings/server" hx-target="#server-result" hx-swap="innerHTML"
+        hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-on::after-request="if(event.detail.successful) showFlash('Settings saved', 'success')">
+    <div class="grid">
+      <label>
+        Hostname
+        <input type="text" name="hostname" value="{{.Data.Server.Hostname}}"
+               placeholder="mail.example.com" required>
+      </label>
+      <label>
+        Maildir
+        <input type="text" name="maildir" value="{{.Data.Server.Maildir}}"
+               placeholder="/var/mail">
+      </label>
+    </div>
+    <label>
+      Domains path
+      <input type="text" name="domains_path" value="{{.Data.Server.DomainsPath}}"
+             placeholder="/var/mail/domains">
+    </label>
+    <div class="grid" style="margin-top:1rem">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+  <div id="server-result"></div>
+  {{else}}
+  <p>
+    Hostname: <code>{{if .Data.Server.Hostname}}{{.Data.Server.Hostname}}{{else}}<em>not set</em>{{end}}</code><br>
+    Maildir: <code>{{if .Data.Server.Maildir}}{{.Data.Server.Maildir}}{{else}}<em>not set</em>{{end}}</code><br>
+    Domains path: <code>{{if .Data.Server.DomainsPath}}{{.Data.Server.DomainsPath}}{{else}}<em>not set</em>{{end}}</code>
+  </p>
+  {{end}}
+</article>
+
+<h2>SMTP</h2>
+<article>
+  <header><strong>smtpd settings</strong></header>
+  {{if .Data.IsSuperAdmin}}
+  <form hx-post="/api/settings/smtpd" hx-target="#smtpd-result" hx-swap="innerHTML"
+        hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-on::after-request="if(event.detail.successful) showFlash('Settings saved', 'success')">
+    <div class="grid">
+      <label>
+        Log level
+        <select name="log_level">
+          <option value="debug"{{if eq .Data.Smtpd.LogLevel "debug"}} selected{{end}}>debug</option>
+          <option value="info"{{if eq .Data.Smtpd.LogLevel "info"}} selected{{end}}>info</option>
+          <option value="warn"{{if eq .Data.Smtpd.LogLevel "warn"}} selected{{end}}>warn</option>
+          <option value="error"{{if eq .Data.Smtpd.LogLevel "error"}} selected{{end}}>error</option>
+        </select>
+      </label>
+      <label>
+        Max message size (bytes)
+        <input type="number" name="max_message_size" value="{{.Data.Smtpd.MaxMessageSize}}"
+               min="1" placeholder="26214400">
+      </label>
+    </div>
+    <label>
+      Max recipients
+      <input type="number" name="max_recipients" value="{{.Data.Smtpd.MaxRecipients}}"
+             min="1" placeholder="100">
+    </label>
+    <div class="grid" style="margin-top:1rem">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+  <div id="smtpd-result"></div>
+  {{else}}
+  <p>
+    Log level: <code>{{if .Data.Smtpd.LogLevel}}{{.Data.Smtpd.LogLevel}}{{else}}<em>not set</em>{{end}}</code><br>
+    Max message size: <code>{{.Data.Smtpd.MaxMessageSize}}</code> bytes<br>
+    Max recipients: <code>{{.Data.Smtpd.MaxRecipients}}</code>
+  </p>
+  {{end}}
+</article>
+
+<h2>POP3</h2>
+<article>
+  <header><strong>pop3d settings</strong></header>
+  {{if .Data.IsSuperAdmin}}
+  <form hx-post="/api/settings/pop3d" hx-target="#pop3d-result" hx-swap="innerHTML"
+        hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-on::after-request="if(event.detail.successful) showFlash('Settings saved', 'success')">
+    <div class="grid">
+      <label>
+        Log level
+        <select name="log_level">
+          <option value="debug"{{if eq .Data.Pop3d.LogLevel "debug"}} selected{{end}}>debug</option>
+          <option value="info"{{if eq .Data.Pop3d.LogLevel "info"}} selected{{end}}>info</option>
+          <option value="warn"{{if eq .Data.Pop3d.LogLevel "warn"}} selected{{end}}>warn</option>
+          <option value="error"{{if eq .Data.Pop3d.LogLevel "error"}} selected{{end}}>error</option>
+        </select>
+      </label>
+      <label>
+        Max connections
+        <input type="number" name="max_connections" value="{{.Data.Pop3d.MaxConnections}}"
+               min="1" placeholder="100">
+      </label>
+    </div>
+    <div class="grid" style="margin-top:1rem">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+  <div id="pop3d-result"></div>
+  {{else}}
+  <p>
+    Log level: <code>{{if .Data.Pop3d.LogLevel}}{{.Data.Pop3d.LogLevel}}{{else}}<em>not set</em>{{end}}</code><br>
+    Max connections: <code>{{.Data.Pop3d.MaxConnections}}</code>
+  </p>
+  {{end}}
+</article>
+
 <h2>Spam Filter</h2>
+<article>
+  <header>
+    <strong>Spam filter</strong>
+  </header>
+
+  {{if .Data.IsSuperAdmin}}
+  <form hx-post="/api/settings/spamcheck" hx-target="#spamcheck-result" hx-swap="innerHTML"
+        hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-on::after-request="if(event.detail.successful) showFlash('Settings saved', 'success')"
+        style="margin-bottom:1rem">
+    <label>
+      <input type="checkbox" name="enabled" role="switch"{{if .Data.SpamCheck.Enabled}} checked{{end}}>
+      Enable spam filtering
+    </label>
+    <div class="grid" style="margin-top:1rem">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+  <div id="spamcheck-result"></div>
+  {{else}}
+  <p>
+    Spam filtering: {{if .Data.SpamCheck.Enabled}}<kbd class="badge badge-yes">enabled</kbd>{{else}}<kbd class="badge badge-no">disabled</kbd>{{end}}
+  </p>
+  {{end}}
+</article>
+
 <article>
   <header>
     <strong>rspamd</strong>

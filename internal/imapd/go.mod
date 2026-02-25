@@ -1,6 +1,6 @@
 module github.com/infodancer/maildancer/internal/imapd
 
-go 1.24.2
+go 1.25.0
 
 require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8

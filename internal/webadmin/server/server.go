@@ -125,8 +125,10 @@ func (s *Server) registerRoutes() {
 	statsHandler := handlers.NewStatsHandler(s.cfg.DomainsPath, s.sessions, s.logger, nil)
 	webHandler := handlers.NewWebHandler(s.cfg.DomainsPath, s.sessions, s.logger, currentRoles)
 	dashboardHandler := handlers.NewDashboardHandler(s.cfg.DomainsPath, s.sessions, s.logger)
-	rspamdHandler := handlers.NewRspamdHandler(s.cfg.RspamdFile, s.sessions, s.logger)
-	webHandler.SetRspamdFile(s.cfg.RspamdFile)
+	rspamdHandler := handlers.NewRspamdHandler(s.cfg.FilePath, s.sessions, s.logger)
+	settingsHandler := handlers.NewSettingsHandler(s.cfg.FilePath, s.sessions, s.logger)
+	webHandler.SetConfigFile(s.cfg.FilePath)
+	webHandler.SetSettingsHandler(settingsHandler)
 
 	requireAuth := middleware.RequireAuth(s.sessions, s.logger)
 	requireCSRF := middleware.RequireCSRF(s.sessions, s.logger)
@@ -286,6 +288,28 @@ func (s *Server) registerRoutes() {
 	))
 	s.mux.Handle("POST /api/rspamd", middleware.Chain(
 		http.HandlerFunc(rspamdHandler.HandleSetRspamd),
+		requireAuth, requireCSRF, requireSuperAdmin,
+	))
+
+	// Settings API (super_admin only for writes)
+	s.mux.Handle("GET /api/settings", middleware.Chain(
+		http.HandlerFunc(settingsHandler.HandleGetSettings),
+		requireAuth,
+	))
+	s.mux.Handle("POST /api/settings/server", middleware.Chain(
+		http.HandlerFunc(settingsHandler.HandleSetServerSettings),
+		requireAuth, requireCSRF, requireSuperAdmin,
+	))
+	s.mux.Handle("POST /api/settings/smtpd", middleware.Chain(
+		http.HandlerFunc(settingsHandler.HandleSetSmtpdSettings),
+		requireAuth, requireCSRF, requireSuperAdmin,
+	))
+	s.mux.Handle("POST /api/settings/pop3d", middleware.Chain(
+		http.HandlerFunc(settingsHandler.HandleSetPop3dSettings),
+		requireAuth, requireCSRF, requireSuperAdmin,
+	))
+	s.mux.Handle("POST /api/settings/spamcheck", middleware.Chain(
+		http.HandlerFunc(settingsHandler.HandleSetSpamcheckSettings),
 		requireAuth, requireCSRF, requireSuperAdmin,
 	))
 

@@ -19,6 +19,31 @@ type uiRspamdSettings struct {
 	HasPassword bool
 }
 
+// uiServerSettings holds server section display data for the settings page.
+type uiServerSettings struct {
+	Hostname    string
+	Maildir     string
+	DomainsPath string
+}
+
+// uiSmtpdSettings holds smtpd section display data for the settings page.
+type uiSmtpdSettings struct {
+	LogLevel       string
+	MaxMessageSize int
+	MaxRecipients  int
+}
+
+// uiPop3dSettings holds pop3d section display data for the settings page.
+type uiPop3dSettings struct {
+	LogLevel       string
+	MaxConnections int
+}
+
+// uiSpamCheckSettings holds spamcheck section display data for the settings page.
+type uiSpamCheckSettings struct {
+	Enabled bool
+}
+
 // uiDomainRow holds domain data for dashboard rendering.
 type uiDomainRow struct {
 	Name      string
@@ -36,12 +61,13 @@ type uiUserRow struct {
 
 // WebHandler serves the HTML UI pages and HTMX partials.
 type WebHandler struct {
-	domainsPath string
-	sessions    *session.Store
-	logger      *slog.Logger
-	render      *Renderer
-	roles       *rbac.RoleStore
-	rspamdFile  string // path to rspamd.toml for display on settings page
+	domainsPath     string
+	sessions        *session.Store
+	logger          *slog.Logger
+	render          *Renderer
+	roles           *rbac.RoleStore
+	configFile      string           // path to the shared config file for rspamd settings display
+	settingsHandler *SettingsHandler // for loading general settings on the settings page
 }
 
 // NewWebHandler creates a new web UI handler.
@@ -56,10 +82,16 @@ func NewWebHandler(domainsPath string, sessions *session.Store, logger *slog.Log
 	}
 }
 
-// SetRspamdFile sets the path to rspamd.toml so the settings page can show
-// the current rspamd URL. Called after construction when the config is available.
-func (h *WebHandler) SetRspamdFile(path string) {
-	h.rspamdFile = path
+// SetConfigFile sets the path to the shared config file so the settings page
+// can display the current rspamd URL. Called after construction.
+func (h *WebHandler) SetConfigFile(path string) {
+	h.configFile = path
+}
+
+// SetSettingsHandler wires the SettingsHandler so the settings page can load
+// all general settings for display. Called after construction.
+func (h *WebHandler) SetSettingsHandler(sh *SettingsHandler) {
+	h.settingsHandler = sh
 }
 
 // pageData builds common PageData from the request session.
@@ -364,15 +396,42 @@ func (h *WebHandler) HandleGenerateDomainKeysForm(w http.ResponseWriter, r *http
 	}
 }
 
-// HandleSettings renders the settings page (rspamd connection, etc.).
+// HandleSettings renders the settings page (rspamd connection, server, smtpd, pop3d, spamcheck).
 func (h *WebHandler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 	// Load rspamd settings for display (read-only; writes go through /api/rspamd).
 	rspamd := uiRspamdSettings{}
-	if h.rspamdFile != "" {
-		if rh := NewRspamdHandler(h.rspamdFile, h.sessions, h.logger); rh != nil {
+	if h.configFile != "" {
+		if rh := NewRspamdHandler(h.configFile, h.sessions, h.logger); rh != nil {
 			if s, err := rh.loadSettings(); err == nil {
 				rspamd.URL = s.URL
 				rspamd.HasPassword = s.Password != ""
+			}
+		}
+	}
+
+	// Load general settings via the SettingsHandler.
+	var server uiServerSettings
+	var smtpd uiSmtpdSettings
+	var pop3d uiPop3dSettings
+	var spamCheck uiSpamCheckSettings
+	if h.settingsHandler != nil {
+		if cfg, err := h.settingsHandler.loadSettings(); err == nil {
+			server = uiServerSettings{
+				Hostname:    cfg.Server.Hostname,
+				Maildir:     cfg.Server.Maildir,
+				DomainsPath: cfg.Server.DomainsPath,
+			}
+			smtpd = uiSmtpdSettings{
+				LogLevel:       cfg.Smtpd.LogLevel,
+				MaxMessageSize: cfg.Smtpd.Limits.MaxMessageSize,
+				MaxRecipients:  cfg.Smtpd.Limits.MaxRecipients,
+			}
+			pop3d = uiPop3dSettings{
+				LogLevel:       cfg.Pop3d.LogLevel,
+				MaxConnections: cfg.Pop3d.Limits.MaxConnections,
+			}
+			spamCheck = uiSpamCheckSettings{
+				Enabled: cfg.SpamCheck.Enabled,
 			}
 		}
 	}
@@ -381,9 +440,17 @@ func (h *WebHandler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 	pd := h.pageData(r, struct {
 		IsSuperAdmin bool
 		Rspamd       uiRspamdSettings
+		Server       uiServerSettings
+		Smtpd        uiSmtpdSettings
+		Pop3d        uiPop3dSettings
+		SpamCheck    uiSpamCheckSettings
 	}{
 		IsSuperAdmin: isSuperAdmin,
 		Rspamd:       rspamd,
+		Server:       server,
+		Smtpd:        smtpd,
+		Pop3d:        pop3d,
+		SpamCheck:    spamCheck,
 	})
 	if err := h.render.Render(w, "settings", pd); err != nil {
 		h.logger.Error("failed to render settings page", "error", err)

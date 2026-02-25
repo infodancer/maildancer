@@ -36,10 +36,10 @@ type WebAdminConfig struct {
 	// Audit holds audit logging configuration.
 	Audit AuditConfig `toml:"audit"`
 
-	// RspamdFile is the optional path to a TOML file storing rspamd connection
-	// settings (url and password). Shared with smtpd so that webadmin can manage
-	// the settings and smtpd can read them.
-	RspamdFile string `toml:"rspamd_file"`
+	// FilePath is the path to the config file this struct was loaded from.
+	// Not a TOML field — set programmatically by Load(). Used by handlers
+	// that need to write back to the shared config file (e.g. rspamd settings).
+	FilePath string `toml:"-"`
 }
 
 // TLSConfig holds TLS certificate configuration.
@@ -121,6 +121,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config file: %w", err)
 	}
 
+	cfg.WebAdmin.FilePath = path
 	cfg.Defaults()
 	return &cfg, nil
 }

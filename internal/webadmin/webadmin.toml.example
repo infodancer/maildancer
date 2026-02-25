@@ -1,4 +1,11 @@
 # Web Admin Configuration
+#
+# webadmin reads its own settings from the [webadmin] section of the shared
+# mail server config file (the same file used by smtpd, pop3d, etc.).
+# Pass the path to that file as the -config argument when starting webadmin.
+#
+# webadmin can also read and write rspamd connection settings directly in the
+# [spamcheck] section of the shared config, so smtpd picks them up automatically.
 
 [webadmin]
 listen_address = "localhost:8080"
@@ -23,7 +30,12 @@ timeout_minutes = 30
 # cert_file = "/etc/ssl/certs/mail.pem"
 # key_file = "/etc/ssl/private/mail.key"
 
-# Optional: path to a shared rspamd settings file.
-# webadmin reads and writes this file; smtpd reads it for rspamd connection settings.
-# Both services must point to the same file.
-# rspamd_file = "/etc/mail/rspamd.toml"
+# rspamd connection settings live in [spamcheck] alongside smtpd's config.
+# webadmin edits these in-place when the super_admin saves settings.
+# [spamcheck]
+# enabled = true
+#
+# [[spamcheck.checkers]]
+# type = "rspamd"
+# url = "http://localhost:11334"
+# password = "your-rspamd-password"

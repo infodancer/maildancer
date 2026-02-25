@@ -11,33 +11,41 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/infodancer/maildancer/internal/webadmin/config"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
-// rspamdSettings holds the rspamd connection configuration stored in rspamd.toml.
+// rspamdSettings holds the rspamd connection settings read from the shared config.
 type rspamdSettings struct {
-	URL      string `toml:"url"`
-	Password string `toml:"password"`
+	URL      string
+	Password string
 }
 
-// rspamdFile is the on-disk TOML structure.
-type rspamdFile struct {
-	Rspamd rspamdSettings `toml:"rspamd"`
+// sharedConfigRspamd is the minimal parse target for reading rspamd settings
+// from the shared config file (ignores all other sections).
+type sharedConfigRspamd struct {
+	SpamCheck struct {
+		Checkers []struct {
+			Type     string `toml:"type"`
+			URL      string `toml:"url"`
+			Password string `toml:"password"`
+		} `toml:"checkers"`
+	} `toml:"spamcheck"`
 }
 
-// RspamdHandler manages rspamd connection settings.
+// RspamdHandler manages rspamd connection settings in the shared config file.
 type RspamdHandler struct {
-	rspamdFile string
+	configFile string // path to the shared config.toml
 	sessions   *session.Store
 	logger     *slog.Logger
-	mu         sync.Mutex // serializes writes to rspamdFile
+	mu         sync.Mutex // serializes writes to configFile
 }
 
 // NewRspamdHandler creates a new RspamdHandler.
-// rspamdFile is the path to the shared rspamd.toml (may be empty; writes will return 400).
-func NewRspamdHandler(rspamdFile string, sessions *session.Store, logger *slog.Logger) *RspamdHandler {
+// configFile is the path to the shared config file (may be empty; writes return 400).
+func NewRspamdHandler(configFile string, sessions *session.Store, logger *slog.Logger) *RspamdHandler {
 	return &RspamdHandler{
-		rspamdFile: rspamdFile,
+		configFile: configFile,
 		sessions:   sessions,
 		logger:     logger,
 	}
@@ -58,12 +66,12 @@ func (h *RspamdHandler) HandleGetRspamd(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// HandleSetRspamd saves rspamd URL and/or password to the rspamd settings file.
+// HandleSetRspamd saves rspamd URL and/or password to the shared config file.
 // Requires super_admin (enforced at the routing layer).
 // If password is omitted or empty in the request, the existing password is preserved.
 func (h *RspamdHandler) HandleSetRspamd(w http.ResponseWriter, r *http.Request) {
-	if h.rspamdFile == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "rspamd_file not configured"})
+	if h.configFile == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "config_file not configured"})
 		return
 	}
 
@@ -107,44 +115,56 @@ func (h *RspamdHandler) HandleSetRspamd(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
-// loadSettings reads rspamd.toml and returns the settings.
-// Returns empty settings if the file does not exist.
+// loadSettings reads the shared config file and returns the rspamd checker settings.
+// Returns empty settings if the file does not exist or no rspamd checker is configured.
 func (h *RspamdHandler) loadSettings() (rspamdSettings, error) {
-	if h.rspamdFile == "" {
+	if h.configFile == "" {
 		return rspamdSettings{}, nil
 	}
-	data, err := os.ReadFile(h.rspamdFile)
+	data, err := os.ReadFile(h.configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return rspamdSettings{}, nil
 		}
-		return rspamdSettings{}, fmt.Errorf("read rspamd file: %w", err)
+		return rspamdSettings{}, fmt.Errorf("read config file: %w", err)
 	}
-	var f rspamdFile
-	if err := toml.Unmarshal(data, &f); err != nil {
-		return rspamdSettings{}, fmt.Errorf("parse rspamd file: %w", err)
+	var cfg sharedConfigRspamd
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return rspamdSettings{}, fmt.Errorf("parse config file: %w", err)
 	}
-	return f.Rspamd, nil
+	for _, c := range cfg.SpamCheck.Checkers {
+		if c.Type == "rspamd" {
+			return rspamdSettings{URL: c.URL, Password: c.Password}, nil
+		}
+	}
+	return rspamdSettings{}, nil
 }
 
-// saveSettings writes settings to rspamd.toml using temp+rename for atomicity.
+// saveSettings patches the rspamd checker block in the shared config file using
+// comment-preserving in-place editing, then writes via temp+rename for atomicity.
 func (h *RspamdHandler) saveSettings(settings rspamdSettings) error {
-	data, err := toml.Marshal(rspamdFile{Rspamd: settings})
-	if err != nil {
-		return fmt.Errorf("marshal rspamd settings: %w", err)
+	var content []byte
+	data, err := os.ReadFile(h.configFile)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read config file: %w", err)
+	}
+	if err == nil {
+		content = data
 	}
 
-	dir := filepath.Dir(h.rspamdFile)
+	patched := config.PatchRspamdChecker(content, settings.URL, settings.Password)
+
+	dir := filepath.Dir(h.configFile)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("create rspamd config dir: %w", err)
+		return fmt.Errorf("create config dir: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(dir, ".rspamd-*.toml.tmp")
+	tmp, err := os.CreateTemp(dir, ".config-*.toml.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
+	if _, err := tmp.Write(patched); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("write temp file: %w", err)
@@ -153,9 +173,9 @@ func (h *RspamdHandler) saveSettings(settings rspamdSettings) error {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("close temp file: %w", err)
 	}
-	if err := os.Rename(tmpName, h.rspamdFile); err != nil {
+	if err := os.Rename(tmpName, h.configFile); err != nil {
 		_ = os.Remove(tmpName)
-		return fmt.Errorf("rename rspamd file: %w", err)
+		return fmt.Errorf("rename config file: %w", err)
 	}
 	return nil
 }

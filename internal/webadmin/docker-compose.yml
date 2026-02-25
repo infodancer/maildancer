@@ -4,7 +4,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ./config:/etc/webadmin:ro
+      - ./config:/etc/webadmin
       - mail-domains:/var/mail/domains
     environment:
       - WEBADMIN_CONFIG=/etc/webadmin/webadmin.toml

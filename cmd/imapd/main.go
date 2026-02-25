@@ -19,6 +19,8 @@ import (
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/logging"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
+	msgstore "github.com/infodancer/maildancer/msgstore"
+	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir backend
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -100,11 +102,26 @@ func main() {
 	// Create auth router (centralizes domain-aware auth routing)
 	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
 
+	// Open message store if configured
+	var store msgstore.MsgStore
+	if cfg.Store.Type != "" {
+		store, err = msgstore.Open(msgstore.StoreConfig{
+			Type:     cfg.Store.Type,
+			BasePath: cfg.Store.BasePath,
+			Options:  cfg.Store.Options,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error opening message store: %v\n", err)
+			os.Exit(1)
+		}
+		logger.Info("message store opened", "type", cfg.Store.Type)
+	}
+
 	// Create IMAP server
 	srv := imapserver.New(&imapserver.Options{
 		NewSession: func(conn *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
 			collector.ConnectionOpened()
-			session := backend.NewSession(conn, &cfg, authRouter, collector, logger)
+			session := backend.NewSession(conn, &cfg, authRouter, store, collector, logger)
 			return session, &imapserver.GreetingData{}, nil
 		},
 		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}},

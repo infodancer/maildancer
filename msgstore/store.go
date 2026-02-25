@@ -3,6 +3,7 @@ package msgstore
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // MessageStore provides read access to stored messages.
@@ -37,6 +38,10 @@ type MessageInfo struct {
 
 	// Flags contains message flags (e.g., "\Seen", "\Deleted", "\Answered").
 	Flags []string
+
+	// InternalDate is the date the message was received by the server.
+	// Used by IMAP FETCH INTERNALDATE and date-based SEARCH criteria.
+	InternalDate time.Time
 }
 
 // FolderStore provides folder hierarchy operations within a user's mailbox.
@@ -75,6 +80,33 @@ type FolderStore interface {
 	// DeliverToFolder delivers a message directly to a specific folder.
 	// Used by routing rules (SIEVE, user config) after deciding the target folder.
 	DeliverToFolder(ctx context.Context, mailbox string, folder string, message io.Reader) error
+
+	// RenameFolder renames a folder within a mailbox.
+	// Returns ErrFolderNotFound if oldName does not exist.
+	// Returns ErrFolderExists if newName already exists.
+	// INBOX cannot be renamed.
+	RenameFolder(ctx context.Context, mailbox string, oldName string, newName string) error
+
+	// AppendToFolder stores a message in a folder with explicit flags and internal date.
+	// Used by the IMAP APPEND command. Returns the UID assigned to the new message.
+	// Distinct from DeliverToFolder which is for smtpd routing (no flags/date control).
+	// folder may be "INBOX" to append to the inbox.
+	AppendToFolder(ctx context.Context, mailbox string, folder string, r io.Reader, flags []string, date time.Time) (uid string, err error)
+
+	// SetFlagsInFolder replaces the complete flag set on a message.
+	// flags uses IMAP flag strings (e.g. "\\Seen", "\\Deleted", "\\Answered").
+	// folder may be "INBOX" to operate on inbox messages.
+	SetFlagsInFolder(ctx context.Context, mailbox string, folder string, uid string, flags []string) error
+
+	// CopyMessage copies a message to another folder within the same mailbox.
+	// Returns the UID assigned to the copy in destFolder.
+	// srcFolder may be "INBOX"; destFolder may be "INBOX".
+	CopyMessage(ctx context.Context, mailbox string, srcFolder string, uid string, destFolder string) (newUID string, err error)
+
+	// UIDValidity returns the UIDValidity value for a folder.
+	// The value must remain constant for a given folder as long as UIDs have
+	// not been reassigned. folder may be "INBOX".
+	UIDValidity(ctx context.Context, mailbox string, folder string) (uint32, error)
 }
 
 // DecryptingStore wraps MessageStore to provide transparent decryption.

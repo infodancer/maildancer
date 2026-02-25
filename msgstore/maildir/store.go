@@ -3,12 +3,15 @@ package maildir
 import (
 	"bytes"
 	"context"
+	"hash/fnv"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/emersion/go-maildir"
 	"github.com/infodancer/maildancer/msgstore"
@@ -163,9 +166,10 @@ func (s *MaildirStore) listDir(path string, deletionKey string) ([]msgstore.Mess
 		flagStrings = append(flagStrings, convertFlags(flags)...)
 
 		messages = append(messages, msgstore.MessageInfo{
-			UID:   key,
-			Size:  fi.Size(),
-			Flags: flagStrings,
+			UID:          key,
+			Size:         fi.Size(),
+			Flags:        flagStrings,
+			InternalDate: fi.ModTime(),
 		})
 	}
 
@@ -697,6 +701,282 @@ func (s *MaildirStore) DeliverToFolder(ctx context.Context, mailbox string, fold
 	}
 
 	return delivery.Close()
+}
+
+// folderOrInboxPath returns the filesystem path for a folder or INBOX.
+// When folder is "INBOX" (case-insensitive), returns the mailbox root path.
+func (s *MaildirStore) folderOrInboxPath(mailbox, folder string) (string, error) {
+	if strings.EqualFold(folder, "INBOX") {
+		return s.mailboxPath(mailbox)
+	}
+	return s.folderPath(mailbox, folder)
+}
+
+// convertFlagsFromIMAP converts IMAP flag strings to go-maildir flags.
+// Unknown flag strings are silently ignored.
+func convertFlagsFromIMAP(flags []string) []maildir.Flag {
+	var result []maildir.Flag
+	for _, f := range flags {
+		switch f {
+		case "\\Seen":
+			result = append(result, maildir.FlagSeen)
+		case "\\Answered":
+			result = append(result, maildir.FlagReplied)
+		case "\\Flagged":
+			result = append(result, maildir.FlagFlagged)
+		case "\\Draft":
+			result = append(result, maildir.FlagDraft)
+		case "\\Deleted":
+			result = append(result, maildir.FlagTrashed)
+		}
+	}
+	return result
+}
+
+// RenameFolder implements msgstore.FolderStore.
+func (s *MaildirStore) RenameFolder(ctx context.Context, mailbox string, oldName string, newName string) error {
+	oldPath, err := s.folderPath(mailbox, oldName)
+	if err != nil {
+		return err
+	}
+	newPath, err := s.folderPath(mailbox, newName)
+	if err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(filepath.Join(oldPath, "cur")); os.IsNotExist(err) {
+		return errors.ErrFolderNotFound
+	}
+	if _, err := os.Stat(filepath.Join(newPath, "cur")); err == nil {
+		return errors.ErrFolderExists
+	}
+
+	// Clear deletion tracking for the old name.
+	key := folderDeletionKey(mailbox, oldName)
+	s.deletedMu.Lock()
+	delete(s.deleted, key)
+	s.deletedMu.Unlock()
+
+	return os.Rename(oldPath, newPath)
+}
+
+// infoFromFlags formats the maildir info field from a list of flags.
+// Result is "2,FLAGCHARS" where FLAGCHARS are sorted per maildir spec.
+func infoFromFlags(flags []maildir.Flag) string {
+	chars := make([]byte, 0, len(flags))
+	for _, f := range flags {
+		chars = append(chars, byte(f))
+	}
+	sort.Slice(chars, func(i, j int) bool { return chars[i] < chars[j] })
+	return "2," + string(chars)
+}
+
+// moveNewToCurWithFlags moves a message from new/ to cur/ with the given flags.
+// Used to make an appended or flag-modified message visible in cur/ immediately.
+func moveNewToCurWithFlags(dirPath string, key string, flags []maildir.Flag) error {
+	srcPath := filepath.Join(dirPath, "new", key)
+	// ':' is the maildir info separator on POSIX systems (see maildir spec).
+	dstBasename := key + ":" + infoFromFlags(flags)
+	dstPath := filepath.Join(dirPath, "cur", dstBasename)
+	return os.Rename(srcPath, dstPath)
+}
+
+// AppendToFolder implements msgstore.FolderStore.
+func (s *MaildirStore) AppendToFolder(ctx context.Context, mailbox string, folder string, r io.Reader, flags []string, date time.Time) (string, error) {
+	path, err := s.folderOrInboxPath(mailbox, folder)
+	if err != nil {
+		return "", err
+	}
+
+	dir := maildir.Dir(path)
+	if err := os.MkdirAll(path, 0700); err != nil {
+		return "", err
+	}
+	if err := dir.Init(); err != nil && !os.IsExist(err) {
+		return "", err
+	}
+
+	// Snapshot new/ before delivery to identify the resulting key.
+	newDir := filepath.Join(path, "new")
+	beforeKeys, err := maildirNewKeys(newDir)
+	if err != nil {
+		return "", err
+	}
+
+	delivery, err := maildir.NewDelivery(path)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(delivery, r); err != nil {
+		_ = delivery.Abort()
+		return "", err
+	}
+	if err := delivery.Close(); err != nil {
+		return "", err
+	}
+
+	// Find the newly added key in new/.
+	key, err := maildirNewKey(newDir, beforeKeys)
+	if err != nil {
+		return "", err
+	}
+
+	// Move from new/ to cur/ with the requested flags. IMAP APPEND messages
+	// are explicitly placed by the client and must be immediately accessible.
+	if err := moveNewToCurWithFlags(path, key, convertFlagsFromIMAP(flags)); err != nil {
+		return "", err
+	}
+
+	return key, nil
+}
+
+// maildirNewKeys returns the set of filenames currently in the new/ directory.
+func maildirNewKeys(newDir string) (map[string]bool, error) {
+	entries, err := os.ReadDir(newDir)
+	if os.IsNotExist(err) {
+		return make(map[string]bool), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	keys := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if !e.IsDir() {
+			keys[e.Name()] = true
+		}
+	}
+	return keys, nil
+}
+
+// maildirNewKey finds the single new entry in new/ not present in beforeKeys.
+func maildirNewKey(newDir string, beforeKeys map[string]bool) (string, error) {
+	entries, err := os.ReadDir(newDir)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if !e.IsDir() && !beforeKeys[e.Name()] {
+			return e.Name(), nil
+		}
+	}
+	return "", errors.ErrMessageNotFound
+}
+
+// SetFlagsInFolder implements msgstore.FolderStore.
+func (s *MaildirStore) SetFlagsInFolder(ctx context.Context, mailbox string, folder string, uid string, flags []string) error {
+	path, err := s.folderOrInboxPath(mailbox, folder)
+	if err != nil {
+		return err
+	}
+	mdFlags := convertFlagsFromIMAP(flags)
+	dir := maildir.Dir(path)
+
+	// Try cur/ first (most messages live here).
+	msg, err := dir.MessageByKey(uid)
+	if err == nil {
+		return msg.SetFlags(mdFlags)
+	}
+
+	// Fall back to new/: move to cur/ with the requested flags.
+	newPath := filepath.Join(path, "new", uid)
+	if _, statErr := os.Stat(newPath); statErr == nil {
+		return moveNewToCurWithFlags(path, uid, mdFlags)
+	}
+
+	return errors.ErrMessageNotFound
+}
+
+// CopyMessage implements msgstore.FolderStore.
+func (s *MaildirStore) CopyMessage(ctx context.Context, mailbox string, srcFolder string, uid string, destFolder string) (string, error) {
+	srcPath, err := s.folderOrInboxPath(mailbox, srcFolder)
+	if err != nil {
+		return "", err
+	}
+	destPath, err := s.folderOrInboxPath(mailbox, destFolder)
+	if err != nil {
+		return "", err
+	}
+
+	// Ensure destination exists.
+	destDir := maildir.Dir(destPath)
+	if err := os.MkdirAll(destPath, 0700); err != nil {
+		return "", err
+	}
+	if err := destDir.Init(); err != nil && !os.IsExist(err) {
+		return "", err
+	}
+
+	srcDir := maildir.Dir(srcPath)
+
+	// Try cur/ first. CopyTo places the copy in cur/ and returns the new Message.
+	msg, err := srcDir.MessageByKey(uid)
+	if err == nil {
+		newMsg, err := msg.CopyTo(destDir)
+		if err != nil {
+			return "", err
+		}
+		return newMsg.Key(), nil
+	}
+
+	// Fall back: source is in new/. Read and deliver to destination's new/.
+	newSrcPath := filepath.Join(srcPath, "new", uid)
+	if _, statErr := os.Stat(newSrcPath); statErr != nil {
+		return "", errors.ErrMessageNotFound
+	}
+
+	srcFile, err := os.Open(newSrcPath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = srcFile.Close() }()
+
+	// Snapshot new/ in destination before delivery.
+	destNewDir := filepath.Join(destPath, "new")
+	beforeKeys, err := maildirNewKeys(destNewDir)
+	if err != nil {
+		return "", err
+	}
+
+	delivery, err := maildir.NewDelivery(destPath)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(delivery, srcFile); err != nil {
+		_ = delivery.Abort()
+		return "", err
+	}
+	if err := delivery.Close(); err != nil {
+		return "", err
+	}
+
+	return maildirNewKey(destNewDir, beforeKeys)
+}
+
+// UIDValidity implements msgstore.FolderStore.
+// Returns a stable hash of the folder's base name. For a persistent
+// implementation, see issue #9.
+func (s *MaildirStore) UIDValidity(ctx context.Context, mailbox string, folder string) (uint32, error) {
+	var name string
+	if strings.EqualFold(folder, "INBOX") {
+		path, err := s.mailboxPath(mailbox)
+		if err != nil {
+			return 0, err
+		}
+		name = filepath.Base(path)
+	} else {
+		name = folder
+	}
+	// Strip any maildir++ flag suffix if present.
+	if i := strings.IndexByte(name, ':'); i >= 0 {
+		name = name[:i]
+	}
+	h := fnv.New32a()
+	h.Write([]byte(name))
+	v := h.Sum32()
+	if v == 0 {
+		return 1, nil
+	}
+	return v, nil
 }
 
 // Compile-time interface verification.

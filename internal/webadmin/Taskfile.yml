@@ -58,6 +58,26 @@ tasks:
     cmds:
       - rm -f {{.BINARY}}
 
+  docker:build:
+    desc: Build Docker image
+    cmds:
+      - docker build -t infodancer-webadmin:latest .
+
+  docker:run:
+    desc: Run webadmin container with temp config and domain directories
+    vars:
+      CONFIG_PATH:
+        sh: mktemp -d -t webadmin-config-XXXXXX
+      DOMAINS_PATH:
+        sh: mktemp -d -t webadmin-domains-XXXXXX
+    cmds:
+      - 'echo "Config: {{.CONFIG_PATH}}, Domains: {{.DOMAINS_PATH}}"'
+      - |
+        docker run -p 8080:8080 \
+          -v {{.CONFIG_PATH}}:/etc/infodancer:ro \
+          -v {{.DOMAINS_PATH}}:/opt/infodancer/domains \
+          infodancer-webadmin:latest
+
   hooks:install:
     desc: Install git hooks (pre-commit and pre-push)
     cmds:

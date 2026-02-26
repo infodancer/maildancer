@@ -102,7 +102,18 @@ func main() {
 	// Create domain provider if configured
 	var domainProvider domain.DomainProvider
 	if cfg.DomainsPath != "" {
-		dp := domain.NewFilesystemDomainProvider(cfg.DomainsPath, logger)
+		dp := domain.NewFilesystemDomainProvider(cfg.DomainsPath, logger).
+			WithDefaults(domain.DomainConfig{
+				Auth: domain.DomainAuthConfig{
+					Type:              "passwd",
+					CredentialBackend: "passwd",
+					KeyBackend:        "keys",
+				},
+				MsgStore: domain.DomainMsgStoreConfig{
+					Type:     "maildir",
+					BasePath: "users",
+				},
+			})
 		defer func() {
 			if err := dp.Close(); err != nil {
 				logger.Error("error closing domain provider", "error", err)

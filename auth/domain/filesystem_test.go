@@ -319,6 +319,166 @@ base_path = "` + maildirPath + `"
 	}
 }
 
+func TestFilesystemDomainProvider_WithDefaults_NoConfig(t *testing.T) {
+	// Domain directory exists but has no config.toml — should load using defaults.
+	tmpDir := t.TempDir()
+
+	domainDir := filepath.Join(tmpDir, "example.com")
+	if err := os.MkdirAll(domainDir, 0755); err != nil {
+		t.Fatalf("failed to create domain dir: %v", err)
+	}
+
+	// Create the resources the defaults will point at (relative paths)
+	passwdPath := filepath.Join(domainDir, "passwd")
+	if err := os.WriteFile(passwdPath, []byte(""), 0640); err != nil {
+		t.Fatalf("failed to create passwd: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(domainDir, "keys"), 0700); err != nil {
+		t.Fatalf("failed to create keys dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(domainDir, "users"), 0750); err != nil {
+		t.Fatalf("failed to create users dir: %v", err)
+	}
+
+	defaults := DomainConfig{
+		Auth: DomainAuthConfig{
+			Type:              "passwd",
+			CredentialBackend: "passwd",
+			KeyBackend:        "keys",
+		},
+		MsgStore: DomainMsgStoreConfig{
+			Type:     "maildir",
+			BasePath: "users",
+		},
+	}
+
+	provider := NewFilesystemDomainProvider(tmpDir, nil).WithDefaults(defaults)
+	defer func() {
+		if err := provider.Close(); err != nil {
+			t.Errorf("failed to close provider: %v", err)
+		}
+	}()
+
+	d := provider.GetDomain("example.com")
+	if d == nil {
+		t.Fatal("expected domain to be found via defaults")
+	}
+	if d.AuthAgent == nil {
+		t.Error("expected AuthAgent to be set")
+	}
+	if d.MessageStore == nil {
+		t.Error("expected MessageStore to be set")
+	}
+
+	// Directory exists but domain not in our base — should still return nil
+	if provider.GetDomain("notadomain.com") != nil {
+		t.Error("expected nil for directory that does not exist")
+	}
+}
+
+func TestFilesystemDomainProvider_WithDefaults_PartialOverride(t *testing.T) {
+	// Domain has a config.toml that only overrides msgstore; auth should come from defaults.
+	tmpDir := t.TempDir()
+
+	domainDir := filepath.Join(tmpDir, "example.com")
+	if err := os.MkdirAll(domainDir, 0755); err != nil {
+		t.Fatalf("failed to create domain dir: %v", err)
+	}
+
+	// Resources
+	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(""), 0640); err != nil {
+		t.Fatalf("failed to create passwd: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(domainDir, "keys"), 0700); err != nil {
+		t.Fatalf("failed to create keys dir: %v", err)
+	}
+	customUsers := filepath.Join(domainDir, "custom-users")
+	if err := os.MkdirAll(customUsers, 0750); err != nil {
+		t.Fatalf("failed to create custom-users dir: %v", err)
+	}
+
+	// Config only overrides msgstore.base_path
+	configContent := `[msgstore]
+type = "maildir"
+base_path = "custom-users"
+`
+	if err := os.WriteFile(filepath.Join(domainDir, "config.toml"), []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to create config: %v", err)
+	}
+
+	defaults := DomainConfig{
+		Auth: DomainAuthConfig{
+			Type:              "passwd",
+			CredentialBackend: "passwd",
+			KeyBackend:        "keys",
+		},
+		MsgStore: DomainMsgStoreConfig{
+			Type:     "maildir",
+			BasePath: "users",
+		},
+	}
+
+	provider := NewFilesystemDomainProvider(tmpDir, nil).WithDefaults(defaults)
+	defer func() {
+		if err := provider.Close(); err != nil {
+			t.Errorf("failed to close provider: %v", err)
+		}
+	}()
+
+	d := provider.GetDomain("example.com")
+	if d == nil {
+		t.Fatal("expected domain to be found")
+	}
+	if d.AuthAgent == nil {
+		t.Error("expected AuthAgent from defaults")
+	}
+	if d.MessageStore == nil {
+		t.Error("expected MessageStore from override")
+	}
+}
+
+func TestFilesystemDomainProvider_Domains_WithDefaults(t *testing.T) {
+	// With defaults set, Domains() should list all subdirectories, not just those with config.toml.
+	tmpDir := t.TempDir()
+
+	for _, name := range []string{"example.com", "no-config.org"} {
+		if err := os.MkdirAll(filepath.Join(tmpDir, name), 0755); err != nil {
+			t.Fatalf("failed to create dir: %v", err)
+		}
+	}
+	// Only example.com gets a config.toml
+	if err := os.WriteFile(filepath.Join(tmpDir, "example.com", "config.toml"), []byte("[auth]\ntype=\"passwd\"\n"), 0644); err != nil {
+		t.Fatalf("failed to create config: %v", err)
+	}
+	// A plain file should not be listed
+	if err := os.WriteFile(filepath.Join(tmpDir, "not-a-dir"), []byte(""), 0644); err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+
+	defaults := DomainConfig{
+		Auth:     DomainAuthConfig{Type: "passwd"},
+		MsgStore: DomainMsgStoreConfig{Type: "maildir"},
+	}
+
+	provider := NewFilesystemDomainProvider(tmpDir, nil).WithDefaults(defaults)
+	defer provider.Close() //nolint:errcheck
+
+	domains := provider.Domains()
+	if len(domains) != 2 {
+		t.Errorf("expected 2 domains, got %d: %v", len(domains), domains)
+	}
+	found := make(map[string]bool)
+	for _, d := range domains {
+		found[d] = true
+	}
+	if !found["example.com"] {
+		t.Error("expected example.com in list")
+	}
+	if !found["no-config.org"] {
+		t.Error("expected no-config.org in list")
+	}
+}
+
 func TestDomain_Close(t *testing.T) {
 	d := &Domain{
 		Name:          "test.com",

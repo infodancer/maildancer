@@ -14,17 +14,20 @@ import (
 )
 
 // FilesystemDomainProvider loads domain configs from a directory structure.
-// Each domain has its own subdirectory containing a config.toml file.
+// Each domain has its own subdirectory. A per-domain config.toml is optional
+// when defaults are set via WithDefaults — any subdirectory is then a valid
+// domain, with config.toml values overriding the defaults when present.
 //
 // Directory structure:
 //
 //	/etc/mail/domains/
 //	├── example.com/
-//	│   └── config.toml
+//	│   └── config.toml   (optional when defaults are set)
 //	├── other.org/
 //	│   └── config.toml
 type FilesystemDomainProvider struct {
 	basePath string
+	defaults *DomainConfig
 	cache    map[string]*Domain
 	mu       sync.RWMutex
 	logger   *slog.Logger
@@ -40,6 +43,14 @@ func NewFilesystemDomainProvider(basePath string, logger *slog.Logger) *Filesyst
 		cache:    make(map[string]*Domain),
 		logger:   logger,
 	}
+}
+
+// WithDefaults sets default domain configuration values used when a domain
+// directory has no config.toml, or to fill in fields not present in it.
+// Returns the provider to allow chaining.
+func (p *FilesystemDomainProvider) WithDefaults(cfg DomainConfig) *FilesystemDomainProvider {
+	p.defaults = &cfg
+	return p
 }
 
 // GetDomain returns the Domain for a given domain name.
@@ -59,8 +70,16 @@ func (p *FilesystemDomainProvider) GetDomain(name string) *Domain {
 	domainPath := filepath.Join(p.basePath, name)
 	configPath := filepath.Join(domainPath, "config.toml")
 
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return nil // Domain not handled
+	if p.defaults != nil {
+		// With defaults: domain directory must exist; config.toml is optional
+		if _, err := os.Stat(domainPath); os.IsNotExist(err) {
+			return nil
+		}
+	} else {
+		// Without defaults: config.toml is required
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			return nil
+		}
 	}
 
 	// Load config and create Domain
@@ -88,11 +107,30 @@ func (p *FilesystemDomainProvider) GetDomain(name string) *Domain {
 }
 
 // loadDomain loads a domain configuration and creates the domain agents.
+// If defaults are set, they serve as the base; per-domain config.toml overrides them.
 func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath string) (*Domain, error) {
-	// Load config.toml
-	cfg, err := LoadDomainConfig(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("load config: %w", err)
+	var cfg *DomainConfig
+
+	// Start with defaults if set
+	if p.defaults != nil {
+		base := *p.defaults
+		cfg = &base
+	}
+
+	// Load per-domain config.toml if it exists, merging on top of defaults
+	if _, err := os.Stat(configPath); err == nil {
+		override, err := LoadDomainConfig(configPath)
+		if err != nil {
+			return nil, fmt.Errorf("load config: %w", err)
+		}
+		if cfg != nil {
+			merged := mergeConfig(*cfg, *override)
+			cfg = &merged
+		} else {
+			cfg = override
+		}
+	} else if cfg == nil {
+		return nil, fmt.Errorf("no config.toml and no defaults set for domain %s", name)
 	}
 
 	// Create auth agent (absolute paths used as-is, relative paths joined with domainPath)
@@ -133,6 +171,8 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 }
 
 // Domains returns the list of domain names handled by this provider.
+// When defaults are set, all subdirectories are considered valid domains.
+// Without defaults, only subdirectories containing a config.toml are listed.
 func (p *FilesystemDomainProvider) Domains() []string {
 	entries, err := os.ReadDir(p.basePath)
 	if err != nil {
@@ -144,7 +184,14 @@ func (p *FilesystemDomainProvider) Domains() []string {
 
 	var domains []string
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if !entry.IsDir() {
+			continue
+		}
+		if p.defaults != nil {
+			// With defaults: any subdirectory is a valid domain
+			domains = append(domains, entry.Name())
+		} else {
+			// Without defaults: only directories with config.toml
 			configPath := filepath.Join(p.basePath, entry.Name(), "config.toml")
 			if _, err := os.Stat(configPath); err == nil {
 				domains = append(domains, entry.Name())

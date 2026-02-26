@@ -40,6 +40,34 @@ type DomainMsgStoreConfig struct {
 	Options map[string]string `toml:"options"`
 }
 
+// mergeConfig returns a new DomainConfig with base values overridden by
+// non-zero values from override. Fields absent in override retain the base value.
+func mergeConfig(base, override DomainConfig) DomainConfig {
+	result := base
+	if override.Auth.Type != "" {
+		result.Auth.Type = override.Auth.Type
+	}
+	if override.Auth.CredentialBackend != "" {
+		result.Auth.CredentialBackend = override.Auth.CredentialBackend
+	}
+	if override.Auth.KeyBackend != "" {
+		result.Auth.KeyBackend = override.Auth.KeyBackend
+	}
+	if len(override.Auth.Options) > 0 {
+		result.Auth.Options = override.Auth.Options
+	}
+	if override.MsgStore.Type != "" {
+		result.MsgStore.Type = override.MsgStore.Type
+	}
+	if override.MsgStore.BasePath != "" {
+		result.MsgStore.BasePath = override.MsgStore.BasePath
+	}
+	if len(override.MsgStore.Options) > 0 {
+		result.MsgStore.Options = override.MsgStore.Options
+	}
+	return result
+}
+
 // LoadDomainConfig reads and parses a domain configuration file.
 func LoadDomainConfig(path string) (*DomainConfig, error) {
 	data, err := os.ReadFile(path)

@@ -378,10 +378,6 @@ func (h *DomainHandler) listDomains() ([]DomainSummary, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		configPath := filepath.Join(h.domainsPath, entry.Name(), "config.toml")
-		if _, err := os.Stat(configPath); err != nil {
-			continue
-		}
 		userCount := countPasswdEntries(filepath.Join(h.domainsPath, entry.Name(), "passwd"))
 		domains = append(domains, DomainSummary{
 			Name:      entry.Name(),
@@ -396,18 +392,28 @@ func (h *DomainHandler) listDomains() ([]DomainSummary, error) {
 }
 
 // getDomainDetail reads domain config and returns detail.
+// If config.toml is absent the domain is still valid (defaults apply in smtpd/pop3d);
+// we report the standard default values in that case.
 func (h *DomainHandler) getDomainDetail(name, domainPath string) (*DomainDetail, error) {
+	authType := "passwd"   // default
+	storeType := "maildir" // default
+
 	configPath := filepath.Join(domainPath, "config.toml")
 	data, err := os.ReadFile(configPath)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-
-	// Simple extraction of auth type and store type from TOML.
-	// We read the raw file rather than importing the domain config package
-	// to avoid circular dependencies and keep the webadmin self-contained.
-	authType := extractTOMLValue(string(data), "type", "auth")
-	storeType := extractTOMLValue(string(data), "type", "msgstore")
+	if err == nil {
+		// Simple extraction of auth type and store type from TOML.
+		// We read the raw file rather than importing the domain config package
+		// to avoid circular dependencies and keep the webadmin self-contained.
+		if v := extractTOMLValue(string(data), "type", "auth"); v != "" {
+			authType = v
+		}
+		if v := extractTOMLValue(string(data), "type", "msgstore"); v != "" {
+			storeType = v
+		}
+	}
 
 	userCount := countPasswdEntries(filepath.Join(domainPath, "passwd"))
 

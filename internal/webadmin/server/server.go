@@ -228,6 +228,10 @@ func (s *Server) registerRoutes() {
 		http.HandlerFunc(domainHandler.HandleDeleteDomain),
 		requireAuth, requireCSRF, requireSuperAdmin,
 	))
+	s.mux.Handle("PUT /api/domains/{name}/config", middleware.Chain(
+		http.HandlerFunc(domainHandler.HandleUpdateDomainConfig),
+		requireAuth, requireCSRF, requireDomainAccessByName,
+	))
 
 	// Domain key management API
 	s.mux.Handle("GET /api/domains/{name}/keys", middleware.Chain(

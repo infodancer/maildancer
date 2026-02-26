@@ -12,6 +12,67 @@
   <p>{{.Data.Domain.UserCount}} user{{if ne .Data.Domain.UserCount 1}}s{{end}} &middot; Auth: {{.Data.Domain.AuthType}} &middot; Store: {{.Data.Domain.StoreType}}</p>
 </hgroup>
 
+<h2>Configuration</h2>
+<form id="domain-config-form">
+  <label>
+    <input type="checkbox" id="override-config"
+           role="switch"
+           {{if .Data.Domain.HasOverride}}checked{{end}}
+           onchange="document.getElementById('config-fields').disabled = !this.checked">
+    Override defaults for this domain
+  </label>
+  <fieldset id="config-fields" {{if not .Data.Domain.HasOverride}}disabled{{end}}>
+    <div class="grid">
+      <label>Auth type
+        <input type="text" name="auth_type" value="{{.Data.Domain.AuthType}}"
+               {{if not .Data.Domain.HasOverride}}placeholder="passwd (default)"{{end}}>
+      </label>
+      <label>Store type
+        <input type="text" name="store_type" value="{{.Data.Domain.StoreType}}"
+               {{if not .Data.Domain.HasOverride}}placeholder="maildir (default)"{{end}}>
+      </label>
+    </div>
+    <div class="grid">
+      <label>Credential backend
+        <input type="text" name="credential_backend" value="{{.Data.Domain.CredentialBackend}}"
+               {{if not .Data.Domain.HasOverride}}placeholder="passwd (default)"{{end}}>
+      </label>
+      <label>Key backend
+        <input type="text" name="key_backend" value="{{.Data.Domain.KeyBackend}}"
+               {{if not .Data.Domain.HasOverride}}placeholder="keys (default)"{{end}}>
+      </label>
+    </div>
+    <label>Maildir base path
+      <input type="text" name="base_path" value="{{.Data.Domain.BasePath}}"
+             {{if not .Data.Domain.HasOverride}}placeholder="users (default)"{{end}}>
+    </label>
+  </fieldset>
+  {{if .Data.IsSuperAdmin}}
+  <button type="button" onclick="saveDomainConfig('{{.Data.Domain.Name}}', '{{.CSRFToken}}')">Save Configuration</button>
+  {{end}}
+</form>
+<script>
+function saveDomainConfig(domain, csrfToken) {
+  var override = document.getElementById('override-config').checked;
+  var body = { override: override };
+  if (override) {
+    body.auth_type = document.querySelector('[name=auth_type]').value;
+    body.credential_backend = document.querySelector('[name=credential_backend]').value;
+    body.key_backend = document.querySelector('[name=key_backend]').value;
+    body.store_type = document.querySelector('[name=store_type]').value;
+    body.base_path = document.querySelector('[name=base_path]').value;
+  }
+  fetch('/api/domains/' + domain + '/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(body)
+  }).then(function(r) {
+    if (r.ok) { location.reload(); }
+    else { r.json().then(function(e) { alert('Error: ' + e.error); }); }
+  });
+}
+</script>
+
 <h2>Domain Keys</h2>
 <div id="domain-keys-status">
   {{if .Data.Domain.HasKeys}}

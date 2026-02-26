@@ -217,6 +217,70 @@ func (h *DomainHandler) HandleDeleteDomain(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "deleted"})
 }
 
+// HandleUpdateDomainConfig writes or removes a per-domain config.toml override.
+// PUT /api/domains/{name}/config
+// Body: {"override":false} — removes config.toml (reverts to defaults)
+// Body: {"override":true,"auth_type":"...","credential_backend":"...","key_backend":"...","store_type":"...","base_path":"..."} — writes config.toml
+func (h *DomainHandler) HandleUpdateDomainConfig(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !isValidDomainName(name) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid domain name"})
+		return
+	}
+	if err := h.checkDomainAccess(r, name); err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+		return
+	}
+	domainPath := filepath.Join(h.domainsPath, name)
+	if !dirExists(domainPath) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+		return
+	}
+
+	var req struct {
+		Override          bool   `json:"override"`
+		AuthType          string `json:"auth_type"`
+		CredentialBackend string `json:"credential_backend"`
+		KeyBackend        string `json:"key_backend"`
+		StoreType         string `json:"store_type"`
+		BasePath          string `json:"base_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	configPath := filepath.Join(domainPath, "config.toml")
+	if !req.Override {
+		if err := os.Remove(configPath); err != nil && !os.IsNotExist(err) {
+			h.logger.Error("failed to remove domain config", "domain", name, "error", err)
+			h.logAudit(r, "update_domain_config", name, "failure", err.Error())
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to remove config"})
+			return
+		}
+		h.logAudit(r, "update_domain_config", name, "success", "reverted to defaults")
+		writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "defaults"})
+		return
+	}
+
+	// Validate required fields
+	if req.AuthType == "" || req.StoreType == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "auth_type and store_type are required"})
+		return
+	}
+
+	content := fmt.Sprintf("[auth]\ntype = %q\ncredential_backend = %q\nkey_backend = %q\n\n[msgstore]\ntype = %q\nbase_path = %q\n",
+		req.AuthType, req.CredentialBackend, req.KeyBackend, req.StoreType, req.BasePath)
+	if err := os.WriteFile(configPath, []byte(content), 0o640); err != nil {
+		h.logger.Error("failed to write domain config", "domain", name, "error", err)
+		h.logAudit(r, "update_domain_config", name, "failure", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
+		return
+	}
+	h.logAudit(r, "update_domain_config", name, "success", "override written")
+	writeJSON(w, http.StatusOK, map[string]string{"name": name, "status": "override"})
+}
+
 // HandleGetDomainKeys returns the key status for a domain.
 func (h *DomainHandler) HandleGetDomainKeys(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")

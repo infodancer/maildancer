@@ -46,11 +46,15 @@ type uiSpamCheckSettings struct {
 
 // uiDomainRow holds domain data for dashboard rendering.
 type uiDomainRow struct {
-	Name      string
-	UserCount int
-	AuthType  string
-	StoreType string
-	HasKeys   bool
+	Name              string
+	UserCount         int
+	AuthType          string
+	StoreType         string
+	HasKeys           bool
+	CredentialBackend string
+	KeyBackend        string
+	BasePath          string
+	HasOverride       bool
 }
 
 // uiUserRow holds user data for domain detail rendering.
@@ -127,30 +131,55 @@ func (h *WebHandler) HandleDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		domainName := entry.Name()
 		domainPath := filepath.Join(h.domainsPath, domainName)
-		configPath := filepath.Join(domainPath, "config.toml")
-		if _, err := os.Stat(configPath); err != nil {
-			continue
-		}
 
 		// Apply RBAC filter
 		if h.roles != nil && !h.roles.IsSuperAdmin(username) && !h.roles.CanAccessDomain(username, domainName) {
 			continue
 		}
 
-		data, _ := os.ReadFile(configPath)
-		authType := extractTOMLValue(string(data), "type", "auth")
-		storeType := extractTOMLValue(string(data), "type", "msgstore")
+		// Set defaults; override from config.toml if it exists.
+		authType := "passwd"
+		storeType := "maildir"
+		credentialBackend := "passwd"
+		keyBackend := "keys"
+		basePath := "users"
+		hasOverride := false
+
+		configPath := filepath.Join(domainPath, "config.toml")
+		if data, err := os.ReadFile(configPath); err == nil {
+			hasOverride = true
+			if v := extractTOMLValue(string(data), "type", "auth"); v != "" {
+				authType = v
+			}
+			if v := extractTOMLValue(string(data), "type", "msgstore"); v != "" {
+				storeType = v
+			}
+			if v := extractTOMLValue(string(data), "credential_backend", "auth"); v != "" {
+				credentialBackend = v
+			}
+			if v := extractTOMLValue(string(data), "key_backend", "auth"); v != "" {
+				keyBackend = v
+			}
+			if v := extractTOMLValue(string(data), "base_path", "msgstore"); v != "" {
+				basePath = v
+			}
+		}
+
 		userCount := countPasswdEntries(filepath.Join(domainPath, "passwd"))
 
 		// Check for domain-level keys
 		_, pubErr := keys.LoadPublicKey(filepath.Join(domainPath, "keys"), "domain")
 
 		domains = append(domains, uiDomainRow{
-			Name:      domainName,
-			UserCount: userCount,
-			AuthType:  authType,
-			StoreType: storeType,
-			HasKeys:   pubErr == nil,
+			Name:              domainName,
+			UserCount:         userCount,
+			AuthType:          authType,
+			StoreType:         storeType,
+			HasKeys:           pubErr == nil,
+			CredentialBackend: credentialBackend,
+			KeyBackend:        keyBackend,
+			BasePath:          basePath,
+			HasOverride:       hasOverride,
 		})
 	}
 
@@ -193,10 +222,34 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Read domain config
-	configData, _ := os.ReadFile(filepath.Join(domainPath, "config.toml"))
-	authType := extractTOMLValue(string(configData), "type", "auth")
-	storeType := extractTOMLValue(string(configData), "type", "msgstore")
+	// Read domain config — set defaults, override from config.toml if present.
+	authType := "passwd"
+	storeType := "maildir"
+	credentialBackend := "passwd"
+	keyBackend := "keys"
+	basePath := "users"
+	hasOverride := false
+
+	configPath := filepath.Join(domainPath, "config.toml")
+	if configData, err := os.ReadFile(configPath); err == nil {
+		hasOverride = true
+		if v := extractTOMLValue(string(configData), "type", "auth"); v != "" {
+			authType = v
+		}
+		if v := extractTOMLValue(string(configData), "type", "msgstore"); v != "" {
+			storeType = v
+		}
+		if v := extractTOMLValue(string(configData), "credential_backend", "auth"); v != "" {
+			credentialBackend = v
+		}
+		if v := extractTOMLValue(string(configData), "key_backend", "auth"); v != "" {
+			keyBackend = v
+		}
+		if v := extractTOMLValue(string(configData), "base_path", "msgstore"); v != "" {
+			basePath = v
+		}
+	}
+
 	userCount := countPasswdEntries(filepath.Join(domainPath, "passwd"))
 
 	// Domain key status
@@ -217,11 +270,15 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 		IsSuperAdmin         bool
 	}{
 		Domain: uiDomainRow{
-			Name:      name,
-			UserCount: userCount,
-			AuthType:  authType,
-			StoreType: storeType,
-			HasKeys:   pubErr == nil,
+			Name:              name,
+			UserCount:         userCount,
+			AuthType:          authType,
+			StoreType:         storeType,
+			HasKeys:           pubErr == nil,
+			CredentialBackend: credentialBackend,
+			KeyBackend:        keyBackend,
+			BasePath:          basePath,
+			HasOverride:       hasOverride,
 		},
 		Users:                users,
 		DomainKeyFingerprint: domainKeyFingerprint,

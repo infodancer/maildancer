@@ -111,7 +111,7 @@ func (a *mailAuthAgent) HasEncryption(ctx context.Context, username string) (boo
 	return false, nil
 }
 
-// SmartDeliveryAgent is a msgstore.DeliveryAgent that applies mail-routing
+// MailDeliveryAgent is a msgstore.DeliveryAgent that applies mail-routing
 // logic before delivering to the underlying store. It handles:
 //
 //   - Forwarding rule resolution and expansion via the three-level forwardChain
@@ -121,10 +121,10 @@ func (a *mailAuthAgent) HasEncryption(ctx context.Context, username string) (boo
 // filtering, and quota enforcement.
 //
 // smtpd is entirely unaware of this logic — it simply calls Deliver() and the
-// SmartDeliveryAgent handles all routing decisions.
+// MailDeliveryAgent handles all routing decisions.
 //
 // Note: loop detection is not implemented. Avoid circular forwarding rules.
-type SmartDeliveryAgent struct {
+type MailDeliveryAgent struct {
 	inner    msgstore.DeliveryAgent
 	chain    *forwardChain
 	provider DomainProvider
@@ -135,7 +135,7 @@ type SmartDeliveryAgent struct {
 //   - No forward match: deliver locally via the inner agent.
 //   - Forward match: buffer and deliver to each target via its domain's DeliveryAgent.
 //   - Target on an unserved domain: returns an error (no outbound relay available).
-func (a *SmartDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envelope, message io.Reader) error {
+func (a *MailDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envelope, message io.Reader) error {
 	if len(envelope.Recipients) == 0 {
 		return a.inner.Deliver(ctx, envelope, message)
 	}

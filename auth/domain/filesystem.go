@@ -186,7 +186,7 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 	}
 
 	// Wrap delivery agent to expand forwarding rules at delivery time.
-	var finalDelivery msgstore.DeliveryAgent = &SmartDeliveryAgent{
+	var finalDelivery msgstore.DeliveryAgent = &MailDeliveryAgent{
 		inner:    store,
 		chain:    chain,
 		provider: p,

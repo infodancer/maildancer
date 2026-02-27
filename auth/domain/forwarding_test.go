@@ -177,7 +177,7 @@ func TestForwardingDeliveryAgent_NoForward_DeliversLocally(t *testing.T) {
 		defaultForwards: &forwards.ForwardMap{},
 	}
 	provider := &stubDomainProvider{domains: map[string]*Domain{}}
-	agent := &SmartDeliveryAgent{inner: inner, chain: chain, provider: provider}
+	agent := &MailDeliveryAgent{inner: inner, chain: chain, provider: provider}
 
 	env := msgstore.Envelope{Recipients: []string{"alice@example.com"}}
 	if err := agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test"))); err != nil {
@@ -213,7 +213,7 @@ func TestForwardingDeliveryAgent_DomainForward_RoutesToTarget(t *testing.T) {
 		domainForwards:  fwdMap,
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &SmartDeliveryAgent{inner: inner, chain: chain, provider: provider}
+	agent := &MailDeliveryAgent{inner: inner, chain: chain, provider: provider}
 
 	env := msgstore.Envelope{Recipients: []string{"anyone@this.com"}}
 	if err := agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test"))); err != nil {
@@ -252,7 +252,7 @@ func TestForwardingDeliveryAgent_ExternalTarget_ReturnsError(t *testing.T) {
 		domainForwards:  fwdMap,
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &SmartDeliveryAgent{inner: inner, chain: chain, provider: provider}
+	agent := &MailDeliveryAgent{inner: inner, chain: chain, provider: provider}
 
 	env := msgstore.Envelope{Recipients: []string{"anyone@this.com"}}
 	err = agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test")))
@@ -284,7 +284,7 @@ func TestForwardingDeliveryAgent_UserLevelForward(t *testing.T) {
 		domainForwards:  &forwards.ForwardMap{},
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &SmartDeliveryAgent{inner: inner, chain: chain, provider: provider}
+	agent := &MailDeliveryAgent{inner: inner, chain: chain, provider: provider}
 
 	env := msgstore.Envelope{Recipients: []string{"alice@this.com"}}
 	if err := agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test"))); err != nil {

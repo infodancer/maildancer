@@ -69,9 +69,13 @@ func NewAgent(passwdPath, keyDir string) (*Agent, error) {
 }
 
 // loadPasswd reads and parses the passwd file.
+// A missing passwd file is treated as empty (no users), not an error.
 func (a *Agent) loadPasswd() error {
 	f, err := os.Open(a.passwdPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return fmt.Errorf("open passwd file: %w", err)
 	}
 	defer func() { _ = f.Close() }()

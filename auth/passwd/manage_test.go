@@ -135,3 +135,24 @@ func TestAddUserRoundTrip(t *testing.T) {
 		t.Error("expected error with wrong password, got nil")
 	}
 }
+
+func TestNewAgent_MissingPasswdFile(t *testing.T) {
+	dir := t.TempDir()
+	passwdPath := filepath.Join(dir, "passwd")
+	keyDir := filepath.Join(dir, "keys")
+
+	// passwd file does not exist — should succeed with no users
+	agent, err := NewAgent(passwdPath, keyDir)
+	if err != nil {
+		t.Fatalf("NewAgent with missing passwd file: %v", err)
+	}
+	defer func() { _ = agent.Close() }()
+
+	exists, err := agent.UserExists(t.Context(), "nobody")
+	if err != nil {
+		t.Fatalf("UserExists: %v", err)
+	}
+	if exists {
+		t.Error("expected no users in empty agent")
+	}
+}

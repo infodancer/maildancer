@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/infodancer/maildancer/auth"
+	"github.com/infodancer/maildancer/auth/forwards"
 	"github.com/infodancer/maildancer/msgstore"
 )
 
@@ -157,6 +158,40 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		return nil, fmt.Errorf("create msgstore: %w", err)
 	}
 
+	// Load forwarding rules at three levels:
+	//   1. User-level:   {domainPath}/user_forwards/{localpart}  (per-user file, read on demand)
+	//   2. Domain-level: {domainPath}/forwards                   (loaded now)
+	//   3. System default: {basePath}/forwards                   (loaded now)
+	domainFwd, err := forwards.Load(filepath.Join(domainPath, "forwards"))
+	if err != nil {
+		_ = authAgent.Close()
+		return nil, fmt.Errorf("load domain forwards: %w", err)
+	}
+	defaultFwd, err := forwards.Load(filepath.Join(p.basePath, "forwards"))
+	if err != nil {
+		_ = authAgent.Close()
+		return nil, fmt.Errorf("load default forwards: %w", err)
+	}
+
+	chain := &forwardChain{
+		userForwardsDir: filepath.Join(domainPath, "user_forwards"),
+		domainForwards:  domainFwd,
+		defaultForwards: defaultFwd,
+	}
+
+	// Wrap auth agent so UserExists returns true for forward-only addresses.
+	var finalAuth auth.AuthenticationAgent = &forwardingAuthAgent{
+		inner: authAgent,
+		chain: chain,
+	}
+
+	// Wrap delivery agent to expand forwarding rules at delivery time.
+	var finalDelivery msgstore.DeliveryAgent = &forwardingDeliveryAgent{
+		inner:    store,
+		chain:    chain,
+		provider: p,
+	}
+
 	p.logger.Debug("loaded domain",
 		slog.String("domain", name),
 		slog.String("auth_type", cfg.Auth.Type),
@@ -164,8 +199,8 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 
 	return &Domain{
 		Name:          name,
-		AuthAgent:     authAgent,
-		DeliveryAgent: store,
+		AuthAgent:     finalAuth,
+		DeliveryAgent: finalDelivery,
 		MessageStore:  store,
 	}, nil
 }

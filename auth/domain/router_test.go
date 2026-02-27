@@ -35,6 +35,10 @@ func (m *mockAuthAgent) Close() error {
 	return nil
 }
 
+func (m *mockAuthAgent) ResolveForward(_ context.Context, _ string) ([]string, bool) {
+	return nil, false
+}
+
 // mockDomainProvider implements DomainProvider for testing.
 type mockDomainProvider struct {
 	domains map[string]*Domain

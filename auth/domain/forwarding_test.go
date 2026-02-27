@@ -33,6 +33,10 @@ func (s *stubAuthAgent) UserExists(_ context.Context, username string) (bool, er
 
 func (s *stubAuthAgent) Close() error { return nil }
 
+func (s *stubAuthAgent) ResolveForward(_ context.Context, _ string) ([]string, bool) {
+	return nil, false
+}
+
 type stubDeliveryAgent struct {
 	delivered []msgstore.Envelope
 }
@@ -69,7 +73,7 @@ func TestForwardingAuthAgent_UserExists_LocalUser(t *testing.T) {
 		domainForwards:  &forwards.ForwardMap{},
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &forwardingAuthAgent{inner: inner, chain: chain}
+	agent := &mailAuthAgent{inner: inner, chain: chain}
 
 	exists, err := agent.UserExists(context.Background(), "alice")
 	if err != nil || !exists {
@@ -93,7 +97,7 @@ func TestForwardingAuthAgent_UserExists_ForwardOnly(t *testing.T) {
 		domainForwards:  fwdMap,
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &forwardingAuthAgent{inner: inner, chain: chain}
+	agent := &mailAuthAgent{inner: inner, chain: chain}
 
 	// User doesn't exist locally, but catchall forward covers all addresses.
 	exists, err := agent.UserExists(context.Background(), "anyone")
@@ -108,7 +112,7 @@ func TestForwardingAuthAgent_UserExists_Unknown(t *testing.T) {
 		domainForwards:  &forwards.ForwardMap{},
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &forwardingAuthAgent{inner: inner, chain: chain}
+	agent := &mailAuthAgent{inner: inner, chain: chain}
 
 	exists, err := agent.UserExists(context.Background(), "ghost")
 	if err != nil || exists {
@@ -122,7 +126,7 @@ func TestForwardingAuthAgent_Authenticate_DelegatesInner(t *testing.T) {
 		domainForwards:  &forwards.ForwardMap{},
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &forwardingAuthAgent{inner: inner, chain: chain}
+	agent := &mailAuthAgent{inner: inner, chain: chain}
 
 	session, err := agent.Authenticate(context.Background(), "alice", "pass")
 	if err != nil || session == nil {
@@ -152,7 +156,7 @@ func TestForwardingAuthAgent_UserLevel(t *testing.T) {
 		domainForwards:  &forwards.ForwardMap{},
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &forwardingAuthAgent{inner: inner, chain: chain}
+	agent := &mailAuthAgent{inner: inner, chain: chain}
 
 	exists, err := agent.UserExists(context.Background(), "bob")
 	if err != nil || !exists {
@@ -173,7 +177,7 @@ func TestForwardingDeliveryAgent_NoForward_DeliversLocally(t *testing.T) {
 		defaultForwards: &forwards.ForwardMap{},
 	}
 	provider := &stubDomainProvider{domains: map[string]*Domain{}}
-	agent := &forwardingDeliveryAgent{inner: inner, chain: chain, provider: provider}
+	agent := &SmartDeliveryAgent{inner: inner, chain: chain, provider: provider}
 
 	env := msgstore.Envelope{Recipients: []string{"alice@example.com"}}
 	if err := agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test"))); err != nil {
@@ -209,7 +213,7 @@ func TestForwardingDeliveryAgent_DomainForward_RoutesToTarget(t *testing.T) {
 		domainForwards:  fwdMap,
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &forwardingDeliveryAgent{inner: inner, chain: chain, provider: provider}
+	agent := &SmartDeliveryAgent{inner: inner, chain: chain, provider: provider}
 
 	env := msgstore.Envelope{Recipients: []string{"anyone@this.com"}}
 	if err := agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test"))); err != nil {
@@ -248,7 +252,7 @@ func TestForwardingDeliveryAgent_ExternalTarget_ReturnsError(t *testing.T) {
 		domainForwards:  fwdMap,
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &forwardingDeliveryAgent{inner: inner, chain: chain, provider: provider}
+	agent := &SmartDeliveryAgent{inner: inner, chain: chain, provider: provider}
 
 	env := msgstore.Envelope{Recipients: []string{"anyone@this.com"}}
 	err = agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test")))
@@ -280,7 +284,7 @@ func TestForwardingDeliveryAgent_UserLevelForward(t *testing.T) {
 		domainForwards:  &forwards.ForwardMap{},
 		defaultForwards: &forwards.ForwardMap{},
 	}
-	agent := &forwardingDeliveryAgent{inner: inner, chain: chain, provider: provider}
+	agent := &SmartDeliveryAgent{inner: inner, chain: chain, provider: provider}
 
 	env := msgstore.Envelope{Recipients: []string{"alice@this.com"}}
 	if err := agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test"))); err != nil {

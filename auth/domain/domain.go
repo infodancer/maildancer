@@ -3,19 +3,32 @@
 package domain
 
 import (
+	"context"
 	"errors"
 
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/msgstore"
 )
 
+// MailAuthAgent extends AuthenticationAgent with mail-specific capabilities.
+// It is the required auth type for a Domain — all domains use a MailAuthAgent
+// so that mail-layer features (forwarding, aliases, etc.) are always available.
+type MailAuthAgent interface {
+	auth.AuthenticationAgent
+
+	// ResolveForward returns forwarding targets for a localpart, walking the
+	// three-level hierarchy: user-level → domain-level → system default.
+	// Returns (nil, false) if no forwarding rule applies.
+	ResolveForward(ctx context.Context, localpart string) ([]string, bool)
+}
+
 // Domain holds the configuration and agents for a single email domain.
 type Domain struct {
 	// Name is the domain name (e.g., "example.com").
 	Name string
 
-	// AuthAgent handles user authentication and existence checks for this domain.
-	AuthAgent auth.AuthenticationAgent
+	// AuthAgent handles authentication and mail-specific lookups for this domain.
+	AuthAgent MailAuthAgent
 
 	// DeliveryAgent handles message delivery for this domain.
 	DeliveryAgent msgstore.DeliveryAgent

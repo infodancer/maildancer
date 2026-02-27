@@ -180,13 +180,13 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 	}
 
 	// Wrap auth agent so UserExists returns true for forward-only addresses.
-	var finalAuth auth.AuthenticationAgent = &forwardingAuthAgent{
+	finalAuth := &mailAuthAgent{
 		inner: authAgent,
 		chain: chain,
 	}
 
 	// Wrap delivery agent to expand forwarding rules at delivery time.
-	var finalDelivery msgstore.DeliveryAgent = &forwardingDeliveryAgent{
+	var finalDelivery msgstore.DeliveryAgent = &SmartDeliveryAgent{
 		inner:    store,
 		chain:    chain,
 		provider: p,

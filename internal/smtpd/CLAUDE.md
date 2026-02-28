@@ -97,3 +97,10 @@ task release VERSION=0.0.2   # in imapd
 The `release` task tags the current HEAD and pushes the tag. It will error if VERSION is omitted.
 
 **Never tag one repo without tagging the others at the same version.**
+
+## Security Model
+
+This repository is part of the infodancer mail stack. The process separation,
+privilege model, uid/gid allocation, and pipe protocol are defined in:
+
+https://github.com/infodancer/infodancer/blob/master/docs/mail-security-model.md

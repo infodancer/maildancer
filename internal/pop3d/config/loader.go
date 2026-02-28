@@ -211,6 +211,10 @@ func mergeConfig(dst, src Config) Config {
 		dst.DomainsPath = src.DomainsPath
 	}
 
+	if src.DomainsDataPath != "" {
+		dst.DomainsDataPath = src.DomainsDataPath
+	}
+
 	// Merge auth config
 	if src.Auth.Type != "" {
 		dst.Auth.Type = src.Auth.Type

@@ -2,6 +2,8 @@ module github.com/infodancer/maildancer/internal/webadmin
 
 go 1.24.0
 
+toolchain go1.24.13
+
 require (
 	github.com/infodancer/maildancer/auth v0.1.2
 	github.com/infodancer/maildancer/msgstore v0.1.0

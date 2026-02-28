@@ -42,10 +42,11 @@ type Config struct {
 	Timeouts  TimeoutsConfig   `toml:"timeouts"`
 	Limits    LimitsConfig     `toml:"limits"`
 	Metrics   MetricsConfig    `toml:"metrics"`
-	Maildir     string           `toml:"maildir"`
-	DomainsPath     string           `toml:"domains_path"`
-	DomainsDataPath string           `toml:"domains_data_path"`
-	Auth        AuthConfig       `toml:"auth"`
+	Maildir         string     `toml:"maildir"`
+	DomainsPath     string     `toml:"domains_path"`
+	DomainsDataPath string     `toml:"domains_data_path"`
+	MailSessionPath string     `toml:"mail_session"` // path to the mail-session binary
+	Auth            AuthConfig `toml:"auth"`
 }
 
 // AuthConfig holds configuration for the authentication agent.

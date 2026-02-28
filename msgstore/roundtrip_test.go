@@ -20,7 +20,7 @@ package msgstore_test
 //
 // so a message delivered to alice@test.local lands at
 //   <base_path>/alice/Maildir/
-// and pop3d retrieves it using mailbox = "alice".
+// and pop3d retrieves it using mailbox = "alice@test.local" (template strips domain).
 
 import (
 	"context"
@@ -116,7 +116,7 @@ func TestRoundTrip_DeliverAndList_BasicPath(t *testing.T) {
 	deliver(t, cfg, "alice@test.local", "Hello", "Test body.")
 
 	// Open a separate store instance to simulate pop3d reading independently.
-	msgs := listMailbox(t, cfg, "alice")
+	msgs := listMailbox(t, cfg, "alice@test.local")
 	if len(msgs) != 1 {
 		t.Errorf("expected 1 message for mailbox alice, got %d", len(msgs))
 	}
@@ -124,26 +124,17 @@ func TestRoundTrip_DeliverAndList_BasicPath(t *testing.T) {
 
 // TestRoundTrip_LocalpartTemplate verifies the production path_template
 // "{localpart}" correctly resolves alice@test.local → alice directory.
-// Delivers as a full email address; reads back using only the local part.
+// Both delivery and retrieval use full addresses; the template strips the domain.
 func TestRoundTrip_LocalpartTemplate(t *testing.T) {
 	basePath := t.TempDir()
 	cfg := productionConfig(basePath)
 
 	deliver(t, cfg, "alice@test.local", "Template Test", "Body.")
 
-	// pop3d retrieves using local part only.
-	msgs := listMailbox(t, cfg, "alice")
+	// pop3d retrieves using the full address; {localpart} template resolves to "alice".
+	msgs := listMailbox(t, cfg, "alice@test.local")
 	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message via localpart mailbox, got %d", len(msgs))
-	}
-
-	// Verify the message is NOT accessible under the full email address,
-	// since path_template rewrites to localpart only.
-	full := listMailbox(t, cfg, "alice@test.local")
-	// With {localpart} template, "alice@test.local" expands to "alice" —
-	// same path — so this should also find the message.
-	if len(full) != 1 {
-		t.Errorf("expected same message via full address (template applies), got %d", len(full))
+		t.Fatalf("expected 1 message via full address mailbox, got %d", len(msgs))
 	}
 }
 
@@ -157,12 +148,12 @@ func TestRoundTrip_MessageContent_Preserved(t *testing.T) {
 
 	deliver(t, cfg, "bob@test.local", wantSubject, wantBody)
 
-	msgs := listMailbox(t, cfg, "bob")
+	msgs := listMailbox(t, cfg, "bob@test.local")
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
 
-	content := retrieveMessage(t, cfg, "bob", msgs[0].UID)
+	content := retrieveMessage(t, cfg, "bob@test.local", msgs[0].UID)
 	if !strings.Contains(content, wantSubject) {
 		t.Errorf("content missing subject %q", wantSubject)
 	}
@@ -181,14 +172,14 @@ func TestRoundTrip_MultipleMessages(t *testing.T) {
 		deliver(t, cfg, "carol@test.local", s, "Body of "+s)
 	}
 
-	msgs := listMailbox(t, cfg, "carol")
+	msgs := listMailbox(t, cfg, "carol@test.local")
 	if len(msgs) != 3 {
 		t.Fatalf("expected 3 messages, got %d", len(msgs))
 	}
 
 	// Verify each message is individually retrievable.
 	for _, m := range msgs {
-		content := retrieveMessage(t, cfg, "carol", m.UID)
+		content := retrieveMessage(t, cfg, "carol@test.local", m.UID)
 		if content == "" {
 			t.Errorf("message %s retrieved empty content", m.UID)
 		}
@@ -202,7 +193,7 @@ func TestRoundTrip_SizeReported(t *testing.T) {
 
 	deliver(t, cfg, "dave@test.local", "Size Test", "A short body.")
 
-	msgs := listMailbox(t, cfg, "dave")
+	msgs := listMailbox(t, cfg, "dave@test.local")
 	if len(msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
@@ -226,7 +217,7 @@ func TestRoundTrip_Stat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	count, totalBytes, err := store.Stat(context.Background(), "eve")
+	count, totalBytes, err := store.Stat(context.Background(), "eve@test.local")
 	if err != nil {
 		t.Fatalf("Stat: %v", err)
 	}
@@ -251,7 +242,7 @@ func TestRoundTrip_Delete_HidesMessage(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	msgs, err := store.List(ctx, "frank")
+	msgs, err := store.List(ctx, "frank@test.local")
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -259,12 +250,12 @@ func TestRoundTrip_Delete_HidesMessage(t *testing.T) {
 		t.Fatalf("expected 1 message, got %d", len(msgs))
 	}
 
-	if err := store.Delete(ctx, "frank", msgs[0].UID); err != nil {
+	if err := store.Delete(ctx, "frank@test.local", msgs[0].UID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
 	// Should be hidden from List in same session.
-	after, err := store.List(ctx, "frank")
+	after, err := store.List(ctx, "frank@test.local")
 	if err != nil {
 		t.Fatalf("List after delete: %v", err)
 	}
@@ -287,16 +278,16 @@ func TestRoundTrip_Expunge_RemovesPermanently(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	msgs, err := store.List(ctx, "grace")
+	msgs, err := store.List(ctx, "grace@test.local")
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	uid := msgs[0].UID
 
-	if err := store.Delete(ctx, "grace", uid); err != nil {
+	if err := store.Delete(ctx, "grace@test.local", uid); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if err := store.Expunge(ctx, "grace"); err != nil {
+	if err := store.Expunge(ctx, "grace@test.local"); err != nil {
 		t.Fatalf("Expunge: %v", err)
 	}
 
@@ -305,7 +296,7 @@ func TestRoundTrip_Expunge_RemovesPermanently(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open store2: %v", err)
 	}
-	msgs2, err := store2.List(ctx, "grace")
+	msgs2, err := store2.List(ctx, "grace@test.local")
 	if err != nil {
 		t.Fatalf("List store2: %v", err)
 	}
@@ -314,7 +305,7 @@ func TestRoundTrip_Expunge_RemovesPermanently(t *testing.T) {
 	}
 
 	// Retrieve should fail.
-	_, err = store2.Retrieve(ctx, "grace", uid)
+	_, err = store2.Retrieve(ctx, "grace@test.local", uid)
 	if err == nil {
 		t.Error("expected error retrieving expunged message, got nil")
 	}
@@ -334,19 +325,19 @@ func TestRoundTrip_DeleteWithoutExpunge_PersistsAcrossSessions(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	msgs, err := store1.List(ctx, "henry")
+	msgs, err := store1.List(ctx, "henry@test.local")
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	uid := msgs[0].UID
 
 	// Soft delete — no Expunge.
-	if err := store1.Delete(ctx, "henry", uid); err != nil {
+	if err := store1.Delete(ctx, "henry@test.local", uid); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
 	// A new session (store2) should still see the message on disk.
-	msgs2 := listMailbox(t, cfg, "henry")
+	msgs2 := listMailbox(t, cfg, "henry@test.local")
 	if len(msgs2) != 1 {
 		t.Errorf("expected message still visible in new session (no expunge), got %d", len(msgs2))
 	}
@@ -370,7 +361,7 @@ func TestRoundTrip_MultipleRecipients(t *testing.T) {
 		t.Fatalf("Deliver: %v", err)
 	}
 
-	for _, mb := range []string{"alice", "bob"} {
+	for _, mb := range []string{"alice@test.local", "bob@test.local"} {
 		msgs := listMailbox(t, cfg, mb)
 		if len(msgs) != 1 {
 			t.Errorf("mailbox %s: expected 1 message, got %d", mb, len(msgs))
@@ -388,8 +379,8 @@ func TestRoundTrip_DomainIsolation(t *testing.T) {
 	deliver(t, cfg, "alice@test.local", "For Alice", "Body.")
 	deliver(t, cfg, "bob@test.local", "For Bob", "Body.")
 
-	aliceMsgs := listMailbox(t, cfg, "alice")
-	bobMsgs := listMailbox(t, cfg, "bob")
+	aliceMsgs := listMailbox(t, cfg, "alice@test.local")
+	bobMsgs := listMailbox(t, cfg, "bob@test.local")
 
 	if len(aliceMsgs) != 1 {
 		t.Errorf("alice: expected 1 message, got %d", len(aliceMsgs))
@@ -404,7 +395,7 @@ func TestRoundTrip_DomainIsolation(t *testing.T) {
 func TestRoundTrip_EmptyMailbox_NoError(t *testing.T) {
 	cfg := productionConfig(t.TempDir())
 
-	msgs := listMailbox(t, cfg, "newuser")
+	msgs := listMailbox(t, cfg, "newuser@test.local")
 	if len(msgs) != 0 {
 		t.Errorf("expected 0 messages for new mailbox, got %d", len(msgs))
 	}
@@ -417,8 +408,8 @@ func TestRoundTrip_SubaddressStripped(t *testing.T) {
 
 	deliver(t, cfg, "alice+spam@test.local", "Subaddressed", "Body.")
 
-	// Should be visible under "alice" (subaddress stripped + localpart template).
-	msgs := listMailbox(t, cfg, "alice")
+	// Should be visible under "alice@test.local" (subaddress stripped + localpart template).
+	msgs := listMailbox(t, cfg, "alice@test.local")
 	if len(msgs) != 1 {
 		t.Errorf("expected 1 message in alice mailbox after subaddress delivery, got %d", len(msgs))
 	}
@@ -471,7 +462,7 @@ func TestRoundTrip_NoMaildirSubdir(t *testing.T) {
 		t.Fatalf("Deliver: %v", err)
 	}
 
-	msgs := listMailbox(t, cfg, "alice")
+	msgs := listMailbox(t, cfg, "alice@test.local")
 	if len(msgs) != 1 {
 		t.Errorf("expected 1 message without maildir_subdir, got %d", len(msgs))
 	}

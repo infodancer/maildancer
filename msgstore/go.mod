@@ -7,7 +7,7 @@ toolchain go1.24.4
 require (
 	git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9
 	github.com/emersion/go-maildir v0.6.0
-	github.com/infodancer/auth v0.1.4
+	github.com/infodancer/auth v0.1.7
 	golang.org/x/crypto v0.47.0
 )
 

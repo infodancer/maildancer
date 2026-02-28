@@ -490,11 +490,12 @@ func TestMaildirStore_PathTraversal(t *testing.T) {
 	store := NewStore(basePath, "", "")
 	ctx := context.Background()
 
-	// Attempt path traversal attacks (using forward slashes - Unix style)
+	// Attempt path traversal attacks with fully-qualified addresses (required by address contract).
+	// The localpart contains traversal sequences; the domain part satisfies the @ requirement.
 	traversalAttempts := []string{
-		"../etc/passwd",
-		"user/../../../etc/passwd",
-		"./../../etc/passwd",
+		"../etc/passwd@domain.com",
+		"user/../../../etc/passwd@domain.com",
+		"./../../etc/passwd@domain.com",
 	}
 
 	for _, mailbox := range traversalAttempts {
@@ -518,7 +519,7 @@ func TestMaildirStore_MaildirSubdir(t *testing.T) {
 
 	envelope := msgstore.Envelope{
 		From:       "sender@example.com",
-		Recipients: []string{"testuser"},
+		Recipients: []string{"testuser@test.local"},
 	}
 	message := strings.NewReader("Subject: Test\r\n\r\nTest message body")
 
@@ -527,8 +528,8 @@ func TestMaildirStore_MaildirSubdir(t *testing.T) {
 		t.Fatalf("Deliver failed: %v", err)
 	}
 
-	// Verify message was delivered to basePath/testuser/Maildir/
-	messages, err := store.List(ctx, "testuser")
+	// Verify message was delivered to basePath/testuser@test.local/Maildir/
+	messages, err := store.List(ctx, "testuser@test.local")
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
@@ -1152,30 +1153,30 @@ func TestMaildirStore_FolderWithMaildirSubdir(t *testing.T) {
 	// Deliver to ensure mailbox exists
 	envelope := msgstore.Envelope{
 		From:       "sender@example.com",
-		Recipients: []string{"testuser"},
+		Recipients: []string{"testuser@test.local"},
 	}
 	if err := store.Deliver(ctx, envelope, strings.NewReader("Subject: Test\r\n\r\nBody")); err != nil {
 		t.Fatalf("Deliver failed: %v", err)
 	}
 
 	// Create folder
-	if err := store.CreateFolder(ctx, "testuser", "archive"); err != nil {
+	if err := store.CreateFolder(ctx, "testuser@test.local", "archive"); err != nil {
 		t.Fatalf("CreateFolder failed: %v", err)
 	}
 
 	// Verify .archive is under Maildir subdir
-	expectedPath := filepath.Join(basePath, "testuser", "Maildir", ".archive", "cur")
+	expectedPath := filepath.Join(basePath, "testuser@test.local", "Maildir", ".archive", "cur")
 	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
 		t.Errorf("expected path %s to exist", expectedPath)
 	}
 
 	// Deliver and verify
 	msg := strings.NewReader("Subject: Subdir Folder\r\n\r\nBody")
-	if err := store.DeliverToFolder(ctx, "testuser", "archive", msg); err != nil {
+	if err := store.DeliverToFolder(ctx, "testuser@test.local", "archive", msg); err != nil {
 		t.Fatalf("DeliverToFolder failed: %v", err)
 	}
 
-	messages, err := store.ListInFolder(ctx, "testuser", "archive")
+	messages, err := store.ListInFolder(ctx, "testuser@test.local", "archive")
 	if err != nil {
 		t.Fatalf("ListInFolder failed: %v", err)
 	}
@@ -1617,4 +1618,66 @@ func TestValidateFolderName(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMaildirStore_AddressContract enforces that all mailbox identifiers must be
+// fully-qualified (localpart@domain). Bare localparts must be rejected at the
+// store boundary — domain splitting is the caller's responsibility.
+func TestMaildirStore_AddressContract(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	bareLocalpart := "matthew"
+	fullAddress := "matthew@example.com"
+
+	t.Run("Deliver rejects bare localpart recipient", func(t *testing.T) {
+		env := msgstore.Envelope{
+			From:       "sender@example.com",
+			Recipients: []string{bareLocalpart},
+		}
+		err := store.Deliver(ctx, env, strings.NewReader("Subject: Test\r\n\r\nBody"))
+		if err != errors.ErrInvalidAddress {
+			t.Errorf("Deliver(bare localpart) = %v, want ErrInvalidAddress", err)
+		}
+	})
+
+	t.Run("Deliver accepts full address", func(t *testing.T) {
+		env := msgstore.Envelope{
+			From:       "sender@example.com",
+			Recipients: []string{fullAddress},
+		}
+		err := store.Deliver(ctx, env, strings.NewReader("Subject: Test\r\n\r\nBody"))
+		if err != nil {
+			t.Errorf("Deliver(full address) unexpected error: %v", err)
+		}
+	})
+
+	t.Run("List rejects bare localpart", func(t *testing.T) {
+		_, err := store.List(ctx, bareLocalpart)
+		if err != errors.ErrInvalidAddress {
+			t.Errorf("List(bare localpart) = %v, want ErrInvalidAddress", err)
+		}
+	})
+
+	t.Run("List accepts full address", func(t *testing.T) {
+		_, err := store.List(ctx, fullAddress)
+		if err != nil {
+			t.Errorf("List(full address) unexpected error: %v", err)
+		}
+	})
+
+	t.Run("Retrieve rejects bare localpart", func(t *testing.T) {
+		_, err := store.Retrieve(ctx, bareLocalpart, "someuid")
+		if err != errors.ErrInvalidAddress {
+			t.Errorf("Retrieve(bare localpart) = %v, want ErrInvalidAddress", err)
+		}
+	})
+
+	t.Run("Delete rejects bare localpart", func(t *testing.T) {
+		err := store.Delete(ctx, bareLocalpart, "someuid")
+		if err != errors.ErrInvalidAddress {
+			t.Errorf("Delete(bare localpart) = %v, want ErrInvalidAddress", err)
+		}
+	})
 }

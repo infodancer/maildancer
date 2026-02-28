@@ -27,6 +27,7 @@ type Stack struct {
 // TLSConfig and SpamChecker are caller-supplied (main.go builds them; tests omit them).
 type StackConfig struct {
 	Config      config.Config
+	ConfigPath  string // absolute path to the config file; passed to mail-deliver subprocess
 	TLSConfig   *tls.Config
 	SpamChecker spamcheck.Checker
 	SpamConfig  config.SpamCheckConfig
@@ -81,6 +82,17 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		}
 		delivery = store
 		logger.Info("delivery enabled", "type", cfg.Config.Delivery.Type, "path", cfg.Config.Delivery.BasePath)
+	}
+
+	// Wrap delivery agent with subprocess isolation when deliver_cmd is set.
+	if cfg.Config.Delivery.DeliverCmd != "" {
+		delivery = NewExecDeliveryAgent(ExecDeliveryConfig{
+			Cmd:        cfg.Config.Delivery.DeliverCmd,
+			ConfigPath: cfg.ConfigPath,
+			UID:        cfg.Config.Delivery.UID,
+			GID:        cfg.Config.Delivery.GID,
+		})
+		logger.Info("delivery via subprocess", "cmd", cfg.Config.Delivery.DeliverCmd)
 	}
 
 	// Create domain provider if configured.

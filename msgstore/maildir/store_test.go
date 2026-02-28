@@ -607,7 +607,7 @@ func TestMaildirStore_ExpandMailbox(t *testing.T) {
 			name:         "no template",
 			pathTemplate: "",
 			mailbox:      "user@example.com",
-			want:         "user@example.com",
+			want:         "user", // default: strip domain, use localpart
 		},
 		{
 			name:         "domain and localpart template",
@@ -752,8 +752,8 @@ func TestMaildirStore_CreateFolder(t *testing.T) {
 		t.Fatalf("CreateFolder failed: %v", err)
 	}
 
-	// Verify directory structure on disk
-	folderPath := filepath.Join(basePath, "user@example.com", ".work")
+	// Verify directory structure on disk (domain stripped by default normalization → "user")
+	folderPath := filepath.Join(basePath, "user", ".work")
 	for _, sub := range []string{"new", "cur", "tmp"} {
 		p := filepath.Join(folderPath, sub)
 		if _, err := os.Stat(p); os.IsNotExist(err) {
@@ -902,8 +902,8 @@ func TestMaildirStore_DeleteFolder(t *testing.T) {
 		t.Fatalf("DeleteFolder failed: %v", err)
 	}
 
-	// Verify directory is removed
-	folderPath := filepath.Join(basePath, "user@example.com", ".work")
+	// Verify directory is removed (domain stripped by default normalization → "user")
+	folderPath := filepath.Join(basePath, "user", ".work")
 	if _, err := os.Stat(folderPath); !os.IsNotExist(err) {
 		t.Error("expected folder directory to be removed")
 	}
@@ -1164,8 +1164,8 @@ func TestMaildirStore_FolderWithMaildirSubdir(t *testing.T) {
 		t.Fatalf("CreateFolder failed: %v", err)
 	}
 
-	// Verify .archive is under Maildir subdir
-	expectedPath := filepath.Join(basePath, "testuser@test.local", "Maildir", ".archive", "cur")
+	// Verify .archive is under Maildir subdir (domain stripped by default normalization)
+	expectedPath := filepath.Join(basePath, "testuser", "Maildir", ".archive", "cur")
 	if _, err := os.Stat(expectedPath); os.IsNotExist(err) {
 		t.Errorf("expected path %s to exist", expectedPath)
 	}
@@ -1620,64 +1620,3 @@ func TestValidateFolderName(t *testing.T) {
 	}
 }
 
-// TestMaildirStore_AddressContract enforces that all mailbox identifiers must be
-// fully-qualified (localpart@domain). Bare localparts must be rejected at the
-// store boundary — domain splitting is the caller's responsibility.
-func TestMaildirStore_AddressContract(t *testing.T) {
-	basePath := t.TempDir()
-	store := NewStore(basePath, "", "")
-	ctx := context.Background()
-
-	bareLocalpart := "matthew"
-	fullAddress := "matthew@example.com"
-
-	t.Run("Deliver rejects bare localpart recipient", func(t *testing.T) {
-		env := msgstore.Envelope{
-			From:       "sender@example.com",
-			Recipients: []string{bareLocalpart},
-		}
-		err := store.Deliver(ctx, env, strings.NewReader("Subject: Test\r\n\r\nBody"))
-		if err != errors.ErrInvalidAddress {
-			t.Errorf("Deliver(bare localpart) = %v, want ErrInvalidAddress", err)
-		}
-	})
-
-	t.Run("Deliver accepts full address", func(t *testing.T) {
-		env := msgstore.Envelope{
-			From:       "sender@example.com",
-			Recipients: []string{fullAddress},
-		}
-		err := store.Deliver(ctx, env, strings.NewReader("Subject: Test\r\n\r\nBody"))
-		if err != nil {
-			t.Errorf("Deliver(full address) unexpected error: %v", err)
-		}
-	})
-
-	t.Run("List rejects bare localpart", func(t *testing.T) {
-		_, err := store.List(ctx, bareLocalpart)
-		if err != errors.ErrInvalidAddress {
-			t.Errorf("List(bare localpart) = %v, want ErrInvalidAddress", err)
-		}
-	})
-
-	t.Run("List accepts full address", func(t *testing.T) {
-		_, err := store.List(ctx, fullAddress)
-		if err != nil {
-			t.Errorf("List(full address) unexpected error: %v", err)
-		}
-	})
-
-	t.Run("Retrieve rejects bare localpart", func(t *testing.T) {
-		_, err := store.Retrieve(ctx, bareLocalpart, "someuid")
-		if err != errors.ErrInvalidAddress {
-			t.Errorf("Retrieve(bare localpart) = %v, want ErrInvalidAddress", err)
-		}
-	})
-
-	t.Run("Delete rejects bare localpart", func(t *testing.T) {
-		err := store.Delete(ctx, bareLocalpart, "someuid")
-		if err != errors.ErrInvalidAddress {
-			t.Errorf("Delete(bare localpart) = %v, want ErrInvalidAddress", err)
-		}
-	})
-}

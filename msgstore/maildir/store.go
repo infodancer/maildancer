@@ -54,14 +54,24 @@ func splitEmail(email string) (localpart, domain string) {
 	return email, ""
 }
 
-// expandMailbox applies the path template to transform a mailbox name.
-// If no template is set, the mailbox is returned unchanged.
-// Template variables: {domain}, {localpart}, {email}
+// expandMailbox resolves a mailbox identifier to a relative filesystem path.
+//
+// By default (no template), the domain part is stripped: "alice@example.com"
+// becomes "alice". This matches the production layout where each domain has
+// its own store rooted at a domain-specific base_path, so the localpart is
+// the correct key into that store regardless of whether the caller is smtpd
+// (which has the full address) or pop3d (which has already split on domain).
+//
+// An explicit pathTemplate overrides the default:
+//   - {localpart}  — same as default; domain stripped
+//   - {domain}     — use domain only
+//   - {email}      — use the full address as-is
+//   - arbitrary combinations, e.g. "{domain}/users/{localpart}"
 func (s *MaildirStore) expandMailbox(mailbox string) string {
-	if s.pathTemplate == "" {
-		return mailbox // Backward compatible
-	}
 	localpart, domain := splitEmail(mailbox)
+	if s.pathTemplate == "" {
+		return localpart
+	}
 	result := s.pathTemplate
 	result = strings.ReplaceAll(result, "{domain}", domain)
 	result = strings.ReplaceAll(result, "{localpart}", localpart)
@@ -70,15 +80,9 @@ func (s *MaildirStore) expandMailbox(mailbox string) string {
 }
 
 // mailboxPath returns the filesystem path for a mailbox.
-// Returns an error if the resulting path would escape the base directory,
-// or if the mailbox is not a fully-qualified address (localpart@domain).
+// Returns an error if the resulting path would escape the base directory.
 func (s *MaildirStore) mailboxPath(mailbox string) (string, error) {
-	// Enforce the address contract: all mailbox identifiers must be fully-qualified.
-	if !strings.Contains(mailbox, "@") {
-		return "", errors.ErrInvalidAddress
-	}
-
-	// Apply path template transformation
+	// Apply path template transformation (strips domain by default)
 	expandedMailbox := s.expandMailbox(mailbox)
 
 	// Build the candidate path
@@ -356,10 +360,6 @@ func (s *MaildirStore) Retrieve(ctx context.Context, mailbox string, uid string)
 
 // Delete implements msgstore.MessageStore.
 func (s *MaildirStore) Delete(ctx context.Context, mailbox string, uid string) error {
-	if !strings.Contains(mailbox, "@") {
-		return errors.ErrInvalidAddress
-	}
-
 	s.deletedMu.Lock()
 	defer s.deletedMu.Unlock()
 

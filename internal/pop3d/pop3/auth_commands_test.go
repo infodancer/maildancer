@@ -2,6 +2,7 @@ package pop3
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"testing"
@@ -57,9 +58,12 @@ func newMockConnection() *mockConnection {
 	return &mockConnection{}
 }
 
-// Test helper to create a session for testing
+// Test helper to create a session for testing.
+// A non-nil sentinel TLS config is used so that insecureAuth stays false —
+// the tests verify that missing TLS *activity* rejects auth, not that TLS
+// is unconfigured.
 func newTestSession(mode config.ListenerMode, isTLS bool) *Session {
-	return NewSession("test.example.com", mode, nil, isTLS)
+	return NewSession("test.example.com", mode, &tls.Config{}, isTLS) //nolint:gosec
 }
 
 func TestCapaCommand(t *testing.T) {
@@ -73,7 +77,7 @@ func TestCapaCommand(t *testing.T) {
 	}{
 		{
 			name:         "CAPA with no TLS shows limited capabilities",
-			sess:         newTestSession(config.ModePop3, false),
+			sess:         NewSession("test.example.com", config.ModePop3, nil, false), // nil TLS = no STLS/USER
 			args:         []string{},
 			wantOK:       true,
 			wantMessage:  "Capability list follows",
@@ -130,9 +134,9 @@ func TestStlsCommand(t *testing.T) {
 	}{
 		{
 			name:        "STLS before TLS succeeds",
-			sess:        newTestSession(config.ModePop3, false),
+			sess:        NewSession("test.example.com", config.ModePop3, nil, false), // nil TLS = STLS not available
 			args:        []string{},
-			wantOK:      false, // Fails because no TLS config
+			wantOK:      false,
 			wantMessage: "TLS not available",
 		},
 		{

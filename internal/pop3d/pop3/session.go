@@ -71,6 +71,7 @@ type Session struct {
 	hostname     string
 	listenerMode config.ListenerMode
 	tlsConfig    *tls.Config
+	insecureAuth bool // true when no TLS is configured (allows plaintext auth)
 
 	// Authentication state
 	username    string
@@ -101,6 +102,7 @@ func NewSession(hostname string, mode config.ListenerMode, tlsConfig *tls.Config
 		hostname:     hostname,
 		listenerMode: mode,
 		tlsConfig:    tlsConfig,
+		insecureAuth: tlsConfig == nil,
 	}
 }
 
@@ -123,6 +125,12 @@ func (s *Session) SetTLSActive() {
 // IsTLSActive returns true if TLS is currently active.
 func (s *Session) IsTLSActive() bool {
 	return s.tlsState == TLSStateActive
+}
+
+// InsecureAuth returns true when plaintext authentication is permitted without TLS.
+// This is set when no TLS configuration is available (e.g. integration tests, LAN-only deployments).
+func (s *Session) InsecureAuth() bool {
+	return s.insecureAuth
 }
 
 // CanSTLS returns true if STLS command is available.

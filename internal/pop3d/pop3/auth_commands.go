@@ -82,8 +82,8 @@ func (u *userCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 		return Response{OK: false, Message: "Command not valid in this state"}, nil
 	}
 
-	// Require TLS for USER command
-	if !sess.IsTLSActive() {
+	// Require TLS for USER command (unless insecure auth is explicitly permitted)
+	if !sess.IsTLSActive() && !sess.InsecureAuth() {
 		return Response{OK: false, Message: "TLS required for authentication"}, nil
 	}
 
@@ -119,8 +119,8 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 		return Response{OK: false, Message: "Command not valid in this state"}, nil
 	}
 
-	// Require TLS for PASS command
-	if !sess.IsTLSActive() {
+	// Require TLS for PASS command (unless insecure auth is explicitly permitted)
+	if !sess.IsTLSActive() && !sess.InsecureAuth() {
 		return Response{OK: false, Message: "TLS required for authentication"}, nil
 	}
 
@@ -221,8 +221,8 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 		return Response{OK: false, Message: "Command not valid in this state"}, nil
 	}
 
-	// Require TLS for AUTH command
-	if !sess.IsTLSActive() {
+	// Require TLS for AUTH command (unless insecure auth is explicitly permitted)
+	if !sess.IsTLSActive() && !sess.InsecureAuth() {
 		return Response{OK: false, Message: "TLS required for authentication"}, nil
 	}
 

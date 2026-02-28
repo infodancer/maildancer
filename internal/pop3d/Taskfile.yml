@@ -51,6 +51,13 @@ tasks:
       - task: vulncheck
       - task: test
 
+  release:
+    desc: Tag and push a release (usage: task release VERSION=0.0.1)
+    cmds:
+      - test -n "{{.VERSION}}" || (echo "VERSION is required: task release VERSION=0.0.x" && exit 1)
+      - git tag v{{.VERSION}}
+      - git push origin v{{.VERSION}}
+
   clean:
     desc: Clean build artifacts
     cmds:

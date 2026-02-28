@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -39,10 +40,13 @@ func main() {
 
 	logger := newLogger(cfg.WebAdmin.LogLevel)
 
-	// Open admin auth agent
+	// Open admin auth agent. KeyBackend is the directory containing user key
+	// files; for webadmin there are no encryption keys, so we default to the
+	// same directory as the passwd file (keys won't be found, auth succeeds).
 	authAgent, err := auth.OpenAuthAgent(auth.AuthAgentConfig{
 		Type:              "passwd",
 		CredentialBackend: cfg.WebAdmin.Auth.PasswdFile,
+		KeyBackend:        filepath.Dir(cfg.WebAdmin.Auth.PasswdFile),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error opening admin auth: %v\n", err)

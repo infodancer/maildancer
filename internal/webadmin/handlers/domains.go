@@ -8,12 +8,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
 	"github.com/infodancer/maildancer/internal/webadmin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/rbac"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
+	"github.com/infodancer/maildancer/internal/webadmin/uidalloc"
 )
 
 // domainNameRe validates domain names: lowercase alphanumeric, hyphens, dots.
@@ -52,6 +54,7 @@ type DomainDetail struct {
 	AuthType  string `json:"auth_type"`
 	StoreType string `json:"store_type"`
 	UserCount int    `json:"user_count"`
+	GID       uint32 `json:"gid,omitempty"`
 }
 
 // DomainKeyStatus is the JSON response for GET /api/domains/{name}/keys.
@@ -467,6 +470,7 @@ func (h *DomainHandler) getDomainDetail(name, domainPath string) (*DomainDetail,
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
+	var gid uint32
 	if err == nil {
 		// Simple extraction of auth type and store type from TOML.
 		// We read the raw file rather than importing the domain config package
@@ -477,6 +481,11 @@ func (h *DomainHandler) getDomainDetail(name, domainPath string) (*DomainDetail,
 		if v := extractTOMLValue(string(data), "type", "msgstore"); v != "" {
 			storeType = v
 		}
+		if v := extractTOMLValue(string(data), "gid", "domain"); v != "" {
+			if parsed, err := strconv.ParseUint(v, 10, 32); err == nil {
+				gid = uint32(parsed)
+			}
+		}
 	}
 
 	userCount := countPasswdEntries(filepath.Join(domainPath, "passwd"))
@@ -486,6 +495,7 @@ func (h *DomainHandler) getDomainDetail(name, domainPath string) (*DomainDetail,
 		AuthType:  authType,
 		StoreType: storeType,
 		UserCount: userCount,
+		GID:       gid,
 	}, nil
 }
 
@@ -497,8 +507,14 @@ func (h *DomainHandler) createDomain(name, domainPath string) error {
 		return fmt.Errorf("create domain directory: %w", err)
 	}
 
+	// Allocate a gid for this domain.
+	gid, err := uidalloc.Allocate(h.domainsPath)
+	if err != nil {
+		return fmt.Errorf("allocate domain gid: %w", err)
+	}
+
 	// Write default config.toml
-	configContent := `[auth]
+	configContent := fmt.Sprintf(`[auth]
 type = "passwd"
 credential_backend = "passwd"
 key_backend = "keys"
@@ -506,7 +522,10 @@ key_backend = "keys"
 [msgstore]
 type = "maildir"
 base_path = "users"
-`
+
+[domain]
+gid = %d
+`, gid)
 	configPath := filepath.Join(domainPath, "config.toml")
 	if err := os.WriteFile(configPath, []byte(configContent), 0o640); err != nil {
 		return fmt.Errorf("write config: %w", err)

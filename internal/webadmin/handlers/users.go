@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
 	"github.com/infodancer/maildancer/internal/webadmin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
+	"github.com/infodancer/maildancer/internal/webadmin/uidalloc"
 )
 
 // passwdMu serializes passwd file access per domain path to prevent concurrent corruption.
@@ -71,6 +73,7 @@ type UserSummary struct {
 	Username          string `json:"username"`
 	Mailbox           string `json:"mailbox"`
 	EncryptionEnabled bool   `json:"encryption_enabled"`
+	UID               uint32 `json:"uid,omitempty"`
 }
 
 // HandleListUsers returns a JSON list of users in a domain.
@@ -151,7 +154,15 @@ func (h *UserHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	line := fmt.Sprintf("%s:%s:%s\n", req.Username, hash, req.Username)
+	uid, err := uidalloc.Allocate(h.domainsPath)
+	if err != nil {
+		unlock()
+		h.logger.Error("failed to allocate uid", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+
+	line := fmt.Sprintf("%s:%s:%s:%d\n", req.Username, hash, req.Username, uid)
 	if err := appendToFile(passwdPath, line); err != nil {
 		unlock()
 		h.logger.Error("failed to write passwd", "error", err)
@@ -160,6 +171,13 @@ func (h *UserHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	unlock()
+
+	// Create the user's maildir directory (chown happens later via privileged helper).
+	maildirPath := filepath.Join(domainPath, "users", req.Username)
+	if err := os.MkdirAll(maildirPath, 0o700); err != nil {
+		h.logger.Error("failed to create maildir", "user", req.Username, "error", err)
+		// Non-fatal: passwd entry already written; log but continue.
+	}
 
 	keysGenerated := false
 	if req.GenerateKeys {
@@ -425,7 +443,7 @@ func (h *UserHandler) listUsers(domainPath string) ([]UserSummary, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 3)
+		parts := strings.SplitN(line, ":", 4)
 		if len(parts) < 2 {
 			continue
 		}
@@ -434,6 +452,12 @@ func (h *UserHandler) listUsers(domainPath string) ([]UserSummary, error) {
 		if len(parts) >= 3 {
 			mailbox = parts[2]
 		}
+		var uid uint32
+		if len(parts) >= 4 {
+			if v, err := strconv.ParseUint(parts[3], 10, 32); err == nil {
+				uid = uint32(v)
+			}
+		}
 
 		_, pubErr := keys.LoadPublicKey(keysDir, username)
 
@@ -441,6 +465,7 @@ func (h *UserHandler) listUsers(domainPath string) ([]UserSummary, error) {
 			Username:          username,
 			Mailbox:           mailbox,
 			EncryptionEnabled: pubErr == nil,
+			UID:               uid,
 		})
 	}
 
@@ -538,13 +563,19 @@ func updatePasswordInPasswd(path, username, newHash string) error {
 			lines = append(lines, line)
 			continue
 		}
-		parts := strings.SplitN(trimmed, ":", 3)
+		parts := strings.SplitN(trimmed, ":", 4)
 		if parts[0] == username {
 			mailbox := username
 			if len(parts) >= 3 {
 				mailbox = parts[2]
 			}
-			lines = append(lines, fmt.Sprintf("%s:%s:%s", username, newHash, mailbox))
+			if len(parts) >= 4 {
+				// Preserve existing uid field.
+				lines = append(lines, fmt.Sprintf("%s:%s:%s:%s", username, newHash, mailbox, parts[3]))
+			} else {
+				// Legacy entry without uid — write without uid (no allocation here).
+				lines = append(lines, fmt.Sprintf("%s:%s:%s", username, newHash, mailbox))
+			}
 		} else {
 			lines = append(lines, line)
 		}

@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/msgstore"
@@ -90,6 +91,24 @@ func (m *mockFolderStore) ExpungeFolder(_ context.Context, _, _ string) error { 
 
 func (m *mockFolderStore) DeliverToFolder(_ context.Context, _, _ string, _ io.Reader) error {
 	return nil
+}
+
+func (m *mockFolderStore) RenameFolder(_ context.Context, _, _, _ string) error { return nil }
+
+func (m *mockFolderStore) AppendToFolder(_ context.Context, _, _ string, _ io.Reader, _ []string, _ time.Time) (string, error) {
+	return "", nil
+}
+
+func (m *mockFolderStore) SetFlagsInFolder(_ context.Context, _, _, _ string, _ []string) error {
+	return nil
+}
+
+func (m *mockFolderStore) CopyMessage(_ context.Context, _, _, _, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockFolderStore) UIDValidity(_ context.Context, _, _ string) (uint32, error) {
+	return 1, nil
 }
 
 // helper: authenticated session ready for InitializeMailbox

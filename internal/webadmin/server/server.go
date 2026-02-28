@@ -317,12 +317,9 @@ func (s *Server) registerRoutes() {
 		requireAuth, requireCSRF, requireSuperAdmin,
 	))
 
-	// Migration API (super_admin only)
+	// Migration API (no auth — temporary one-time endpoint, remove after migration)
 	migrateHandler := handlers.NewMigrateHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.auditLog)
-	s.mux.Handle("POST /api/migrate/uids", middleware.Chain(
-		http.HandlerFunc(migrateHandler.HandleMigrateUIDs),
-		requireAuth, requireCSRF, requireSuperAdmin,
-	))
+	s.mux.HandleFunc("POST /api/migrate/uids", migrateHandler.HandleMigrateUIDs)
 
 	// Settings UI page
 	s.mux.Handle("GET /settings", middleware.Chain(

@@ -103,6 +103,31 @@ func LoadTargets(path string) ([]string, error) {
 	return targets, nil
 }
 
+// FromMap constructs a ForwardMap from a map of localpart to comma-separated
+// forwarding targets. This is the in-memory equivalent of Load, for rules
+// stored in a [forwards] TOML section rather than a separate file.
+// The special key "*" sets the catchall rule. A nil map produces an empty map.
+func FromMap(m map[string]string) *ForwardMap {
+	fm := &ForwardMap{exact: make(map[string][]string)}
+	for k, v := range m {
+		var targets []string
+		for _, t := range strings.Split(v, ",") {
+			if t = strings.TrimSpace(strings.ToLower(t)); t != "" {
+				targets = append(targets, t)
+			}
+		}
+		if len(targets) == 0 {
+			continue
+		}
+		if k == "*" {
+			fm.catchall = targets
+		} else {
+			fm.exact[strings.ToLower(k)] = targets
+		}
+	}
+	return fm
+}
+
 // Resolve returns the forwarding targets for localpart.
 // It checks for an exact match first, then falls back to the catchall (*).
 // Returns (nil, false) if no forwarding rule applies.

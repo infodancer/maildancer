@@ -11,6 +11,12 @@ import (
 type DomainConfig struct {
 	Auth     DomainAuthConfig     `toml:"auth"`
 	MsgStore DomainMsgStoreConfig `toml:"msgstore"`
+
+	// Forwards maps localpart to comma-separated forwarding targets.
+	// The special key "*" is a catchall. A nil map means "not set" and allows
+	// the system default forwards to apply. An empty non-nil map (forwards = {})
+	// explicitly disables forwarding for this domain.
+	Forwards map[string]string `toml:"forwards"`
 }
 
 // DomainAuthConfig holds authentication settings for a domain.

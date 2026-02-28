@@ -19,31 +19,43 @@ import (
 // when defaults are set via WithDefaults — any subdirectory is then a valid
 // domain, with config.toml values overriding the defaults when present.
 //
+// A config.toml at the basePath level (alongside domain directories) provides
+// provider-level defaults, including a [forwards] section for the system-wide
+// default forwarding rules.
+//
 // Directory structure:
 //
 //	/etc/mail/domains/
+//	├── config.toml       (optional; provider-level defaults incl. [forwards])
 //	├── example.com/
 //	│   └── config.toml   (optional when defaults are set)
 //	├── other.org/
 //	│   └── config.toml
 type FilesystemDomainProvider struct {
-	basePath string
-	defaults *DomainConfig
-	cache    map[string]*Domain
-	mu       sync.RWMutex
-	logger   *slog.Logger
+	basePath     string
+	defaults     *DomainConfig
+	baseDefaults *DomainConfig // loaded from {basePath}/config.toml
+	cache        map[string]*Domain
+	mu           sync.RWMutex
+	logger       *slog.Logger
 }
 
 // NewFilesystemDomainProvider creates a new filesystem-based domain provider.
+// If {basePath}/config.toml exists, it is loaded as provider-level defaults
+// (used for [forwards] and other domain-wide settings).
 func NewFilesystemDomainProvider(basePath string, logger *slog.Logger) *FilesystemDomainProvider {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &FilesystemDomainProvider{
+	p := &FilesystemDomainProvider{
 		basePath: basePath,
 		cache:    make(map[string]*Domain),
 		logger:   logger,
 	}
+	if baseCfg, err := LoadDomainConfig(filepath.Join(basePath, "config.toml")); err == nil {
+		p.baseDefaults = baseCfg
+	}
+	return p
 }
 
 // WithDefaults sets default domain configuration values used when a domain
@@ -118,12 +130,15 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		cfg = &base
 	}
 
-	// Load per-domain config.toml if it exists, merging on top of defaults
+	// Load per-domain config.toml if it exists, merging on top of defaults.
+	// Capture the raw override before merging so we can inspect Forwards separately.
+	var domainOverride *DomainConfig
 	if _, err := os.Stat(configPath); err == nil {
 		override, err := LoadDomainConfig(configPath)
 		if err != nil {
 			return nil, fmt.Errorf("load config: %w", err)
 		}
+		domainOverride = override
 		if cfg != nil {
 			merged := mergeConfig(*cfg, *override)
 			cfg = &merged
@@ -158,19 +173,29 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		return nil, fmt.Errorf("create msgstore: %w", err)
 	}
 
-	// Load forwarding rules at three levels:
-	//   1. User-level:   {domainPath}/user_forwards/{localpart}  (per-user file, read on demand)
-	//   2. Domain-level: {domainPath}/forwards                   (loaded now)
-	//   3. System default: {basePath}/forwards                   (loaded now)
-	domainFwd, err := forwards.Load(filepath.Join(domainPath, "forwards"))
-	if err != nil {
-		_ = authAgent.Close()
-		return nil, fmt.Errorf("load domain forwards: %w", err)
-	}
-	defaultFwd, err := forwards.Load(filepath.Join(p.basePath, "forwards"))
-	if err != nil {
-		_ = authAgent.Close()
-		return nil, fmt.Errorf("load default forwards: %w", err)
+	// Build forwarding chain from [forwards] sections in config.toml files.
+	//
+	// Resolution order:
+	//   1. User-level:   {domainPath}/user_forwards/{localpart}  (read on demand, deferred)
+	//   2. Domain-level: per-domain config.toml [forwards]       (loaded now)
+	//   3. System default: {basePath}/config.toml [forwards]     (loaded now)
+	//
+	// If the domain's config.toml has a [forwards] section (even empty), it takes
+	// full ownership: the system default is suppressed. This lets a domain admin
+	// disable the global catchall by setting forwards = {}.
+	var domainFwd, defaultFwd *forwards.ForwardMap
+	if domainOverride != nil && domainOverride.Forwards != nil {
+		// Domain explicitly declared [forwards] — use it, suppress system default.
+		domainFwd = forwards.FromMap(domainOverride.Forwards)
+		defaultFwd = forwards.FromMap(nil)
+	} else {
+		// Domain did not declare [forwards] — fall through to system default.
+		domainFwd = forwards.FromMap(nil)
+		if p.baseDefaults != nil {
+			defaultFwd = forwards.FromMap(p.baseDefaults.Forwards)
+		} else {
+			defaultFwd = forwards.FromMap(nil)
+		}
 	}
 
 	chain := &forwardChain{

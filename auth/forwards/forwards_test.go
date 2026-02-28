@@ -189,3 +189,58 @@ func TestForwardMap_NilSafe(t *testing.T) {
 		t.Error("nil ForwardMap.Empty should return true")
 	}
 }
+
+func TestFromMap_Catchall(t *testing.T) {
+	m := forwards.FromMap(map[string]string{
+		"*": "matthew@matthewjayhunter.com",
+	})
+	targets, ok := m.Resolve("anyone")
+	if !ok || len(targets) != 1 || targets[0] != "matthew@matthewjayhunter.com" {
+		t.Errorf("expected catchall target, got %v ok=%v", targets, ok)
+	}
+}
+
+func TestFromMap_Exact(t *testing.T) {
+	m := forwards.FromMap(map[string]string{
+		"alice": "alice@other.com",
+		"*":     "catchall@other.com",
+	})
+	// Exact match wins over catchall
+	targets, ok := m.Resolve("alice")
+	if !ok || len(targets) != 1 || targets[0] != "alice@other.com" {
+		t.Errorf("expected exact target for alice, got %v ok=%v", targets, ok)
+	}
+	// Unmatched falls to catchall
+	targets, ok = m.Resolve("bob")
+	if !ok || len(targets) != 1 || targets[0] != "catchall@other.com" {
+		t.Errorf("expected catchall for bob, got %v ok=%v", targets, ok)
+	}
+}
+
+func TestFromMap_MultipleTargets(t *testing.T) {
+	m := forwards.FromMap(map[string]string{
+		"alice": "alice@a.com, alice@b.com",
+	})
+	targets, ok := m.Resolve("alice")
+	if !ok || len(targets) != 2 {
+		t.Errorf("expected 2 targets, got %v ok=%v", targets, ok)
+	}
+}
+
+func TestFromMap_Nil(t *testing.T) {
+	m := forwards.FromMap(nil)
+	if !m.Empty() {
+		t.Error("expected empty map from nil input")
+	}
+	_, ok := m.Resolve("anyone")
+	if ok {
+		t.Error("expected no match from nil input")
+	}
+}
+
+func TestFromMap_Empty(t *testing.T) {
+	m := forwards.FromMap(map[string]string{})
+	if !m.Empty() {
+		t.Error("expected empty map from empty input")
+	}
+}

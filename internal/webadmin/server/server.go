@@ -90,7 +90,7 @@ func New(cfg config.WebAdminConfig, deps Deps, logger *slog.Logger) (*Server, er
 		mux:           mux,
 		cfg:           cfg,
 		deps:          deps,
-		sessions:      session.NewStore(sessionTimeout),
+		sessions:      session.NewStore(sessionTimeout, cfg.TLSEnabled()),
 		logger:        logger,
 		auditLog:      auditLog,
 		rolesFilePath: cfg.Auth.RolesFile,

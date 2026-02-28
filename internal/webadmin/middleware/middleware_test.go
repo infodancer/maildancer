@@ -11,7 +11,7 @@ import (
 )
 
 func TestRequireAuth_Unauthenticated(t *testing.T) {
-	store := session.NewStore(30 * time.Minute)
+	store := session.NewStore(30 * time.Minute, false)
 	logger := slog.Default()
 
 	handler := RequireAuth(store, logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +32,7 @@ func TestRequireAuth_Unauthenticated(t *testing.T) {
 }
 
 func TestRequireAuth_Authenticated(t *testing.T) {
-	store := session.NewStore(30 * time.Minute)
+	store := session.NewStore(30 * time.Minute, false)
 	logger := slog.Default()
 
 	// Create session
@@ -62,7 +62,7 @@ func TestRequireAuth_Authenticated(t *testing.T) {
 }
 
 func TestRequireCSRF_GetPassesThrough(t *testing.T) {
-	store := session.NewStore(30 * time.Minute)
+	store := session.NewStore(30 * time.Minute, false)
 	logger := slog.Default()
 
 	var called bool
@@ -81,7 +81,7 @@ func TestRequireCSRF_GetPassesThrough(t *testing.T) {
 }
 
 func TestRequireCSRF_PostWithoutToken(t *testing.T) {
-	store := session.NewStore(30 * time.Minute)
+	store := session.NewStore(30 * time.Minute, false)
 	logger := slog.Default()
 
 	createRR := httptest.NewRecorder()
@@ -102,7 +102,7 @@ func TestRequireCSRF_PostWithoutToken(t *testing.T) {
 }
 
 func TestRequireCSRF_PostWithValidToken(t *testing.T) {
-	store := session.NewStore(30 * time.Minute)
+	store := session.NewStore(30 * time.Minute, false)
 	logger := slog.Default()
 
 	createRR := httptest.NewRecorder()

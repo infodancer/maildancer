@@ -34,13 +34,16 @@ type Store struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
 	timeout  time.Duration
+	secure   bool // whether to set Secure flag on cookies (only for HTTPS)
 }
 
 // NewStore creates a new session store with the given timeout.
-func NewStore(timeout time.Duration) *Store {
+// secure should be true only when the server is running with TLS.
+func NewStore(timeout time.Duration, secure bool) *Store {
 	s := &Store{
 		sessions: make(map[string]*Session),
 		timeout:  timeout,
+		secure:   secure,
 	}
 	// Start background cleanup
 	go s.cleanup()
@@ -75,7 +78,7 @@ func (s *Store) Create(w http.ResponseWriter, username string) (*Session, error)
 		Value:    id,
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   s.secure,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(s.timeout.Seconds()),
 	})
@@ -133,7 +136,7 @@ func (s *Store) Destroy(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   s.secure,
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})

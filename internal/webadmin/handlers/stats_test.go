@@ -44,7 +44,7 @@ func (m *mockMsgStore) Deliver(_ context.Context, _ msgstore.Envelope, _ io.Read
 func newTestStatsHandler(t *testing.T, store msgstore.MessageStore) (*StatsHandler, string) {
 	t.Helper()
 	dir := t.TempDir()
-	sessionStore := session.NewStore(30 * time.Minute)
+	sessionStore := session.NewStore(30 * time.Minute, false)
 	openStore := func(domainPath string) (msgstore.MessageStore, error) {
 		return store, nil
 	}

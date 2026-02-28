@@ -18,7 +18,7 @@ func newTestRspamdHandler(t *testing.T) (*RspamdHandler, string) {
 	t.Helper()
 	dir := t.TempDir()
 	rspamdFile := filepath.Join(dir, "rspamd.toml")
-	store := session.NewStore(30 * time.Minute)
+	store := session.NewStore(30 * time.Minute, false)
 	return NewRspamdHandler(rspamdFile, store, slog.Default()), rspamdFile
 }
 
@@ -143,7 +143,7 @@ func TestHandleSetRspamd_PreservesExistingPassword(t *testing.T) {
 }
 
 func TestHandleSetRspamd_NoFileConfigured(t *testing.T) {
-	store := session.NewStore(30 * time.Minute)
+	store := session.NewStore(30 * time.Minute, false)
 	h := NewRspamdHandler("", store, slog.Default())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/rspamd",
@@ -172,7 +172,7 @@ func TestHandleSetRspamd_InvalidJSON(t *testing.T) {
 func TestHandleSetRspamd_PersistsAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	rspamdFile := filepath.Join(dir, "rspamd.toml")
-	store := session.NewStore(30 * time.Minute)
+	store := session.NewStore(30 * time.Minute, false)
 
 	h1 := NewRspamdHandler(rspamdFile, store, slog.Default())
 	req := httptest.NewRequest(http.MethodPost, "/api/rspamd",

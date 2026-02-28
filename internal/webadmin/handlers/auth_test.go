@@ -43,7 +43,7 @@ func newTestAuthHandler() (*AuthHandler, *session.Store) {
 	agent := &mockAuthAgent{
 		users: map[string]string{"admin": "secret123"},
 	}
-	store := session.NewStore(30 * time.Minute)
+	store := session.NewStore(30 * time.Minute, false)
 	logger := slog.Default()
 	return NewAuthHandler(agent, store, logger), store
 }

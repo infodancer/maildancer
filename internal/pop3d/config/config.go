@@ -43,7 +43,8 @@ type Config struct {
 	Limits    LimitsConfig     `toml:"limits"`
 	Metrics   MetricsConfig    `toml:"metrics"`
 	Maildir     string           `toml:"maildir"`
-	DomainsPath string           `toml:"domains_path"`
+	DomainsPath     string           `toml:"domains_path"`
+	DomainsDataPath string           `toml:"domains_data_path"`
 	Auth        AuthConfig       `toml:"auth"`
 }
 

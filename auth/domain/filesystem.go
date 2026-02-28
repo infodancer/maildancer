@@ -33,6 +33,7 @@ import (
 //	│   └── config.toml
 type FilesystemDomainProvider struct {
 	basePath     string
+	dataPath     string        // separate writable directory for msgstore data
 	defaults     *DomainConfig
 	baseDefaults *DomainConfig // loaded from {basePath}/config.toml
 	cache        map[string]*Domain
@@ -63,6 +64,15 @@ func NewFilesystemDomainProvider(basePath string, logger *slog.Logger) *Filesyst
 // Returns the provider to allow chaining.
 func (p *FilesystemDomainProvider) WithDefaults(cfg DomainConfig) *FilesystemDomainProvider {
 	p.defaults = &cfg
+	return p
+}
+
+// WithDataPath sets a separate base directory for resolving msgstore paths.
+// When set, relative MsgStore.BasePath values are joined with {dataPath}/{domain}
+// rather than the domain's config directory. This separates read-only config
+// (under basePath) from writable message storage (under dataPath).
+func (p *FilesystemDomainProvider) WithDataPath(path string) *FilesystemDomainProvider {
+	p.dataPath = path
 	return p
 }
 
@@ -161,10 +171,16 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		return nil, fmt.Errorf("create auth agent: %w", err)
 	}
 
-	// Create message store (absolute paths used as-is, relative paths joined with domainPath)
+	// Create message store. When dataPath is set, relative BasePath values are
+	// resolved against {dataPath}/{domain} rather than the config domainPath.
+	// This separates read-only config from writable message storage.
+	storageBase := domainPath
+	if p.dataPath != "" {
+		storageBase = filepath.Join(p.dataPath, name)
+	}
 	storeCfg := msgstore.StoreConfig{
 		Type:     cfg.MsgStore.Type,
-		BasePath: resolvePath(domainPath, cfg.MsgStore.BasePath),
+		BasePath: resolvePath(storageBase, cfg.MsgStore.BasePath),
 		Options:  cfg.MsgStore.Options,
 	}
 	store, err := msgstore.Open(storeCfg)

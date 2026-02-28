@@ -20,7 +20,7 @@ type Session struct {
 	conn        *imapserver.Conn
 	cfg         *config.Config
 	authRouter  *domain.AuthRouter
-	store       msgstore.MsgStore
+	store       msgstore.MessageStore
 	folderStore msgstore.FolderStore
 
 	username   string
@@ -38,7 +38,7 @@ type Session struct {
 }
 
 // NewSession creates a new IMAP session for the given connection.
-func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.AuthRouter, store msgstore.MsgStore, collector metrics.Collector, logger *slog.Logger) *Session {
+func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.AuthRouter, store msgstore.MessageStore, collector metrics.Collector, logger *slog.Logger) *Session {
 	var folderStore msgstore.FolderStore
 	if store != nil {
 		folderStore, _ = store.(msgstore.FolderStore)
@@ -70,6 +70,10 @@ func (s *Session) Login(username, password string) error {
 	s.username = username
 	s.userDomain = extractDomain(username)
 	s.mailbox = result.Session.User.Mailbox
+	if result.Domain != nil && result.Domain.MessageStore != nil {
+		s.store = result.Domain.MessageStore
+		s.folderStore, _ = result.Domain.MessageStore.(msgstore.FolderStore)
+	}
 	s.collector.AuthAttempt(s.userDomain, true)
 	s.logger.Info("login success", "username", username)
 	return nil

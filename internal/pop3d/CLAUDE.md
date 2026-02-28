@@ -10,6 +10,12 @@ This is a template repository for go projects.
 
 ## Architecture
 
+### Address Contract
+
+pop3d passes `User.Mailbox` from the `AuthResult` directly to the message store — it does **not** normalise or strip the domain. `AuthRouter` guarantees that `User.Mailbox` is set to `base@domain` (fully-qualified, subaddress stripped) after domain authentication. The store then strips the domain internally.
+
+Do not add localpart extraction or domain stripping logic in pop3d. Any address handling belongs in `auth/domain.AuthRouter` or `msgstore`.
+
 ## Development Workflow
 
 ### Branch and Issue Protocol

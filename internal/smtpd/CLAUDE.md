@@ -10,6 +10,12 @@ This is a template repository for go projects.
 
 ## Architecture
 
+### Address Contract
+
+smtpd passes recipient addresses to the message store as fully-qualified `localpart@domain` strings (taken directly from the SMTP envelope). For authenticated relay, `User.Mailbox` from `AuthResult` is also fully-qualified — `AuthRouter` guarantees this. The store strips the domain component internally.
+
+Do not add localpart extraction or domain stripping logic in smtpd. Any address handling belongs in `auth/domain.AuthRouter` or `msgstore`.
+
 ## Development Workflow
 
 ### Branch and Issue Protocol

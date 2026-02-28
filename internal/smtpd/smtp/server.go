@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
@@ -162,4 +163,36 @@ func (s *Server) Run(ctx context.Context) error {
 		return firstErr
 	}
 	return ctx.Err()
+}
+
+// RunSingleConn serves exactly one SMTP connection using the server entry matching
+// the given listener mode. Blocks until the session ends.
+// Used by protocol-handler subprocesses to handle one connection and exit.
+func (s *Server) RunSingleConn(conn net.Conn, mode config.ListenerMode, tlsConfig *tls.Config) error {
+	// Find the entry whose mode matches, falling back to the first entry.
+	var entry *serverEntry
+	for i := range s.entries {
+		if s.entries[i].mode == mode {
+			entry = &s.entries[i]
+			break
+		}
+	}
+	if entry == nil && len(s.entries) > 0 {
+		entry = &s.entries[0]
+	}
+	if entry == nil {
+		return fmt.Errorf("no server entries configured")
+	}
+
+	// SMTPS uses implicit TLS: wrap conn before handing to go-smtp.
+	// For SMTP/Submission modes, go-smtp handles STARTTLS via entry.server.TLSConfig.
+	if mode == config.ModeSmtps {
+		if tlsConfig == nil {
+			return fmt.Errorf("SMTPS mode requires TLS configuration")
+		}
+		conn = tls.Server(conn, tlsConfig)
+	}
+
+	ln := newOneConnListener(conn)
+	return entry.server.Serve(ln)
 }

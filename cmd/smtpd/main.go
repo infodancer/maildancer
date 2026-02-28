@@ -129,6 +129,7 @@ func main() {
 				MsgStore: domain.DomainMsgStoreConfig{
 					Type:     "maildir",
 					BasePath: "users",
+					Options:  map[string]string{"path_template": "{localpart}"},
 				},
 			})
 		defer func() {

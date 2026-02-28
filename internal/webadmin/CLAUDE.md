@@ -162,3 +162,10 @@ docker compose up
 
 See `docker-compose.yml` and `prometheus.yml` for compose/scrape config.
 Mount config at `/etc/webadmin/webadmin.toml` inside the container.
+
+## Security Model
+
+This repository is part of the infodancer mail stack. The process separation,
+privilege model, uid/gid allocation, and pipe protocol are defined in:
+
+https://github.com/infodancer/infodancer/blob/master/docs/mail-security-model.md

@@ -26,6 +26,10 @@ var (
 	// ErrNoRecipients indicates no valid recipients were provided.
 	ErrNoRecipients = errors.New("no recipients")
 
+	// ErrInvalidAddress indicates an address is missing a required domain part.
+	// All addresses passed to the store must be fully-qualified (localpart@domain).
+	ErrInvalidAddress = errors.New("address must be fully-qualified (localpart@domain)")
+
 	// ErrRecipientNotFound indicates a recipient mailbox does not exist.
 	ErrRecipientNotFound = errors.New("recipient not found")
 

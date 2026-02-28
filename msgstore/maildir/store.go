@@ -70,8 +70,14 @@ func (s *MaildirStore) expandMailbox(mailbox string) string {
 }
 
 // mailboxPath returns the filesystem path for a mailbox.
-// Returns an error if the resulting path would escape the base directory.
+// Returns an error if the resulting path would escape the base directory,
+// or if the mailbox is not a fully-qualified address (localpart@domain).
 func (s *MaildirStore) mailboxPath(mailbox string) (string, error) {
+	// Enforce the address contract: all mailbox identifiers must be fully-qualified.
+	if !strings.Contains(mailbox, "@") {
+		return "", errors.ErrInvalidAddress
+	}
+
 	// Apply path template transformation
 	expandedMailbox := s.expandMailbox(mailbox)
 
@@ -350,6 +356,10 @@ func (s *MaildirStore) Retrieve(ctx context.Context, mailbox string, uid string)
 
 // Delete implements msgstore.MessageStore.
 func (s *MaildirStore) Delete(ctx context.Context, mailbox string, uid string) error {
+	if !strings.Contains(mailbox, "@") {
+		return errors.ErrInvalidAddress
+	}
+
 	s.deletedMu.Lock()
 	defer s.deletedMu.Unlock()
 

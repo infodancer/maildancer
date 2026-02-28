@@ -1,4 +1,4 @@
-module github.com/matthewjhunter/template-go
+module github.com/infodancer/maildancer/internal/mail-session
 
 go 1.25.0
 

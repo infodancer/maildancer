@@ -1,8 +1,8 @@
 version: 2
 
 builds:
-  - main: ./cmd/appname
-    binary: appname
+  - main: ./cmd/mail-session
+    binary: mail-session
     env:
       - CGO_ENABLED=0
     goos:

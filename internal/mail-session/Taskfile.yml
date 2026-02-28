@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  BINARY: appname
+  BINARY: mail-session
 
 tasks:
   default:

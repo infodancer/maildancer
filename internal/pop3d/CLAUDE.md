@@ -80,3 +80,20 @@ Do not add localpart extraction or domain stripping logic in pop3d. Any address 
 - Avoid leaking sensitive data in error messages or logs
 
 Read CONVENTIONS.md for language specific best practices.
+
+## Versioning & Releases
+
+smtpd, pop3d, and imapd use **synchronized versioning** — all three repos must always be at the same version tag. This makes the relationship between the daemons clear and simplifies deployment.
+
+**Version scheme**: `v0.0.x` during pre-release development. Do not advance to `v0.1.0` until the full stack (SMTP + POP3 + IMAP) is considered stable and feature-complete for initial use.
+
+**To cut a release** — run in all three repos at the same version:
+```
+task release VERSION=0.0.2   # in smtpd
+task release VERSION=0.0.2   # in pop3d
+task release VERSION=0.0.2   # in imapd
+```
+
+The `release` task tags the current HEAD and pushes the tag. It will error if VERSION is omitted.
+
+**Never tag one repo without tagging the others at the same version.**

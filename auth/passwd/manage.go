@@ -16,6 +16,7 @@ import (
 type UserInfo struct {
 	Username string
 	Mailbox  string
+	Uid      uint32 // 0 = not yet assigned (pre-migration entry)
 }
 
 // HashPassword generates an argon2id hash of password using canonical parameters.
@@ -82,6 +83,21 @@ func ListUsers(passwdPath string) ([]UserInfo, error) {
 	return parsePasswd(passwdPath)
 }
 
+// LookupUID returns the uid for the named user, or an error if not found.
+// A uid of 0 means the field is absent or not yet assigned.
+func LookupUID(passwdPath, username string) (uint32, error) {
+	users, err := parsePasswd(passwdPath)
+	if err != nil {
+		return 0, err
+	}
+	for _, u := range users {
+		if u.Username == username {
+			return u.Uid, nil
+		}
+	}
+	return 0, fmt.Errorf("user %q not found", username)
+}
+
 // parsePasswd reads the passwd file and returns all user entries.
 // Returns an empty slice if the file does not exist.
 func parsePasswd(passwdPath string) ([]UserInfo, error) {
@@ -101,7 +117,7 @@ func parsePasswd(passwdPath string) ([]UserInfo, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		parts := strings.SplitN(line, ":", 3)
+		parts := strings.SplitN(line, ":", 4)
 		if len(parts) < 2 {
 			continue
 		}
@@ -109,7 +125,14 @@ func parsePasswd(passwdPath string) ([]UserInfo, error) {
 		if len(parts) >= 3 {
 			mailbox = parts[2]
 		}
-		users = append(users, UserInfo{Username: parts[0], Mailbox: mailbox})
+		var uid uint32
+		if len(parts) >= 4 && parts[3] != "" {
+			var n uint64
+			if _, err := fmt.Sscanf(parts[3], "%d", &n); err == nil {
+				uid = uint32(n)
+			}
+		}
+		users = append(users, UserInfo{Username: parts[0], Mailbox: mailbox, Uid: uid})
 	}
 
 	return users, scanner.Err()

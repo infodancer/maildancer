@@ -40,6 +40,7 @@ type userEntry struct {
 	username string
 	hash     string // Full hash string including algorithm prefix
 	mailbox  string
+	uid      uint32 // 0 = not yet assigned (pre-migration entry)
 }
 
 // Agent implements AuthenticationAgent using a passwd file and key directory.
@@ -97,7 +98,7 @@ func (a *Agent) loadPasswd() error {
 			continue
 		}
 
-		parts := strings.SplitN(line, ":", 3)
+		parts := strings.SplitN(line, ":", 4)
 		if len(parts) < 2 {
 			continue // Invalid line, skip
 		}
@@ -112,6 +113,13 @@ func (a *Agent) loadPasswd() error {
 		} else {
 			// Default mailbox is username
 			entry.mailbox = parts[0]
+		}
+
+		if len(parts) >= 4 && parts[3] != "" {
+			var uid uint64
+			if _, err := fmt.Sscanf(parts[3], "%d", &uid); err == nil {
+				entry.uid = uint32(uid)
+			}
 		}
 
 		a.users[entry.username] = entry

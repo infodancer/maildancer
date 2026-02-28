@@ -136,6 +136,70 @@ func TestAddUserRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLookupUID(t *testing.T) {
+	dir := t.TempDir()
+	passwdPath := filepath.Join(dir, "passwd")
+
+	// Write entries: one with uid, one without, one with uid=0 explicitly
+	content := "alice:HASH:alice:1001\nbob:HASH:bob:\ncarol:HASH:carol\n"
+	if err := os.WriteFile(passwdPath, []byte(content), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	uid, err := LookupUID(passwdPath, "alice")
+	if err != nil {
+		t.Fatalf("LookupUID alice: %v", err)
+	}
+	if uid != 1001 {
+		t.Errorf("expected uid 1001 for alice, got %d", uid)
+	}
+
+	uid, err = LookupUID(passwdPath, "bob")
+	if err != nil {
+		t.Fatalf("LookupUID bob: %v", err)
+	}
+	if uid != 0 {
+		t.Errorf("expected uid 0 for bob (empty field), got %d", uid)
+	}
+
+	uid, err = LookupUID(passwdPath, "carol")
+	if err != nil {
+		t.Fatalf("LookupUID carol: %v", err)
+	}
+	if uid != 0 {
+		t.Errorf("expected uid 0 for carol (no field), got %d", uid)
+	}
+
+	_, err = LookupUID(passwdPath, "nobody")
+	if err == nil {
+		t.Error("expected error for missing user, got nil")
+	}
+}
+
+func TestListUsers_WithUID(t *testing.T) {
+	dir := t.TempDir()
+	passwdPath := filepath.Join(dir, "passwd")
+
+	content := "alice:HASH:alice:1001\nbob:HASH:bob:1002\n"
+	if err := os.WriteFile(passwdPath, []byte(content), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	users, err := ListUsers(passwdPath)
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	if len(users) != 2 {
+		t.Fatalf("expected 2 users, got %d", len(users))
+	}
+	if users[0].Uid != 1001 {
+		t.Errorf("expected alice uid 1001, got %d", users[0].Uid)
+	}
+	if users[1].Uid != 1002 {
+		t.Errorf("expected bob uid 1002, got %d", users[1].Uid)
+	}
+}
+
 func TestNewAgent_MissingPasswdFile(t *testing.T) {
 	dir := t.TempDir()
 	passwdPath := filepath.Join(dir, "passwd")

@@ -12,6 +12,10 @@ type DomainConfig struct {
 	Auth     DomainAuthConfig     `toml:"auth"`
 	MsgStore DomainMsgStoreConfig `toml:"msgstore"`
 
+	// Gid is the OS group ID under which mail-session runs for this domain.
+	// 0 means not configured.
+	Gid uint32 `toml:"gid"`
+
 	// Forwards maps localpart to comma-separated forwarding targets.
 	// The special key "*" is a catchall. A nil map means "not set" and allows
 	// the system default forwards to apply. An empty non-nil map (forwards = {})
@@ -50,6 +54,9 @@ type DomainMsgStoreConfig struct {
 // non-zero values from override. Fields absent in override retain the base value.
 func mergeConfig(base, override DomainConfig) DomainConfig {
 	result := base
+	if override.Gid != 0 {
+		result.Gid = override.Gid
+	}
 	if override.Auth.Type != "" {
 		result.Auth.Type = override.Auth.Type
 	}

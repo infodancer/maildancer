@@ -41,7 +41,8 @@ type ServerConfig struct {
 type Config struct {
 	Hostname    string           `toml:"hostname"`
 	LogLevel    string           `toml:"log_level"`
-	DomainsPath string           `toml:"domains_path"`
+	DomainsPath     string           `toml:"domains_path"`
+	DomainsDataPath string           `toml:"domains_data_path"`
 	Listeners   []ListenerConfig `toml:"listeners"`
 	TLS         TLSConfig        `toml:"tls"`
 	Limits      LimitsConfig     `toml:"limits"`

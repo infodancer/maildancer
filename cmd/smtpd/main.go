@@ -116,8 +116,11 @@ func main() {
 	// Create domain provider if configured
 	var domainProvider domain.DomainProvider
 	if cfg.DomainsPath != "" {
-		domainProvider = domain.NewFilesystemDomainProvider(cfg.DomainsPath, logger).
-			WithDefaults(domain.DomainConfig{
+		dp := domain.NewFilesystemDomainProvider(cfg.DomainsPath, logger)
+		if cfg.DomainsDataPath != "" {
+			dp = dp.WithDataPath(cfg.DomainsDataPath)
+		}
+		domainProvider = dp.WithDefaults(domain.DomainConfig{
 				Auth: domain.DomainAuthConfig{
 					Type:              "passwd",
 					CredentialBackend: "passwd",

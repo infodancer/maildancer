@@ -6,10 +6,11 @@ toolchain go1.24.4
 
 require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
-	github.com/infodancer/maildancer/auth v0.1.8
+	github.com/infodancer/maildancer/auth v0.1.9
 	github.com/infodancer/maildancer/msgstore v0.2.1
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
+	golang.org/x/crypto v0.47.0
 )
 
 require (
@@ -23,7 +24,6 @@ require (
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 )

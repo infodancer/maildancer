@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 )
 
 // ConnectionLogger is the interface for accessing logger from commands.
@@ -86,15 +87,22 @@ func (r Response) String() string {
 }
 
 // commandRegistry holds all registered commands.
-var commandRegistry = make(map[string]Command)
+var (
+	commandRegistry   = make(map[string]Command)
+	commandRegistryMu sync.RWMutex
+)
 
 // RegisterCommand registers a command in the registry.
 func RegisterCommand(cmd Command) {
+	commandRegistryMu.Lock()
+	defer commandRegistryMu.Unlock()
 	commandRegistry[strings.ToUpper(cmd.Name())] = cmd
 }
 
 // GetCommand retrieves a command from the registry by name.
 func GetCommand(name string) (Command, bool) {
+	commandRegistryMu.RLock()
+	defer commandRegistryMu.RUnlock()
 	cmd, ok := commandRegistry[strings.ToUpper(name)]
 	return cmd, ok
 }

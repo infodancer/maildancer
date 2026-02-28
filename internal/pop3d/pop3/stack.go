@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/auth/domain"
@@ -18,10 +20,11 @@ import (
 // StackConfig groups the configuration needed to build a Stack.
 // TLSConfig is caller-supplied; tests may omit it (nil = plain POP3 only).
 type StackConfig struct {
-	Config    config.Config
-	TLSConfig *tls.Config
-	Collector metrics.Collector // nil → NoopCollector
-	Logger    *slog.Logger      // nil → slog.Default()
+	Config     config.Config
+	ConfigPath string         // absolute path to config file, used by subprocesses
+	TLSConfig  *tls.Config
+	Collector  metrics.Collector // nil → NoopCollector
+	Logger     *slog.Logger      // nil → slog.Default()
 }
 
 // Stack owns all components of a running pop3d instance and manages their lifecycle.
@@ -139,4 +142,32 @@ func (s *Stack) Close() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// RunSingleConn processes exactly one POP3 session on the given connection.
+// For POP3S mode, the connection is wrapped with TLS before the session starts.
+func (s *Stack) RunSingleConn(conn net.Conn, mode config.ListenerMode, tlsConfig *tls.Config) error {
+	cfg := s.server.Config()
+	connCfg := server.ConnectionConfig{
+		IdleTimeout:    cfg.Timeouts.ConnectionTimeout(),
+		CommandTimeout: cfg.Timeouts.CommandTimeout(),
+		LogTransaction: cfg.LogLevel == "debug",
+		Logger:         s.logger,
+	}
+	c := server.NewConnection(conn, connCfg)
+	if mode == config.ModePop3s {
+		if tlsConfig == nil {
+			return fmt.Errorf("POP3S mode requires TLS configuration")
+		}
+		if err := c.UpgradeToTLS(tlsConfig); err != nil {
+			return fmt.Errorf("TLS upgrade: %w", err)
+		}
+	}
+	ctx := context.Background()
+	handler := s.server.Handler()
+	if handler == nil {
+		return fmt.Errorf("no handler configured on server")
+	}
+	handler(ctx, c)
+	return nil
 }

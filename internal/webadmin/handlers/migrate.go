@@ -16,16 +16,19 @@ import (
 
 // MigrateHandler handles migration API requests.
 type MigrateHandler struct {
-	domainsPath string
+	domainsPath string // config volume: passwd files, auth config
+	dataPath    string // data volume: gid config, uid counter
 	sessions    *session.Store
 	logger      *slog.Logger
 	auditLog    *audit.Logger
 }
 
 // NewMigrateHandler creates a new migrate handler.
-func NewMigrateHandler(domainsPath string, sessions *session.Store, logger *slog.Logger, auditLog *audit.Logger) *MigrateHandler {
+// dataPath is the data volume root (gid config, uid counter); domainsPath is the config volume root.
+func NewMigrateHandler(domainsPath, dataPath string, sessions *session.Store, logger *slog.Logger, auditLog *audit.Logger) *MigrateHandler {
 	return &MigrateHandler{
 		domainsPath: domainsPath,
+		dataPath:    dataPath,
 		sessions:    sessions,
 		logger:      logger,
 		auditLog:    auditLog,
@@ -65,9 +68,10 @@ func (h *MigrateHandler) HandleMigrateUIDs(w http.ResponseWriter, r *http.Reques
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
-		domainPath := filepath.Join(h.domainsPath, name)
+		configDomainPath := filepath.Join(h.domainsPath, name)
+		dataDir := filepath.Join(h.dataPath, name)
 
-		domainMigrated, usersMigrated, errs := h.migrateDomain(domainPath)
+		domainMigrated, usersMigrated, errs := h.migrateDomain(name, configDomainPath, dataDir)
 		if domainMigrated {
 			result.DomainsMigrated++
 		}
@@ -87,18 +91,18 @@ func (h *MigrateHandler) HandleMigrateUIDs(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, result)
 }
 
-// migrateDomain processes a single domain directory.
-// Returns whether the domain config was migrated, how many users were migrated, and any errors.
-func (h *MigrateHandler) migrateDomain(domainPath string) (domainMigrated bool, usersMigrated int, errs []string) {
-	configPath := filepath.Join(domainPath, "config.toml")
+// migrateDomain processes a single domain.
+// domainName is the bare domain name; configDomainPath is in the config volume; dataDir is in the data volume.
+// Returns whether the domain gid was migrated, how many users were migrated, and any errors.
+func (h *MigrateHandler) migrateDomain(domainName, configDomainPath, dataDir string) (domainMigrated bool, usersMigrated int, errs []string) {
+	// Gid lives in the data volume config.toml.
+	dataConfigPath := filepath.Join(dataDir, "config.toml")
+	dataBytes, dataErr := os.ReadFile(dataConfigPath)
+	hasDataConfig := dataErr == nil
 
-	data, readErr := os.ReadFile(configPath)
-	hasConfig := readErr == nil
-
-	// Check for existing gid.
 	var gid uint32
-	if hasConfig {
-		if v := extractTOMLValue(string(data), "gid", "domain"); v != "" {
+	if hasDataConfig {
+		if v := extractTOMLValue(string(dataBytes), "gid", "domain"); v != "" {
 			if parsed, err := strconv.ParseUint(v, 10, 32); err == nil {
 				gid = uint32(parsed)
 			}
@@ -106,34 +110,33 @@ func (h *MigrateHandler) migrateDomain(domainPath string) (domainMigrated bool, 
 	}
 
 	if gid == 0 {
-		// Allocate a new gid.
-		allocated, err := uidalloc.Allocate(h.domainsPath)
+		// Allocate a new gid using the data volume counter.
+		allocated, err := uidalloc.Allocate(h.dataPath)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: allocate gid: %v", filepath.Base(domainPath), err))
+			errs = append(errs, fmt.Sprintf("%s: allocate gid: %v", domainName, err))
 			return false, 0, errs
 		}
 		gid = allocated
 
-		if hasConfig {
-			if err := prependDomainGID(configPath, string(data), gid); err != nil {
-				errs = append(errs, fmt.Sprintf("%s: update config.toml: %v", filepath.Base(domainPath), err))
-				return false, 0, errs
-			}
-		} else {
-			if err := writeDefaultConfig(configPath, gid); err != nil {
-				errs = append(errs, fmt.Sprintf("%s: write config.toml: %v", filepath.Base(domainPath), err))
-				return false, 0, errs
-			}
+		// Write gid to data volume config.toml.
+		if err := os.MkdirAll(dataDir, 0o750); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: create data dir: %v", domainName, err))
+			return false, 0, errs
+		}
+		dataConfig := fmt.Sprintf("[domain]\ngid = %d\n", gid)
+		if err := os.WriteFile(dataConfigPath, []byte(dataConfig), 0o640); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: write data config.toml: %v", domainName, err))
+			return false, 0, errs
 		}
 		domainMigrated = true
-		h.logger.Info("migrated domain gid", "domain", filepath.Base(domainPath), "gid", gid)
+		h.logger.Info("migrated domain gid", "domain", domainName, "gid", gid)
 	}
 
-	// Migrate users missing a uid (4th field).
-	passwdPath := filepath.Join(domainPath, "passwd")
-	migrated, err := h.migratePasswdUIDs(domainPath, passwdPath)
+	// Migrate users missing a uid (4th field) in the config volume passwd file.
+	passwdPath := filepath.Join(configDomainPath, "passwd")
+	migrated, err := h.migratePasswdUIDs(configDomainPath, passwdPath)
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s: migrate passwd: %v", filepath.Base(domainPath), err))
+		errs = append(errs, fmt.Sprintf("%s: migrate passwd: %v", domainName, err))
 	}
 	usersMigrated = migrated
 
@@ -179,7 +182,7 @@ func (h *MigrateHandler) migratePasswdUIDs(domainPath, passwdPath string) (int, 
 			continue
 		}
 
-		uid, err := uidalloc.Allocate(h.domainsPath)
+		uid, err := uidalloc.Allocate(h.dataPath)
 		if err != nil {
 			return migrated, fmt.Errorf("allocate uid for %s: %w", parts[0], err)
 		}

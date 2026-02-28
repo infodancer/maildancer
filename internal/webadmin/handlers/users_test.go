@@ -19,7 +19,7 @@ func newTestUserHandler(t *testing.T) (*UserHandler, string) {
 	t.Helper()
 	dir := t.TempDir()
 	store := session.NewStore(30*time.Minute, false)
-	return NewUserHandler(dir, store, slog.Default(), nil), dir
+	return NewUserHandler(dir, dir, store, slog.Default(), nil), dir
 }
 
 func TestHandleListUsers_Empty(t *testing.T) {

@@ -51,17 +51,20 @@ var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 // UserHandler handles user management API requests.
 type UserHandler struct {
-	domainsPath string
+	domainsPath string // config volume: passwd files, keys
+	dataPath    string // data volume: maildirs, uid counter
 	sessions    *session.Store
 	logger      *slog.Logger
 	auditLog    *audit.Logger
 }
 
 // NewUserHandler creates a new user handler.
+// dataPath is the data volume root (maildirs, uid counter); domainsPath is the config volume root.
 // auditLog may be nil (audit file logging disabled).
-func NewUserHandler(domainsPath string, sessions *session.Store, logger *slog.Logger, auditLog *audit.Logger) *UserHandler {
+func NewUserHandler(domainsPath, dataPath string, sessions *session.Store, logger *slog.Logger, auditLog *audit.Logger) *UserHandler {
 	return &UserHandler{
 		domainsPath: domainsPath,
+		dataPath:    dataPath,
 		sessions:    sessions,
 		logger:      logger,
 		auditLog:    auditLog,
@@ -154,7 +157,7 @@ func (h *UserHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uid, err := uidalloc.Allocate(h.domainsPath)
+	uid, err := uidalloc.Allocate(h.dataPath)
 	if err != nil {
 		unlock()
 		h.logger.Error("failed to allocate uid", "error", err)
@@ -172,8 +175,8 @@ func (h *UserHandler) HandleCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	unlock()
 
-	// Create the user's maildir directory (chown happens later via privileged helper).
-	maildirPath := filepath.Join(domainPath, "users", req.Username)
+	// Create the user's maildir directory in the data volume (chown happens later via privileged helper).
+	maildirPath := filepath.Join(h.dataPath, domain, "users", req.Username)
 	if err := os.MkdirAll(maildirPath, 0o700); err != nil {
 		h.logger.Error("failed to create maildir", "user", req.Username, "error", err)
 		// Non-fatal: passwd entry already written; log but continue.

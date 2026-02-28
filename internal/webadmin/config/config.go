@@ -18,8 +18,13 @@ type WebAdminConfig struct {
 	// ListenAddress is the address to listen on (default: "localhost:8080").
 	ListenAddress string `toml:"listen_address"`
 
-	// DomainsPath is the base directory containing per-domain config directories.
+	// DomainsPath is the base directory containing per-domain config directories
+	// (passwd files, auth config, DKIM keys). This is the config volume.
 	DomainsPath string `toml:"domains_path"`
+
+	// DataPath is the base directory for per-domain mail data (maildirs, uid counter, gid config).
+	// This is the data volume. If empty, defaults to DomainsPath for backward compatibility.
+	DataPath string `toml:"data_path"`
 
 	// LogLevel controls logging verbosity (debug, info, warn, error).
 	LogLevel string `toml:"log_level"`
@@ -102,6 +107,14 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("webadmin.tls.cert_file is required when key_file is set")
 	}
 	return nil
+}
+
+// EffectiveDataPath returns DataPath if set, otherwise DomainsPath (backward compat).
+func (c *WebAdminConfig) EffectiveDataPath() string {
+	if c.DataPath != "" {
+		return c.DataPath
+	}
+	return c.DomainsPath
 }
 
 // TLSEnabled returns whether TLS is configured.

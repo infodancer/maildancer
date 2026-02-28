@@ -15,25 +15,30 @@ import (
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
-func newTestMigrateHandler(t *testing.T) (*MigrateHandler, string) {
+// newTestMigrateHandler returns a handler with separate config and data directories.
+func newTestMigrateHandler(t *testing.T) (*MigrateHandler, string, string) {
 	t.Helper()
-	dir := t.TempDir()
-	store := session.NewStore(30*time.Minute, false)
-	return NewMigrateHandler(dir, store, slog.Default(), nil), dir
-}
-
-// createBareDomain creates a domain directory with only a users/ subdir (no config.toml, no passwd).
-func createBareDomain(t *testing.T, domainsPath, name string) {
-	t.Helper()
-	domainDir := filepath.Join(domainsPath, name)
-	if err := os.MkdirAll(filepath.Join(domainDir, "users"), 0o750); err != nil {
+	base := t.TempDir()
+	configDir := filepath.Join(base, "config")
+	dataDir := filepath.Join(base, "data")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store := session.NewStore(30*time.Minute, false)
+	return NewMigrateHandler(configDir, dataDir, store, slog.Default(), nil), configDir, dataDir
 }
 
 func TestMigrateUIDs_BaredomainGetsConfig(t *testing.T) {
-	h, dir := newTestMigrateHandler(t)
-	createBareDomain(t, dir, "example.com")
+	h, configDir, dataDir := newTestMigrateHandler(t)
+
+	// Domain directory must exist in config volume for migration to scan it.
+	domainConfigDir := filepath.Join(configDir, "example.com")
+	if err := os.MkdirAll(domainConfigDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/migrate/uids", nil)
 	rr := httptest.NewRecorder()
@@ -54,15 +59,15 @@ func TestMigrateUIDs_BaredomainGetsConfig(t *testing.T) {
 		t.Errorf("expected no errors, got %v", result.Errors)
 	}
 
-	// Verify config.toml was created with a gid.
-	configPath := filepath.Join(dir, "example.com", "config.toml")
-	data, err := os.ReadFile(configPath)
+	// Verify gid was written to data volume config.toml.
+	dataConfigPath := filepath.Join(dataDir, "example.com", "config.toml")
+	data, err := os.ReadFile(dataConfigPath)
 	if err != nil {
-		t.Fatalf("config.toml not created: %v", err)
+		t.Fatalf("data config.toml not created: %v", err)
 	}
 	gidStr := extractTOMLValue(string(data), "gid", "domain")
 	if gidStr == "" {
-		t.Error("expected [domain] gid in config.toml, not found")
+		t.Error("expected [domain] gid in data config.toml, not found")
 	}
 	gid, err := strconv.ParseUint(gidStr, 10, 32)
 	if err != nil || gid == 0 {
@@ -70,12 +75,12 @@ func TestMigrateUIDs_BaredomainGetsConfig(t *testing.T) {
 	}
 }
 
-func TestMigrateUIDs_ExistingConfigNoGidGetsGidPrepended(t *testing.T) {
-	h, dir := newTestMigrateHandler(t)
+func TestMigrateUIDs_ExistingAuthConfigIsPreservedGidGoesToDataVolume(t *testing.T) {
+	h, configDir, dataDir := newTestMigrateHandler(t)
 
-	// Create domain with a config.toml that has no [domain] section.
-	domainDir := filepath.Join(dir, "example.com")
-	if err := os.MkdirAll(domainDir, 0o750); err != nil {
+	// Create domain with auth config in config volume (no gid section).
+	domainConfigDir := filepath.Join(configDir, "example.com")
+	if err := os.MkdirAll(domainConfigDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	existingConfig := `[auth]
@@ -87,7 +92,7 @@ key_backend = "keys"
 type = "maildir"
 base_path = "users"
 `
-	if err := os.WriteFile(filepath.Join(domainDir, "config.toml"), []byte(existingConfig), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(domainConfigDir, "config.toml"), []byte(existingConfig), 0o640); err != nil {
 		t.Fatal(err)
 	}
 
@@ -107,36 +112,49 @@ base_path = "users"
 		t.Errorf("expected 1 domain migrated, got %d", result.DomainsMigrated)
 	}
 
-	// Verify gid was prepended and original content preserved.
-	data, err := os.ReadFile(filepath.Join(domainDir, "config.toml"))
+	// Auth config.toml in config volume must be untouched.
+	authData, err := os.ReadFile(filepath.Join(domainConfigDir, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := string(data)
-	gidStr := extractTOMLValue(content, "gid", "domain")
-	if gidStr == "" {
-		t.Error("expected gid in config.toml after migration")
+	if !strings.Contains(string(authData), `type = "passwd"`) {
+		t.Error("auth config.toml in config volume was modified")
 	}
-	if !strings.Contains(content, `type = "passwd"`) {
-		t.Error("original config content should be preserved")
+	if extractTOMLValue(string(authData), "gid", "domain") != "" {
+		t.Error("gid should not be in the config volume config.toml")
+	}
+
+	// Gid must be in data volume config.toml.
+	dataConfigPath := filepath.Join(dataDir, "example.com", "config.toml")
+	dataBytes, err := os.ReadFile(dataConfigPath)
+	if err != nil {
+		t.Fatalf("data config.toml not created: %v", err)
+	}
+	gidStr := extractTOMLValue(string(dataBytes), "gid", "domain")
+	if gidStr == "" {
+		t.Error("expected gid in data volume config.toml after migration")
 	}
 }
 
 func TestMigrateUIDs_PasswdUsersGet3FieldsAllocatedUID(t *testing.T) {
-	h, dir := newTestMigrateHandler(t)
+	h, configDir, dataDir := newTestMigrateHandler(t)
 
-	domainDir := filepath.Join(dir, "example.com")
-	if err := os.MkdirAll(domainDir, 0o750); err != nil {
+	domainConfigDir := filepath.Join(configDir, "example.com")
+	if err := os.MkdirAll(domainConfigDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
 	// Two users: one with 3 fields (needs uid), one with 4 fields (already has uid).
 	passwd := "alice:hash1:alice\nbob:hash2:bob:10001\n"
-	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwd), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(domainConfigDir, "passwd"), []byte(passwd), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	// Domain also needs a config.toml to avoid an extra domain migration count.
-	config := "[domain]\ngid = 10000\n\n[auth]\ntype = \"passwd\"\ncredential_backend = \"passwd\"\nkey_backend = \"keys\"\n\n[msgstore]\ntype = \"maildir\"\nbase_path = \"users\"\n"
-	if err := os.WriteFile(filepath.Join(domainDir, "config.toml"), []byte(config), 0o640); err != nil {
+
+	// Pre-seed gid in data volume so domain migration is skipped.
+	domainDataDir := filepath.Join(dataDir, "example.com")
+	if err := os.MkdirAll(domainDataDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(domainDataDir, "config.toml"), []byte("[domain]\ngid = 10000\n"), 0o640); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,7 +178,7 @@ func TestMigrateUIDs_PasswdUsersGet3FieldsAllocatedUID(t *testing.T) {
 	}
 
 	// Verify alice now has a uid field; bob's uid is unchanged.
-	data, err := os.ReadFile(filepath.Join(domainDir, "passwd"))
+	data, err := os.ReadFile(filepath.Join(domainConfigDir, "passwd"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,8 +202,12 @@ func TestMigrateUIDs_PasswdUsersGet3FieldsAllocatedUID(t *testing.T) {
 }
 
 func TestMigrateUIDs_Idempotent(t *testing.T) {
-	h, dir := newTestMigrateHandler(t)
-	createBareDomain(t, dir, "example.com")
+	h, configDir, dataDir := newTestMigrateHandler(t)
+
+	// Create domain directory in config volume.
+	if err := os.MkdirAll(filepath.Join(configDir, "example.com"), 0o750); err != nil {
+		t.Fatal(err)
+	}
 
 	// First run.
 	req1 := httptest.NewRequest(http.MethodPost, "/api/migrate/uids", nil)
@@ -197,9 +219,9 @@ func TestMigrateUIDs_Idempotent(t *testing.T) {
 	var result1 migrateResult
 	json.NewDecoder(rr1.Body).Decode(&result1)
 
-	// Record gid from first run.
-	configPath := filepath.Join(dir, "example.com", "config.toml")
-	data1, _ := os.ReadFile(configPath)
+	// Record gid from first run (stored in data volume).
+	dataConfigPath := filepath.Join(dataDir, "example.com", "config.toml")
+	data1, _ := os.ReadFile(dataConfigPath)
 	gid1 := extractTOMLValue(string(data1), "gid", "domain")
 
 	// Second run.
@@ -218,7 +240,7 @@ func TestMigrateUIDs_Idempotent(t *testing.T) {
 	}
 
 	// gid must not change.
-	data2, _ := os.ReadFile(configPath)
+	data2, _ := os.ReadFile(dataConfigPath)
 	gid2 := extractTOMLValue(string(data2), "gid", "domain")
 	if gid1 != gid2 {
 		t.Errorf("gid changed between runs: %s -> %s", gid1, gid2)

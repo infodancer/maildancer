@@ -120,8 +120,8 @@ func (s *Server) registerRoutes() {
 	// Snapshot current roles for handler constructors (secondary defence-in-depth checks).
 	currentRoles := s.roles.Load()
 	authHandler := handlers.NewAuthHandler(s.deps.AuthAgent, s.sessions, s.logger)
-	domainHandler := handlers.NewDomainHandler(s.cfg.DomainsPath, s.sessions, s.logger, currentRoles, s.auditLog)
-	userHandler := handlers.NewUserHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.auditLog)
+	domainHandler := handlers.NewDomainHandler(s.cfg.DomainsPath, s.cfg.EffectiveDataPath(), s.sessions, s.logger, currentRoles, s.auditLog)
+	userHandler := handlers.NewUserHandler(s.cfg.DomainsPath, s.cfg.EffectiveDataPath(), s.sessions, s.logger, s.auditLog)
 	statsHandler := handlers.NewStatsHandler(s.cfg.DomainsPath, s.sessions, s.logger, nil)
 	webHandler := handlers.NewWebHandler(s.cfg.DomainsPath, s.sessions, s.logger, currentRoles)
 	dashboardHandler := handlers.NewDashboardHandler(s.cfg.DomainsPath, s.sessions, s.logger)
@@ -318,7 +318,7 @@ func (s *Server) registerRoutes() {
 	))
 
 	// Migration API (super_admin only — idempotent, safe to re-run)
-	migrateHandler := handlers.NewMigrateHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.auditLog)
+	migrateHandler := handlers.NewMigrateHandler(s.cfg.DomainsPath, s.cfg.EffectiveDataPath(), s.sessions, s.logger, s.auditLog)
 	s.mux.Handle("POST /api/migrate/uids", middleware.Chain(
 		http.HandlerFunc(migrateHandler.HandleMigrateUIDs),
 		requireAuth, requireCSRF, requireSuperAdmin,

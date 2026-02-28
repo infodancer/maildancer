@@ -18,7 +18,7 @@ func newTestDomainHandler(t *testing.T) (*DomainHandler, string) {
 	t.Helper()
 	dir := t.TempDir()
 	store := session.NewStore(30*time.Minute, false)
-	return NewDomainHandler(dir, store, slog.Default(), nil, nil), dir
+	return NewDomainHandler(dir, dir, store, slog.Default(), nil, nil), dir
 }
 
 // createTestDomain creates a domain directory with config and passwd.

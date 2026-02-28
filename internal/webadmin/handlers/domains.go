@@ -23,7 +23,8 @@ var domainNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]
 
 // DomainHandler handles domain management API requests.
 type DomainHandler struct {
-	domainsPath string
+	domainsPath string // config volume: auth config, passwd, keys
+	dataPath    string // data volume: gid config, maildirs, uid counter
 	sessions    *session.Store
 	logger      *slog.Logger
 	roles       *rbac.RoleStore
@@ -31,10 +32,12 @@ type DomainHandler struct {
 }
 
 // NewDomainHandler creates a new domain handler.
+// dataPath is the data volume root (gid config, maildirs, uid counter); domainsPath is the config volume root.
 // roles and auditLog may be nil (RBAC disabled / audit file disabled).
-func NewDomainHandler(domainsPath string, sessions *session.Store, logger *slog.Logger, roles *rbac.RoleStore, auditLog *audit.Logger) *DomainHandler {
+func NewDomainHandler(domainsPath, dataPath string, sessions *session.Store, logger *slog.Logger, roles *rbac.RoleStore, auditLog *audit.Logger) *DomainHandler {
 	return &DomainHandler{
 		domainsPath: domainsPath,
+		dataPath:    dataPath,
 		sessions:    sessions,
 		logger:      logger,
 		roles:       roles,
@@ -459,6 +462,7 @@ func (h *DomainHandler) listDomains() ([]DomainSummary, error) {
 }
 
 // getDomainDetail reads domain config and returns detail.
+// Auth/store config is read from the config volume (domainsPath); gid is read from the data volume (dataPath).
 // If config.toml is absent the domain is still valid (defaults apply in smtpd/pop3d);
 // we report the standard default values in that case.
 func (h *DomainHandler) getDomainDetail(name, domainPath string) (*DomainDetail, error) {
@@ -470,7 +474,6 @@ func (h *DomainHandler) getDomainDetail(name, domainPath string) (*DomainDetail,
 	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	var gid uint32
 	if err == nil {
 		// Simple extraction of auth type and store type from TOML.
 		// We read the raw file rather than importing the domain config package
@@ -481,8 +484,14 @@ func (h *DomainHandler) getDomainDetail(name, domainPath string) (*DomainDetail,
 		if v := extractTOMLValue(string(data), "type", "msgstore"); v != "" {
 			storeType = v
 		}
-		if v := extractTOMLValue(string(data), "gid", "domain"); v != "" {
-			if parsed, err := strconv.ParseUint(v, 10, 32); err == nil {
+	}
+
+	// Read gid from the data volume config.toml (separate from auth/msgstore config).
+	var gid uint32
+	dataConfigPath := filepath.Join(h.dataPath, name, "config.toml")
+	if dataBytes, dataErr := os.ReadFile(dataConfigPath); dataErr == nil {
+		if v := extractTOMLValue(string(dataBytes), "gid", "domain"); v != "" {
+			if parsed, parseErr := strconv.ParseUint(v, 10, 32); parseErr == nil {
 				gid = uint32(parsed)
 			}
 		}
@@ -500,21 +509,17 @@ func (h *DomainHandler) getDomainDetail(name, domainPath string) (*DomainDetail,
 }
 
 // createDomain creates the domain directory structure with default config.
+// Config files (auth config, passwd, keys) go in the config volume (domainsPath).
+// Data files (gid config, maildirs) go in the data volume (dataPath).
 func (h *DomainHandler) createDomain(name, domainPath string) error {
-	// Create directory structure
+	// Create config volume directory structure.
 	keysDir := filepath.Join(domainPath, "keys")
 	if err := os.MkdirAll(keysDir, 0o750); err != nil {
 		return fmt.Errorf("create domain directory: %w", err)
 	}
 
-	// Allocate a gid for this domain.
-	gid, err := uidalloc.Allocate(h.domainsPath)
-	if err != nil {
-		return fmt.Errorf("allocate domain gid: %w", err)
-	}
-
-	// Write default config.toml
-	configContent := fmt.Sprintf(`[auth]
+	// Write auth/msgstore config.toml to config volume (no gid here).
+	configContent := `[auth]
 type = "passwd"
 credential_backend = "passwd"
 key_backend = "keys"
@@ -522,23 +527,34 @@ key_backend = "keys"
 [msgstore]
 type = "maildir"
 base_path = "users"
-
-[domain]
-gid = %d
-`, gid)
+`
 	configPath := filepath.Join(domainPath, "config.toml")
 	if err := os.WriteFile(configPath, []byte(configContent), 0o640); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 
-	// Create empty passwd file
+	// Create empty passwd file in config volume.
 	passwdPath := filepath.Join(domainPath, "passwd")
 	if err := os.WriteFile(passwdPath, []byte("# Users for "+name+"\n"), 0o640); err != nil {
 		return fmt.Errorf("write passwd: %w", err)
 	}
 
-	// Create users directory for maildir storage
-	usersDir := filepath.Join(domainPath, "users")
+	// Allocate a gid and write gid config to the data volume.
+	gid, err := uidalloc.Allocate(h.dataPath)
+	if err != nil {
+		return fmt.Errorf("allocate domain gid: %w", err)
+	}
+	dataDir := filepath.Join(h.dataPath, name)
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+	dataConfig := fmt.Sprintf("[domain]\ngid = %d\n", gid)
+	if err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(dataConfig), 0o640); err != nil {
+		return fmt.Errorf("write data config: %w", err)
+	}
+
+	// Create users directory for maildir storage in data volume.
+	usersDir := filepath.Join(dataDir, "users")
 	if err := os.MkdirAll(usersDir, 0o750); err != nil {
 		return fmt.Errorf("create users directory: %w", err)
 	}

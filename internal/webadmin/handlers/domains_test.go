@@ -17,7 +17,7 @@ import (
 func newTestDomainHandler(t *testing.T) (*DomainHandler, string) {
 	t.Helper()
 	dir := t.TempDir()
-	store := session.NewStore(30 * time.Minute, false)
+	store := session.NewStore(30*time.Minute, false)
 	return NewDomainHandler(dir, store, slog.Default(), nil, nil), dir
 }
 

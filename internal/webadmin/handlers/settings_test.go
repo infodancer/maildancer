@@ -18,7 +18,7 @@ func newTestSettingsHandler(t *testing.T) (*SettingsHandler, string) {
 	t.Helper()
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "shared.toml")
-	store := session.NewStore(30 * time.Minute, false)
+	store := session.NewStore(30*time.Minute, false)
 	return NewSettingsHandler(cfgFile, store, slog.Default()), cfgFile
 }
 
@@ -218,7 +218,7 @@ func TestHandleSetSpamcheckSettings_TogglesEnabled(t *testing.T) {
 }
 
 func TestHandleSettings_NoFileConfigured_Returns400(t *testing.T) {
-	store := session.NewStore(30 * time.Minute, false)
+	store := session.NewStore(30*time.Minute, false)
 	h := NewSettingsHandler("", store, slog.Default())
 
 	body := `{"hostname":"x.example.com"}`
@@ -247,7 +247,7 @@ func TestHandleSettings_PersistsAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "shared.toml")
 	writeConfig(t, cfgFile, fullSharedConfig)
-	store := session.NewStore(30 * time.Minute, false)
+	store := session.NewStore(30*time.Minute, false)
 
 	h1 := NewSettingsHandler(cfgFile, store, slog.Default())
 	body := `{"hostname":"persist.example.com"}`

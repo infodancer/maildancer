@@ -8,7 +8,7 @@ import (
 )
 
 func TestCreateAndGet(t *testing.T) {
-	store := NewStore(30 * time.Minute, false)
+	store := NewStore(30*time.Minute, false)
 
 	rr := httptest.NewRecorder()
 	sess, err := store.Create(rr, "admin")
@@ -58,7 +58,7 @@ func TestCreateAndGet(t *testing.T) {
 }
 
 func TestGetNoSession(t *testing.T) {
-	store := NewStore(30 * time.Minute, false)
+	store := NewStore(30*time.Minute, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	got := store.Get(req)
@@ -68,7 +68,7 @@ func TestGetNoSession(t *testing.T) {
 }
 
 func TestGetInvalidSession(t *testing.T) {
-	store := NewStore(30 * time.Minute, false)
+	store := NewStore(30*time.Minute, false)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.AddCookie(&http.Cookie{Name: cookieName, Value: "nonexistent"})
@@ -80,7 +80,7 @@ func TestGetInvalidSession(t *testing.T) {
 }
 
 func TestSessionExpiry(t *testing.T) {
-	store := NewStore(1 * time.Millisecond, false)
+	store := NewStore(1*time.Millisecond, false)
 
 	rr := httptest.NewRecorder()
 	sess, err := store.Create(rr, "admin")
@@ -101,7 +101,7 @@ func TestSessionExpiry(t *testing.T) {
 }
 
 func TestDestroy(t *testing.T) {
-	store := NewStore(30 * time.Minute, false)
+	store := NewStore(30*time.Minute, false)
 
 	rr := httptest.NewRecorder()
 	sess, err := store.Create(rr, "admin")
@@ -133,7 +133,7 @@ func TestDestroy(t *testing.T) {
 }
 
 func TestValidateCSRF(t *testing.T) {
-	store := NewStore(30 * time.Minute, false)
+	store := NewStore(30*time.Minute, false)
 
 	rr := httptest.NewRecorder()
 	sess, err := store.Create(rr, "admin")

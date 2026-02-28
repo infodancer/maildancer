@@ -14,7 +14,7 @@ import (
 func newTestWebHandler(t *testing.T) (*WebHandler, string) {
 	t.Helper()
 	dir := t.TempDir()
-	store := session.NewStore(30 * time.Minute, false)
+	store := session.NewStore(30*time.Minute, false)
 	return NewWebHandler(dir, store, slog.Default(), nil), dir
 }
 

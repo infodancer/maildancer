@@ -16,7 +16,7 @@ import (
 func newTestDashboardHandler(t *testing.T) (*DashboardHandler, string) {
 	t.Helper()
 	dir := t.TempDir()
-	store := session.NewStore(30 * time.Minute, false)
+	store := session.NewStore(30*time.Minute, false)
 	return NewDashboardHandler(dir, store, slog.Default()), dir
 }
 

@@ -188,6 +188,10 @@ func mergeConfig(dst, src Config) Config {
 		dst.DomainsPath = src.DomainsPath
 	}
 
+	if src.DomainsDataPath != "" {
+		dst.DomainsDataPath = src.DomainsDataPath
+	}
+
 	if len(src.Listeners) > 0 {
 		dst.Listeners = src.Listeners
 	}

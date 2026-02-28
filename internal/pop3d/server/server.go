@@ -165,6 +165,11 @@ func (s *Server) Config() *config.Config {
 	return s.cfg
 }
 
+// Handler returns the connection handler.
+func (s *Server) Handler() ConnectionHandler {
+	return s.handler
+}
+
 // defaultHandler is a placeholder handler that logs connections.
 // This should be replaced with actual POP3 protocol handling.
 func (s *Server) defaultHandler(ctx context.Context, conn *Connection) {

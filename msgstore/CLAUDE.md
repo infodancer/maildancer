@@ -10,6 +10,15 @@ This is a template repository for go projects.
 
 ## Architecture
 
+### Address Contract
+
+All callers must pass fully-qualified `localpart@domain` addresses to store methods (e.g. `List`, `Retrieve`, `Stat`, `Delete`). The store normalises internally:
+
+- With no `path_template` configured (the default), the domain component is stripped and the `localpart` is used as the maildir subdirectory name.
+- With a `path_template`, `{localpart}`, `{domain}`, and `{email}` substitutions are available for custom layouts.
+
+The store never rejects a bare localpart — it treats it as a degenerate case where the domain happens to be absent. However, callers should always pass the full address; `AuthRouter` guarantees this for all three daemons.
+
 ## Development Workflow
 
 ### Branch and Issue Protocol

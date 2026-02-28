@@ -70,7 +70,7 @@ func (s *SubprocessServer) Run(ctx context.Context) error {
 		ln, err := net.Listen("tcp", lc.Address)
 		if err != nil {
 			for _, l := range lns {
-				l.Close()
+				_ = l.Close()
 			}
 			return fmt.Errorf("listen %s: %w", lc.Address, err)
 		}
@@ -91,7 +91,7 @@ func (s *SubprocessServer) Run(ctx context.Context) error {
 	<-ctx.Done()
 	s.logger.Info("shutting down subprocess server")
 	for _, ln := range lns {
-		ln.Close()
+		_ = ln.Close()
 	}
 	s.wg.Wait()
 	return ctx.Err()
@@ -124,7 +124,7 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 	if !ok {
 		s.logger.Error("cannot pass non-TCP connection to subprocess",
 			slog.String("type", fmt.Sprintf("%T", conn)))
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
@@ -134,11 +134,11 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		s.logger.Error("failed to dup connection fd",
 			slog.String("client_ip", clientIP),
 			slog.String("error", err.Error()))
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 	// Parent relinquishes its copy of the socket; subprocess owns it.
-	conn.Close()
+	_ = conn.Close()
 
 	// Pre-allocate all three pipe pairs before forking.
 	//
@@ -150,7 +150,7 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		s.logger.Error("failed to create auth pipe",
 			slog.String("client_ip", clientIP),
 			slog.String("error", err.Error()))
-		connFile.Close()
+		_ = connFile.Close()
 		return
 	}
 	fromSessR, fromSessW, err := os.Pipe()
@@ -158,9 +158,9 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		s.logger.Error("failed to create fromSession pipe",
 			slog.String("client_ip", clientIP),
 			slog.String("error", err.Error()))
-		connFile.Close()
-		authPipeR.Close()
-		authPipeW.Close()
+		_ = connFile.Close()
+		_ = authPipeR.Close()
+		_ = authPipeW.Close()
 		return
 	}
 	toSessR, toSessW, err := os.Pipe()
@@ -168,11 +168,11 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		s.logger.Error("failed to create toSession pipe",
 			slog.String("client_ip", clientIP),
 			slog.String("error", err.Error()))
-		connFile.Close()
-		authPipeR.Close()
-		authPipeW.Close()
-		fromSessR.Close()
-		fromSessW.Close()
+		_ = connFile.Close()
+		_ = authPipeR.Close()
+		_ = authPipeW.Close()
+		_ = fromSessR.Close()
+		_ = fromSessW.Close()
 		return
 	}
 
@@ -196,21 +196,21 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		s.logger.Error("failed to start protocol-handler",
 			slog.String("client_ip", clientIP),
 			slog.String("error", err.Error()))
-		connFile.Close()
-		authPipeR.Close()
-		authPipeW.Close()
-		fromSessR.Close()
-		fromSessW.Close()
-		toSessR.Close()
-		toSessW.Close()
+		_ = connFile.Close()
+		_ = authPipeR.Close()
+		_ = authPipeW.Close()
+		_ = fromSessR.Close()
+		_ = fromSessW.Close()
+		_ = toSessR.Close()
+		_ = toSessW.Close()
 		return
 	}
 
 	// Close fds that now belong to the child — parent keeps only the peer ends.
-	connFile.Close()
-	authPipeW.Close()
-	fromSessR.Close()
-	toSessW.Close()
+	_ = connFile.Close()
+	_ = authPipeW.Close()
+	_ = fromSessR.Close()
+	_ = toSessW.Close()
 
 	pid := cmd.Process.Pid
 	s.logger.Debug("spawned protocol-handler",
@@ -245,13 +245,13 @@ func (s *SubprocessServer) dispatchSession(
 	// Read the auth signal. When the protocol-handler exits without
 	// authenticating (wrong password, timeout, etc.) authPipeR returns EOF.
 	sig, err := readAuthSignal(authPipeR)
-	authPipeR.Close()
+	_ = authPipeR.Close()
 	if err != nil {
 		s.logger.Debug("no auth signal received",
 			slog.String("client_ip", clientIP),
 			slog.String("reason", err.Error()))
-		toSessR.Close()
-		fromSessW.Close()
+		_ = toSessR.Close()
+		_ = fromSessW.Close()
 		return
 	}
 
@@ -264,8 +264,8 @@ func (s *SubprocessServer) dispatchSession(
 	if s.mailSessionPath == "" || s.domainsPath == "" {
 		s.logger.Debug("mail-session not configured, skipping spawn",
 			slog.String("client_ip", clientIP))
-		toSessR.Close()
-		fromSessW.Close()
+		_ = toSessR.Close()
+		_ = fromSessW.Close()
 		return
 	}
 
@@ -275,8 +275,8 @@ func (s *SubprocessServer) dispatchSession(
 			slog.String("client_ip", clientIP),
 			slog.String("username", sig.Username),
 			slog.String("error", err.Error()))
-		toSessR.Close()
-		fromSessW.Close()
+		_ = toSessR.Close()
+		_ = fromSessW.Close()
 		return
 	}
 
@@ -296,14 +296,14 @@ func (s *SubprocessServer) dispatchSession(
 			slog.String("client_ip", clientIP),
 			slog.String("username", sig.Username),
 			slog.String("error", err.Error()))
-		toSessR.Close()
-		fromSessW.Close()
+		_ = toSessR.Close()
+		_ = fromSessW.Close()
 		return
 	}
 
 	// Parent closes its copies; the child processes own these fds now.
-	toSessR.Close()
-	fromSessW.Close()
+	_ = toSessR.Close()
+	_ = fromSessW.Close()
 
 	s.logger.Debug("spawned mail-session",
 		slog.Int("pid", msCmd.Process.Pid),

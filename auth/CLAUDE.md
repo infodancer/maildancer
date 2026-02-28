@@ -10,6 +10,16 @@ This is a template repository for go projects.
 
 ## Architecture
 
+### Address Contract
+
+`AuthRouter` (in `auth/domain`) is the single point responsible for normalising mailbox addresses after domain authentication. After successful domain auth:
+
+- `User.Mailbox` is set to `base@domain` (fully-qualified, subaddress stripped)
+- The domain agent receives only the bare `localpart` (no domain, no extension)
+- The subaddress extension is returned separately in `AuthResult.Extension`
+
+Daemons (smtpd, pop3d, imapd) must **not** perform address normalisation themselves — they pass `User.Mailbox` directly to the message store. The store strips the domain component. This is enforced by `TestAuthRouterMailbox_AddressContract` in `auth/domain`.
+
 ## Development Workflow
 
 ### Branch and Issue Protocol

@@ -495,5 +495,59 @@ func TestAuthRouterUserExistsSubaddressFallback(t *testing.T) {
 	}
 }
 
+// TestAuthRouterMailbox_AddressContract verifies that AuthRouter normalises
+// User.Mailbox to a fully-qualified "localpart@domain" address after domain
+// authentication. The store is responsible for stripping the domain; no daemon
+// (smtpd, pop3d, imapd) should have to perform this normalisation itself.
+func TestAuthRouterMailbox_AddressContract(t *testing.T) {
+	domainAgent := &mockAuthAgent{
+		authenticateFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
+			// Domain agent receives only the base localpart (no extension, no domain)
+			if username == "alice" && password == "secret" {
+				return &auth.AuthSession{User: &auth.User{Username: "alice"}}, nil
+			}
+			return nil, autherrors.ErrAuthFailed
+		},
+	}
+
+	provider := &mockDomainProvider{
+		domains: map[string]*Domain{
+			"example.com": {
+				Name:      "example.com",
+				AuthAgent: domainAgent,
+			},
+		},
+	}
+
+	router := NewAuthRouter(provider, nil)
+	ctx := context.Background()
+
+	t.Run("plain address", func(t *testing.T) {
+		result, err := router.AuthenticateWithDomain(ctx, "alice@example.com", "secret")
+		if err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+		want := "alice@example.com"
+		if got := result.Session.User.Mailbox; got != want {
+			t.Errorf("User.Mailbox = %q, want %q (must be fully-qualified, not bare localpart)", got, want)
+		}
+	})
+
+	t.Run("subaddress stripped", func(t *testing.T) {
+		result, err := router.AuthenticateWithDomain(ctx, "alice+folder@example.com", "secret")
+		if err != nil {
+			t.Fatalf("expected success, got error: %v", err)
+		}
+		// Extension must be stripped from Mailbox; store gets base@domain
+		want := "alice@example.com"
+		if got := result.Session.User.Mailbox; got != want {
+			t.Errorf("User.Mailbox = %q, want %q (subaddress must not appear in Mailbox)", got, want)
+		}
+		if result.Extension != "folder" {
+			t.Errorf("Extension = %q, want %q", result.Extension, "folder")
+		}
+	})
+}
+
 // Verify AuthRouter implements auth.AuthenticationAgent at compile time.
 var _ auth.AuthenticationAgent = (*AuthRouter)(nil)

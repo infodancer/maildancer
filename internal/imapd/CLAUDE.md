@@ -15,6 +15,12 @@ This file provides guidance to Claude Code when working with code in this reposi
 /errors/            # Centralized error definitions
 ```
 
+### Address Contract
+
+imapd passes `User.Mailbox` from the `AuthResult` directly to the message store — it does **not** normalise or strip the domain. `AuthRouter` guarantees that `User.Mailbox` is set to `base@domain` (fully-qualified, subaddress stripped) after domain authentication. The store then strips the domain internally.
+
+Do not add localpart extraction or domain stripping logic in imapd. Any address handling belongs in `auth/domain.AuthRouter` or `msgstore`. Test sessions must use fully-qualified mailboxes (e.g. `"testuser@example.com"`) to reflect real runtime behaviour.
+
 ## Development Commands
 
 ```bash

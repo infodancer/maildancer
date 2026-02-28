@@ -17,7 +17,7 @@ func newTestSession(t *testing.T, store *mockStore) *Session {
 	return &Session{
 		store:       store,
 		folderStore: store,
-		mailbox:     "testuser",
+		mailbox:     "testuser@example.com",
 		username:    "testuser@example.com",
 		userDomain:  "example.com",
 		collector:   &noopCollector{},
@@ -101,8 +101,8 @@ func TestIsValidMailboxName(t *testing.T) {
 
 func TestSelect_INBOX(t *testing.T) {
 	store := newMockStore()
-	store.addInboxMessage("testuser", []string{"\\Seen"}, "From: a@b.com\r\n\r\nHello")
-	store.addInboxMessage("testuser", nil, "From: c@d.com\r\n\r\nWorld")
+	store.addInboxMessage("testuser@example.com", []string{"\\Seen"}, "From: a@b.com\r\n\r\nHello")
+	store.addInboxMessage("testuser@example.com", nil, "From: c@d.com\r\n\r\nWorld")
 
 	s := newTestSession(t, store)
 	data, err := s.Select("INBOX", nil)
@@ -120,8 +120,8 @@ func TestSelect_INBOX(t *testing.T) {
 
 func TestSelect_Folder(t *testing.T) {
 	store := newMockStore()
-	_ = store.CreateFolder(context.Background(), "testuser", "Sent")
-	store.addFolderMessage("testuser", "Sent", []string{"\\Seen"}, "From: a@b.com\r\n\r\nSent message")
+	_ = store.CreateFolder(context.Background(), "testuser@example.com", "Sent")
+	store.addFolderMessage("testuser@example.com", "Sent", []string{"\\Seen"}, "From: a@b.com\r\n\r\nSent message")
 
 	s := newTestSession(t, store)
 	data, err := s.Select("Sent", nil)
@@ -135,8 +135,8 @@ func TestSelect_Folder(t *testing.T) {
 
 func TestStatus_NumMessages(t *testing.T) {
 	store := newMockStore()
-	store.addInboxMessage("testuser", nil, "msg1")
-	store.addInboxMessage("testuser", []string{"\\Seen"}, "msg2")
+	store.addInboxMessage("testuser@example.com", nil, "msg1")
+	store.addInboxMessage("testuser@example.com", []string{"\\Seen"}, "msg2")
 
 	s := newTestSession(t, store)
 	data, err := s.Status("INBOX", &imap.StatusOptions{NumMessages: true, NumUnseen: true})
@@ -160,7 +160,7 @@ func TestCreate_Delete_Folder(t *testing.T) {
 	}
 
 	// Verify folder was created via the store
-	folders, err := store.ListFolders(context.Background(), "testuser")
+	folders, err := store.ListFolders(context.Background(), "testuser@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,14 +197,14 @@ func TestDelete_INBOX_Fails(t *testing.T) {
 
 func TestRename_Folder(t *testing.T) {
 	store := newMockStore()
-	_ = store.CreateFolder(context.Background(), "testuser", "OldName")
+	_ = store.CreateFolder(context.Background(), "testuser@example.com", "OldName")
 
 	s := newTestSession(t, store)
 	if err := s.Rename("OldName", "NewName", nil); err != nil {
 		t.Fatalf("Rename failed: %v", err)
 	}
 
-	folders, err := store.ListFolders(context.Background(), "testuser")
+	folders, err := store.ListFolders(context.Background(), "testuser@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,8 +225,8 @@ func TestRename_INBOX_Fails(t *testing.T) {
 
 func TestSearch_ByFlag(t *testing.T) {
 	store := newMockStore()
-	store.addInboxMessage("testuser", []string{"\\Seen"}, "seen message")
-	store.addInboxMessage("testuser", nil, "unseen message")
+	store.addInboxMessage("testuser@example.com", []string{"\\Seen"}, "seen message")
+	store.addInboxMessage("testuser@example.com", nil, "unseen message")
 
 	s := newTestSession(t, store)
 	_, err := s.Select("INBOX", nil)
@@ -254,8 +254,8 @@ func TestSearch_ByFlag(t *testing.T) {
 
 func TestSearch_ByFlagUID(t *testing.T) {
 	store := newMockStore()
-	store.addInboxMessage("testuser", []string{"\\Seen"}, "seen message")
-	store.addInboxMessage("testuser", nil, "unseen message")
+	store.addInboxMessage("testuser@example.com", []string{"\\Seen"}, "seen message")
+	store.addInboxMessage("testuser@example.com", nil, "unseen message")
 
 	s := newTestSession(t, store)
 	_, err := s.Select("INBOX", nil)
@@ -299,7 +299,7 @@ func TestExtractDomain(t *testing.T) {
 
 func TestListMessages_INBOX(t *testing.T) {
 	store := newMockStore()
-	store.addInboxMessage("testuser", nil, "msg1")
+	store.addInboxMessage("testuser@example.com", nil, "msg1")
 
 	s := newTestSession(t, store)
 	msgs, err := s.listMessages(context.Background(), "INBOX")
@@ -313,8 +313,8 @@ func TestListMessages_INBOX(t *testing.T) {
 
 func TestListMessages_Folder(t *testing.T) {
 	store := newMockStore()
-	_ = store.CreateFolder(context.Background(), "testuser", "Sent")
-	store.addFolderMessage("testuser", "Sent", nil, "msg1")
+	_ = store.CreateFolder(context.Background(), "testuser@example.com", "Sent")
+	store.addFolderMessage("testuser@example.com", "Sent", nil, "msg1")
 
 	s := newTestSession(t, store)
 	msgs, err := s.listMessages(context.Background(), "Sent")
@@ -328,7 +328,7 @@ func TestListMessages_Folder(t *testing.T) {
 
 func TestRetrieveMessage_INBOX(t *testing.T) {
 	store := newMockStore()
-	info := store.addInboxMessage("testuser", nil, "test body content")
+	info := store.addInboxMessage("testuser@example.com", nil, "test body content")
 
 	s := newTestSession(t, store)
 	rc, err := s.retrieveMessage(context.Background(), "INBOX", info.UID)
@@ -356,7 +356,7 @@ func TestGetUIDValidity(t *testing.T) {
 
 func TestUnselect(t *testing.T) {
 	store := newMockStore()
-	store.addInboxMessage("testuser", nil, "msg1")
+	store.addInboxMessage("testuser@example.com", nil, "msg1")
 
 	s := newTestSession(t, store)
 	_, err := s.Select("INBOX", nil)

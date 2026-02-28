@@ -83,3 +83,10 @@ The store never rejects a bare localpart — it treats it as a degenerate case w
 - Avoid leaking sensitive data in error messages or logs
 
 Read CONVENTIONS.md for language specific best practices.
+
+## Security Model
+
+This repository is part of the infodancer mail stack. The process separation,
+privilege model, uid/gid allocation, and pipe protocol are defined in:
+
+https://github.com/infodancer/infodancer/blob/master/docs/mail-security-model.md

@@ -7,15 +7,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
-	"github.com/infodancer/maildancer/auth"
-	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd auth backend
-	"github.com/infodancer/maildancer/msgstore"
+	_ "github.com/infodancer/maildancer/auth/passwd"    // Register passwd auth backend
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir storage backend
 	"github.com/infodancer/maildancer/internal/smtpd/config"
-	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/smtpd/logging"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/rspamd"
@@ -64,46 +60,7 @@ func main() {
 		collector = metrics.NewPrometheusCollector(prometheus.DefaultRegisterer)
 	}
 
-	// Create delivery agent if configured
-	var delivery msgstore.DeliveryAgent
-	if cfg.Delivery.Type != "" {
-		storeConfig := msgstore.StoreConfig{
-			Type:     cfg.Delivery.Type,
-			BasePath: cfg.Delivery.BasePath,
-			Options:  cfg.Delivery.Options,
-		}
-		store, err := msgstore.Open(storeConfig)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error creating delivery agent: %v\n", err)
-			os.Exit(1)
-		}
-		delivery = store
-		logger.Info("delivery enabled", "type", cfg.Delivery.Type, "path", cfg.Delivery.BasePath)
-	}
-
-	// Create authentication agent if configured
-	var authAgent auth.AuthenticationAgent
-	if cfg.Auth.IsEnabled() {
-		agentConfig := auth.AuthAgentConfig{
-			Type:              cfg.Auth.AgentType,
-			CredentialBackend: cfg.Auth.CredentialBackend,
-			KeyBackend:        cfg.Auth.KeyBackend,
-			Options:           cfg.Auth.Options,
-		}
-		authAgent, err = auth.OpenAuthAgent(agentConfig)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error creating authentication agent: %v\n", err)
-			os.Exit(1)
-		}
-		defer func() {
-			if err := authAgent.Close(); err != nil {
-				logger.Error("error closing auth agent", "error", err)
-			}
-		}()
-		logger.Info("authentication enabled", "type", cfg.Auth.AgentType)
-	}
-
-	// Create spam checker from config
+	// Create spam checker from config (stays in main.go per project constraints)
 	spamChecker, spamCheckConfig := createSpamChecker(cfg, logger)
 	if spamChecker != nil {
 		defer func() {
@@ -113,74 +70,24 @@ func main() {
 		}()
 	}
 
-	// Create domain provider if configured
-	var domainProvider domain.DomainProvider
-	if cfg.DomainsPath != "" {
-		dp := domain.NewFilesystemDomainProvider(cfg.DomainsPath, logger)
-		if cfg.DomainsDataPath != "" {
-			dp = dp.WithDataPath(cfg.DomainsDataPath)
-		}
-		domainProvider = dp.WithDefaults(domain.DomainConfig{
-				Auth: domain.DomainAuthConfig{
-					Type:              "passwd",
-					CredentialBackend: "passwd",
-					KeyBackend:        "keys",
-				},
-				MsgStore: domain.DomainMsgStoreConfig{
-					Type:     "maildir",
-					BasePath: "users",
-				},
-			})
-		defer func() {
-			if err := domainProvider.Close(); err != nil {
-				logger.Error("error closing domain provider", "error", err)
-			}
-		}()
-		logger.Info("domain provider enabled", "path", cfg.DomainsPath)
-	}
-
-	// Create auth router (centralizes domain-aware auth routing)
-	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
-
-	// Create the go-smtp backend
-	// Build temp dir path: on the same filesystem as the mail store so
-	// temp files can be renamed atomically into the maildir.
-	var tempDir string
-	if cfg.Delivery.BasePath != "" {
-		tempDir = filepath.Join(cfg.Delivery.BasePath, "tmp")
-	}
-
-	backend := smtp.NewBackend(smtp.BackendConfig{
-		Hostname:       cfg.Hostname,
-		Delivery:       delivery,
-		AuthAgent:      authAgent,
-		AuthRouter:     authRouter,
-		DomainProvider: domainProvider,
-		SpamChecker:    spamChecker,
-		SpamConfig:     spamCheckConfig,
-		Collector:      collector,
-		MaxRecipients:  cfg.Limits.MaxRecipients,
-		MaxMessageSize: int64(cfg.Limits.MaxMessageSize),
-		TempDir:        tempDir,
-		Logger:         logger,
-	})
-
-	// Create the multi-mode server
-	srv, err := smtp.NewServer(smtp.ServerConfig{
-		Backend:        backend,
-		Listeners:      cfg.Listeners,
-		Hostname:       cfg.Hostname,
-		TLSConfig:      tlsConfig,
-		ReadTimeout:    cfg.Timeouts.ConnectionTimeout(),
-		WriteTimeout:   cfg.Timeouts.ConnectionTimeout(),
-		MaxMessageSize: cfg.Limits.MaxMessageSize,
-		MaxRecipients:  cfg.Limits.MaxRecipients,
-		Logger:         logger,
+	// Wire up all components via Stack
+	stack, err := smtp.NewStack(smtp.StackConfig{
+		Config:      cfg,
+		TLSConfig:   tlsConfig,
+		SpamChecker: spamChecker,
+		SpamConfig:  spamCheckConfig,
+		Collector:   collector,
+		Logger:      logger,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error creating server stack: %v\n", err)
 		os.Exit(1)
 	}
+	defer func() {
+		if err := stack.Close(); err != nil {
+			logger.Error("error closing server stack", "error", err)
+		}
+	}()
 
 	// Set up context with signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -208,7 +115,7 @@ func main() {
 	logger.Info("starting smtpd", "hostname", cfg.Hostname, "listeners", len(cfg.Listeners))
 
 	// Run the server
-	if err := srv.Run(ctx); err != nil && err != context.Canceled {
+	if err := stack.Run(ctx); err != nil && err != context.Canceled {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}

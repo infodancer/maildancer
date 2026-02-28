@@ -51,7 +51,7 @@ func (c *pop3Pipe) readLine() string {
 }
 
 func (c *pop3Pipe) send(cmd string) {
-	fmt.Fprintf(c.conn, "%s\r\n", cmd)
+	_, _ = fmt.Fprintf(c.conn, "%s\r\n", cmd)
 }
 
 func (c *pop3Pipe) readGreeting() string {
@@ -87,7 +87,7 @@ func TestRunSingleConn_SessionEndsAfterQuit(t *testing.T) {
 	if !strings.HasPrefix(resp, "+OK") {
 		t.Fatalf("expected +OK after QUIT, got: %q", resp)
 	}
-	clientConn.Close()
+	_ = clientConn.Close()
 
 	select {
 	case <-done:
@@ -113,7 +113,7 @@ func TestRunSingleConn_NoSecondConn(t *testing.T) {
 	}()
 
 	// Abruptly close the client side; RunSingleConn should notice and return.
-	clientConn.Close()
+	_ = clientConn.Close()
 
 	select {
 	case <-done:
@@ -148,7 +148,7 @@ func TestRunSingleConn_ConcurrentSessions(t *testing.T) {
 			c.readGreeting()
 			c.send("QUIT")
 			c.readLine()
-			clientConn.Close()
+			_ = clientConn.Close()
 
 			select {
 			case <-done:

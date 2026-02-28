@@ -95,7 +95,7 @@ func runProtocolHandler() {
 		os.Exit(1)
 	}
 	netConn, err := net.FileConn(connFile)
-	connFile.Close() // done with the os.File wrapper; netConn holds its own dup
+	_ = connFile.Close() // done with the os.File wrapper; netConn holds its own dup
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "protocol-handler: error reconstructing connection: %v\n", err)
 		os.Exit(1)

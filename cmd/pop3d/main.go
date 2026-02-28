@@ -9,16 +9,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/infodancer/maildancer/auth"
-	"github.com/infodancer/maildancer/auth/domain"
-	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd backend
-	"github.com/infodancer/maildancer/msgstore"
+	_ "github.com/infodancer/maildancer/auth/passwd"    // Register passwd backend
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir backend
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/metrics"
 	"github.com/infodancer/maildancer/internal/pop3d/pop3"
-	"github.com/infodancer/maildancer/internal/pop3d/server"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -62,95 +58,29 @@ func main() {
 		collector = metrics.NewPrometheusCollector(prometheus.DefaultRegisterer)
 	}
 
-	// Create authentication agent if configured
-	var authAgent auth.AuthenticationAgent
-	if cfg.Auth.IsConfigured() {
-		agentConfig := auth.AuthAgentConfig{
-			Type:              cfg.Auth.Type,
-			CredentialBackend: cfg.Auth.CredentialBackend,
-			KeyBackend:        cfg.Auth.KeyBackend,
-			Options:           cfg.Auth.Options,
-		}
-		authAgent, err = auth.OpenAuthAgent(agentConfig)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error creating auth agent: %v\n", err)
-			os.Exit(1)
-		}
-		defer func() {
-			if err := authAgent.Close(); err != nil {
-				logger.Error("error closing auth agent", "error", err)
-			}
-		}()
-		logger.Info("authentication enabled", "type", cfg.Auth.Type)
-	}
-
-	// Create message store if configured
-	var msgStore msgstore.MessageStore
-	if cfg.Maildir != "" {
-		store, err := msgstore.Open(msgstore.StoreConfig{
-			Type:     "maildir",
-			BasePath: cfg.Maildir,
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error opening message store: %v\n", err)
-			os.Exit(1)
-		}
-		msgStore = store
-		logger.Info("message store enabled", "type", "maildir", "path", cfg.Maildir)
-	}
-
-	// Create domain provider if configured
-	var domainProvider domain.DomainProvider
-	if cfg.DomainsPath != "" {
-		p := domain.NewFilesystemDomainProvider(cfg.DomainsPath, logger)
-		if cfg.DomainsDataPath != "" {
-			p = p.WithDataPath(cfg.DomainsDataPath)
-		}
-		dp := p.WithDefaults(domain.DomainConfig{
-			Auth: domain.DomainAuthConfig{
-				Type:              "passwd",
-				CredentialBackend: "passwd",
-				KeyBackend:        "keys",
-			},
-			MsgStore: domain.DomainMsgStoreConfig{
-				Type:     "maildir",
-				BasePath: "users",
-			},
-		})
-		defer func() {
-			if err := dp.Close(); err != nil {
-				logger.Error("error closing domain provider", "error", err)
-			}
-		}()
-		domainProvider = dp
-		logger.Info("domain provider enabled", "path", cfg.DomainsPath)
-	}
-
-	// Create auth router (centralizes domain-aware auth routing)
-	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
-
-	// Create server
-	srv, err := server.New(server.Config{
-		Cfg:       &cfg,
+	// Wire up all components via Stack
+	stack, err := pop3.NewStack(pop3.StackConfig{
+		Config:    cfg,
 		TLSConfig: tlsConfig,
+		Collector: collector,
 		Logger:    logger,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error creating server stack: %v\n", err)
 		os.Exit(1)
 	}
+	defer func() {
+		if err := stack.Close(); err != nil {
+			logger.Error("error closing server stack", "error", err)
+		}
+	}()
 
-	// Set POP3 protocol handler
-	handler := pop3.Handler(cfg.Hostname, authRouter, msgStore, tlsConfig, collector)
-	srv.SetHandler(handler)
-
-	// Set up signal handling for graceful shutdown
+	// Set up context with signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
 		sig := <-sigChan
 		logger.Info("received signal, shutting down", "signal", sig.String())
@@ -170,8 +100,7 @@ func main() {
 
 	logger.Info("starting pop3d", "hostname", cfg.Hostname, "listeners", len(cfg.Listeners))
 
-	// Run server
-	if err := srv.Run(ctx); err != nil && err != context.Canceled {
+	if err := stack.Run(ctx); err != nil && err != context.Canceled {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}

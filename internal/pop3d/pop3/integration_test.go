@@ -5,8 +5,6 @@ package pop3_test
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"net"
 	"os"
@@ -15,25 +13,12 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/infodancer/maildancer/auth/passwd"    // Register passwd backend
+	_ "github.com/infodancer/maildancer/auth/passwd"      // Register passwd backend
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir backend
 
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/pop3"
-	"golang.org/x/crypto/argon2"
 )
-
-// hashPassword generates an argon2id hash in the format the passwd agent expects.
-func hashPassword(password string) (string, error) {
-	salt := make([]byte, 32)
-	if _, err := rand.Read(salt); err != nil {
-		return "", err
-	}
-	hash := argon2.IDKey([]byte(password), salt, 3, 64*1024, 4, 32)
-	return fmt.Sprintf("$argon2id$v=19$m=65536,t=3,p=4$%s$%s",
-		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(hash)), nil
-}
 
 func TestStack_POP3FullStack(t *testing.T) {
 	// Create temp dir tree: domainsDir/test.local/{config.toml, passwd, keys/, users/alice/{new,cur,tmp}/}

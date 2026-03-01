@@ -122,7 +122,7 @@ func TestRunSingleConn_BasicDelivery(t *testing.T) {
 	c.Ehlo(t)
 	c.SendMessage(t, "sender@example.com", "carol@single.local", "Test via RunSingleConn", "body text")
 	c.Quit(t)
-	clientConn.Close()
+	_ = clientConn.Close()
 
 	wg.Wait()
 
@@ -152,7 +152,7 @@ func TestRunSingleConn_SessionEndsAfterQuit(t *testing.T) {
 	c.Greeting(t)
 	c.Ehlo(t)
 	c.Quit(t)
-	clientConn.Close()
+	_ = clientConn.Close()
 
 	select {
 	case <-done:
@@ -178,7 +178,7 @@ func TestRunSingleConn_NoSecondConn(t *testing.T) {
 	}()
 
 	// Abruptly close the client side; RunSingleConn should notice and return.
-	clientConn.Close()
+	_ = clientConn.Close()
 
 	select {
 	case <-done:

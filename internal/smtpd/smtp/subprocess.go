@@ -51,7 +51,7 @@ func (s *SubprocessServer) Run(ctx context.Context) error {
 		ln, err := net.Listen("tcp", lc.Address)
 		if err != nil {
 			for _, l := range lns {
-				l.Close()
+				_ = l.Close()
 			}
 			return fmt.Errorf("listen %s: %w", lc.Address, err)
 		}
@@ -72,7 +72,7 @@ func (s *SubprocessServer) Run(ctx context.Context) error {
 	<-ctx.Done()
 	s.logger.Info("shutting down subprocess server")
 	for _, ln := range lns {
-		ln.Close()
+		_ = ln.Close()
 	}
 	s.wg.Wait()
 	return ctx.Err()
@@ -104,7 +104,7 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 	if !ok {
 		s.logger.Error("cannot pass non-TCP connection to subprocess",
 			slog.String("type", fmt.Sprintf("%T", conn)))
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
@@ -112,12 +112,12 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 	connFile, err := tcpConn.File()
 	if err != nil {
 		s.logger.Error("failed to dup connection fd", slog.String("error", err.Error()))
-		conn.Close()
+		_ = conn.Close()
 		return
 	}
 
 	// Parent relinquishes its copy of the socket; subprocess owns it.
-	conn.Close()
+	_ = conn.Close()
 
 	cmd := exec.Command(s.execPath, "protocol-handler", "--config", s.configPath)
 	cmd.ExtraFiles = []*os.File{connFile} // becomes fd 3 in the child
@@ -134,10 +134,10 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		s.logger.Error("failed to start protocol-handler",
 			slog.String("client_ip", clientIP),
 			slog.String("error", err.Error()))
-		connFile.Close()
+		_ = connFile.Close()
 		return
 	}
-	connFile.Close() // child has the fd; parent closes its dup
+	_ = connFile.Close() // child has the fd; parent closes its dup
 
 	pid := cmd.Process.Pid
 	s.logger.Debug("spawned protocol-handler",

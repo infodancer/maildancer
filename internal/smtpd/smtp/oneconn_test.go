@@ -12,7 +12,7 @@ func TestOneConnListener_AcceptsOnce(t *testing.T) {
 	t.Parallel()
 
 	c1, c2 := net.Pipe()
-	defer c2.Close()
+	t.Cleanup(func() { _ = c2.Close() })
 
 	ln := newOneConnListener(c1)
 
@@ -41,7 +41,7 @@ func TestOneConnListener_AcceptsOnce(t *testing.T) {
 	}
 
 	// Close the connection; the second Accept should now unblock.
-	conn.Close()
+	_ = conn.Close()
 
 	select {
 	case err := <-done:
@@ -59,8 +59,8 @@ func TestOneConnListener_CloseUnblocks(t *testing.T) {
 	t.Parallel()
 
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	t.Cleanup(func() { _ = c1.Close() })
+	t.Cleanup(func() { _ = c2.Close() })
 
 	ln := newOneConnListener(c1)
 
@@ -77,8 +77,8 @@ func TestOneConnListener_CloseUnblocks(t *testing.T) {
 	}()
 
 	time.Sleep(20 * time.Millisecond)
-	ln.Close()
-	first.Close()
+	_ = ln.Close()
+	_ = first.Close()
 
 	select {
 	case err := <-done:
@@ -95,8 +95,8 @@ func TestOneConnListener_AddrMatchesConn(t *testing.T) {
 	t.Parallel()
 
 	c1, c2 := net.Pipe()
-	defer c1.Close()
-	defer c2.Close()
+	t.Cleanup(func() { _ = c1.Close() })
+	t.Cleanup(func() { _ = c2.Close() })
 
 	ln := newOneConnListener(c1)
 	if ln.Addr() == nil {

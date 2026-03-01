@@ -3,6 +3,7 @@ package protocol
 
 // Command names understood by the protocol loop.
 const (
+	// POP3-path commands (unchanged).
 	CmdMailbox  = "MAILBOX"
 	CmdList     = "LIST"
 	CmdStat     = "STAT"
@@ -12,6 +13,18 @@ const (
 	CmdUndelete = "UNDELETE"
 	CmdCommit   = "COMMIT"
 	CmdQuit     = "QUIT"
+
+	// IMAP-path commands.
+	CmdSelect       = "SELECT"       // SELECT <folder> — select folder, return message list
+	CmdFolders      = "FOLDERS"      // FOLDERS — list all non-INBOX folders
+	CmdUIDValidity  = "UIDVALIDITY"  // UIDVALIDITY <folder> — return UIDValidity uint32
+	CmdCreateFolder = "CREATEFOLDER" // CREATEFOLDER <name>
+	CmdDeleteFolder = "DELETEFOLDER" // DELETEFOLDER <name>
+	CmdRenameFolder = "RENAMEFOLDER" // RENAMEFOLDER <old> <new>
+	CmdSetFlags     = "SETFLAGS"     // SETFLAGS <uid> <flag1>[,flag2,...] — replace flag set
+	CmdExpunge      = "EXPUNGE"      // EXPUNGE — flush \Deleted messages, return expelled UIDs
+	CmdAppend       = "APPEND"       // APPEND <folder> <size> <flags-csv-or-NONE> <date-rfc3339>
+	CmdCopy         = "COPY"         // COPY <uid> <dest-folder> — copy message, return dest UID
 )
 
 // Command holds a parsed command from the client.

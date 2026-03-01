@@ -37,3 +37,6 @@ bin/
 # .idea/
 # .vscode/
 /pop3d
+
+# OMC agent state
+.omc/

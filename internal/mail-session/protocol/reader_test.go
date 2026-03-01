@@ -93,3 +93,42 @@ func TestReadCommand_NoArgs(t *testing.T) {
 		t.Errorf("Args = %v, want []", cmd.Args)
 	}
 }
+
+func TestReadBytes_AfterCommand(t *testing.T) {
+	// Simulates the APPEND body read: command line + raw bytes immediately following.
+	input := "APPEND INBOX 5 NONE 2024-01-01T00:00:00Z\r\nhello"
+	r := protocol.NewReader(strings.NewReader(input))
+	cmd, err := r.ReadCommand()
+	if err != nil {
+		t.Fatalf("ReadCommand: %v", err)
+	}
+	if cmd.Name != "APPEND" {
+		t.Fatalf("Name = %q, want APPEND", cmd.Name)
+	}
+	data, err := r.ReadBytes(5)
+	if err != nil {
+		t.Fatalf("ReadBytes: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Errorf("data = %q, want %q", data, "hello")
+	}
+}
+
+func TestReadBytes_ExactCount(t *testing.T) {
+	r := protocol.NewReader(strings.NewReader("world"))
+	data, err := r.ReadBytes(5)
+	if err != nil {
+		t.Fatalf("ReadBytes: %v", err)
+	}
+	if string(data) != "world" {
+		t.Errorf("data = %q, want %q", data, "world")
+	}
+}
+
+func TestReadBytes_ShortRead(t *testing.T) {
+	r := protocol.NewReader(strings.NewReader("hi"))
+	_, err := r.ReadBytes(10)
+	if err == nil {
+		t.Error("expected error on short read, got nil")
+	}
+}

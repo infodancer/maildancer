@@ -43,3 +43,11 @@ func (r *Reader) ReadCommand() (*Command, error) {
 	}
 	return cmd, nil
 }
+
+// ReadBytes reads exactly n bytes from the underlying reader.
+// Used to consume the raw message body following an APPEND command line.
+func (r *Reader) ReadBytes(n int) ([]byte, error) {
+	buf := make([]byte, n)
+	_, err := io.ReadFull(r.r, buf)
+	return buf, err
+}

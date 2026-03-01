@@ -75,3 +75,9 @@ func readAuthSignal(r io.Reader) (*authSignal, error) {
 
 	return &authSignal{Version: version, Username: username}, nil
 }
+
+// writeAuthSignal encodes sig and writes it to w.
+func writeAuthSignal(w io.Writer, sig *authSignal) error {
+	_, err := fmt.Fprintf(w, "AUTH %d\r\nUSER:%s\r\nEND\r\n", sig.Version, sig.Username)
+	return err
+}

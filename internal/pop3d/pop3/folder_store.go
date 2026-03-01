@@ -35,3 +35,4 @@ func (a *folderMessageStore) Expunge(ctx context.Context, mailbox string) error 
 func (a *folderMessageStore) Stat(ctx context.Context, mailbox string) (int, int64, error) {
 	return a.fs.StatFolder(ctx, mailbox, a.folder)
 }
+

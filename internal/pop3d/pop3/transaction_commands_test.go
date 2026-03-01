@@ -76,6 +76,7 @@ func (m *mockMessageStore) Stat(ctx context.Context, mailbox string) (int, int64
 	return len(m.messages), total, nil
 }
 
+
 // Helper to create a session in TRANSACTION state with messages loaded
 func newTransactionSession(store msgstore.MessageStore) *Session {
 	sess := NewSession("test.example.com", config.ModePop3s, nil, true)

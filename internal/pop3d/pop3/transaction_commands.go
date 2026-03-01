@@ -326,7 +326,6 @@ func (t *topCommand) Execute(ctx context.Context, sess *Session, conn Connection
 		return Response{OK: false, Message: "Message store not available"}, nil
 	}
 
-	// Retrieve message content
 	reader, err := store.Retrieve(ctx, sess.Mailbox(), msg.UID)
 	if err != nil {
 		conn.Logger().Error("failed to retrieve message content",
@@ -336,12 +335,8 @@ func (t *topCommand) Execute(ctx context.Context, sess *Session, conn Connection
 		)
 		return Response{OK: false, Message: "Failed to retrieve message"}, nil
 	}
-	defer func() {
-		_ = reader.Close()
-	}()
-
-	// Parse headers and body
 	lines, err := extractTopLines(reader, lineCount)
+	_ = reader.Close()
 	if err != nil {
 		conn.Logger().Error("failed to parse message",
 			"msgNum", msgNum,

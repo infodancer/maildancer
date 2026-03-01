@@ -23,8 +23,9 @@ type StackConfig struct {
 	Config     config.Config
 	ConfigPath string         // absolute path to config file, used by subprocesses
 	TLSConfig  *tls.Config
-	Collector  metrics.Collector // nil → NoopCollector
-	Logger     *slog.Logger      // nil → slog.Default()
+	MsgStore   msgstore.MessageStore // overrides config.Maildir when non-nil
+	Collector  metrics.Collector    // nil → NoopCollector
+	Logger     *slog.Logger         // nil → slog.Default()
 }
 
 // Stack owns all components of a running pop3d instance and manages their lifecycle.
@@ -66,9 +67,12 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		logger.Info("authentication enabled", "type", cfg.Config.Auth.Type)
 	}
 
-	// Create message store if configured.
+	// Create message store: caller-supplied store takes priority over config.
 	var msgStore msgstore.MessageStore
-	if cfg.Config.Maildir != "" {
+	if cfg.MsgStore != nil {
+		msgStore = cfg.MsgStore
+		logger.Info("message store enabled", "type", "caller-supplied")
+	} else if cfg.Config.Maildir != "" {
 		store, err := msgstore.Open(msgstore.StoreConfig{
 			Type:     "maildir",
 			BasePath: cfg.Config.Maildir,

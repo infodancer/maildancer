@@ -51,6 +51,7 @@ func (m *mockFolderStore) Stat(_ context.Context, _ string) (int, int64, error) 
 	return len(m.inbox), total, nil
 }
 
+
 // FolderStore interface
 func (m *mockFolderStore) ListFolders(_ context.Context, _ string) ([]string, error) {
 	names := make([]string, 0, len(m.folders))

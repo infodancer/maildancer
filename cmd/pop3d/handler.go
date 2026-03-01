@@ -15,10 +15,19 @@ import (
 	"github.com/infodancer/maildancer/internal/pop3d/pop3"
 )
 
-// connFD is the file descriptor number used to pass the TCP socket from the
-// listener parent to the protocol-handler subprocess. It is the first entry in
-// cmd.ExtraFiles, which the OS maps to fd 3 (stdin=0, stdout=1, stderr=2).
-const connFD = 3
+// File descriptor layout in the protocol-handler subprocess.
+// The listener parent passes these via cmd.ExtraFiles (offset by 3):
+//
+//	fd 3  TCP socket
+//	fd 4  write-only: auth signal → dispatcher
+//	fd 5  read-only:  responses from mail-session
+//	fd 6  write-only: commands to mail-session
+const (
+	connFD     = 3
+	authPipeFD = 4
+	fromSessFD = 5
+	toSessFD   = 6
+)
 
 func runProtocolHandler() {
 	flags := config.ParseFlags()
@@ -68,12 +77,24 @@ func runProtocolHandler() {
 		os.Exit(1)
 	}
 
-	// Build the full auth/delivery stack. Each subprocess gets its own stack
-	// instance; there is no shared state with the parent listener process.
+	// Open session pipe fds provided by the dispatcher parent.
+	authPipeFile := os.NewFile(uintptr(authPipeFD), "auth-pipe-w")
+	fromSessFile := os.NewFile(uintptr(fromSessFD), "from-session")
+	toSessFile := os.NewFile(uintptr(toSessFD), "to-session")
+	if authPipeFile == nil || fromSessFile == nil || toSessFile == nil {
+		fmt.Fprintf(os.Stderr, "protocol-handler: session pipe fds not available\n")
+		os.Exit(1)
+	}
+	sessionStore := pop3.NewSessionPipeStore(authPipeFile, fromSessFile, toSessFile)
+
+	// Build the protocol stack. Each subprocess gets its own stack instance;
+	// there is no shared state with the parent listener process.
+	// MsgStore is injected so the stack never opens a local maildir.
 	stack, err := pop3.NewStack(pop3.StackConfig{
 		Config:     cfg,
 		ConfigPath: configPath,
 		TLSConfig:  tlsConfig,
+		MsgStore:   sessionStore,
 		Collector:  &metrics.NoopCollector{},
 		Logger:     logger,
 	})

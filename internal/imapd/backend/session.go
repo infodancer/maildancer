@@ -3,12 +3,19 @@ package backend
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/infodancer/maildancer/auth/domain"
+	"github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/logging"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
@@ -70,10 +77,23 @@ func (s *Session) Login(username, password string) error {
 	s.username = username
 	s.userDomain = extractDomain(username)
 	s.mailbox = result.Session.User.Mailbox
-	if result.Domain != nil && result.Domain.MessageStore != nil {
+
+	if s.cfg.MailSessionCmd != "" {
+		subprocStore, spawnErr := s.spawnMailSession(username)
+		if spawnErr != nil {
+			s.logger.Error("failed to spawn mail-session", "username", username, "error", spawnErr)
+			return &imap.Error{
+				Type: imap.StatusResponseTypeNo,
+				Text: "Internal server error",
+			}
+		}
+		s.store = subprocStore
+		s.folderStore = subprocStore
+	} else if result.Domain != nil && result.Domain.MessageStore != nil {
 		s.store = result.Domain.MessageStore
 		s.folderStore, _ = result.Domain.MessageStore.(msgstore.FolderStore)
 	}
+
 	s.collector.AuthAttempt(s.userDomain, true)
 	s.logger.Info("login success", "username", username)
 	return nil
@@ -104,8 +124,82 @@ func (s *Session) Unselect() error {
 // Close ends the session and releases resources.
 func (s *Session) Close() error {
 	s.unselect()
+	if closer, ok := s.store.(io.Closer); ok {
+		if err := closer.Close(); err != nil {
+			s.logger.Warn("store close error", "error", err)
+		}
+	}
 	s.collector.ConnectionClosed()
 	return nil
+}
+
+// spawnMailSession looks up the domain config for username, then starts a
+// mail-session subprocess with the appropriate uid/gid/basepath and returns a
+// SubprocessStore wired to its stdin/stdout.
+func (s *Session) spawnMailSession(username string) (*SubprocessStore, error) {
+	localpart, domainName, ok := strings.Cut(username, "@")
+	if !ok {
+		return nil, fmt.Errorf("invalid username %q: missing @domain", username)
+	}
+
+	uid, gid, basePath, storeType, err := s.lookupMailSessionParams(localpart, domainName)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.Command(s.cfg.MailSessionCmd, "--type", storeType, "--basepath", basePath)
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid: uid,
+			Gid: gid,
+		},
+	}
+
+	return NewSubprocessStore(cmd, s.mailbox)
+}
+
+// lookupMailSessionParams reads the per-domain config and passwd file to obtain
+// the uid, gid, basePath, and store type for spawning mail-session.
+// Mirrors the logic in pop3d's lookupCredentials.
+func (s *Session) lookupMailSessionParams(localpart, domainName string) (uid, gid uint32, basePath, storeType string, err error) {
+	domainDir := filepath.Join(s.cfg.DomainsPath, domainName)
+
+	cfg, err := domain.LoadDomainConfig(filepath.Join(domainDir, "config.toml"))
+	if err != nil {
+		return 0, 0, "", "", fmt.Errorf("load domain config for %q: %w", domainName, err)
+	}
+
+	gid = cfg.Gid
+
+	credBackend := cfg.Auth.CredentialBackend
+	if credBackend == "" {
+		credBackend = "passwd"
+	}
+	passwdPath := credBackend
+	if !filepath.IsAbs(passwdPath) {
+		passwdPath = filepath.Join(domainDir, passwdPath)
+	}
+
+	uid, err = passwd.LookupUID(passwdPath, localpart)
+	if err != nil {
+		return 0, 0, "", "", fmt.Errorf("lookup uid for %q in %q: %w", localpart, passwdPath, err)
+	}
+
+	base := cfg.MsgStore.BasePath
+	if base == "" {
+		base = "users"
+	}
+	if !filepath.IsAbs(base) {
+		base = filepath.Join(domainDir, base)
+	}
+
+	storeType = cfg.MsgStore.Type
+	if storeType == "" {
+		storeType = "maildir"
+	}
+
+	return uid, gid, base, storeType, nil
 }
 
 // Subscribe is a no-op (subscription state not tracked).

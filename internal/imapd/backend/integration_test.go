@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/infodancer/maildancer/auth/passwd"    // Register passwd backend
+	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd backend
 	"github.com/infodancer/maildancer/internal/imapd/backend"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir backend

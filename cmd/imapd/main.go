@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	_ "github.com/infodancer/maildancer/auth/passwd"    // Register passwd backend
+	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd backend
 	"github.com/infodancer/maildancer/internal/imapd/backend"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/logging"

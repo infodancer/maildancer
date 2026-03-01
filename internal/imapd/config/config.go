@@ -34,16 +34,17 @@ type ServerConfig struct {
 
 // Config holds the IMAP-specific server configuration.
 type Config struct {
-	Hostname    string           `toml:"hostname"`
-	LogLevel    string           `toml:"log_level"`
-	Listeners   []ListenerConfig `toml:"listeners"`
-	TLS         TLSConfig        `toml:"tls"`
-	Timeouts    TimeoutsConfig   `toml:"timeouts"`
-	Limits      LimitsConfig     `toml:"limits"`
-	Metrics     MetricsConfig    `toml:"metrics"`
-	DomainsPath string           `toml:"domains_path"`
-	Auth        AuthConfig       `toml:"auth"`
-	Store       StoreConfig      `toml:"store"`
+	Hostname       string           `toml:"hostname"`
+	LogLevel       string           `toml:"log_level"`
+	Listeners      []ListenerConfig `toml:"listeners"`
+	TLS            TLSConfig        `toml:"tls"`
+	Timeouts       TimeoutsConfig   `toml:"timeouts"`
+	Limits         LimitsConfig     `toml:"limits"`
+	Metrics        MetricsConfig    `toml:"metrics"`
+	DomainsPath    string           `toml:"domains_path"`
+	Auth           AuthConfig       `toml:"auth"`
+	Store          StoreConfig      `toml:"store"`
+	MailSessionCmd string           `toml:"mail_session"` // path to mail-session binary; empty = in-process
 }
 
 // AuthConfig holds configuration for the authentication agent.

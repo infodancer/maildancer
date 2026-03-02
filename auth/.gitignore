@@ -36,3 +36,4 @@ go.work.sum
 
 # Built binaries
 userctl
+auth-oidc

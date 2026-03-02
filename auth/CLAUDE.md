@@ -91,3 +91,14 @@ This repository is part of the infodancer mail stack. The process separation,
 privilege model, uid/gid allocation, and pipe protocol are defined in:
 
 https://github.com/infodancer/infodancer/blob/master/docs/mail-security-model.md
+
+### OIDC Federation Design
+
+The auth-oidc server is part of a three-tier authentication architecture shared with
+infodancer/webauth. The security model, use cases, what controls matter, and — critically
+— what has been tried and removed and **must not be added back** are documented in:
+
+https://github.com/infodancer/infodancer/blob/master/docs/oidc-federation-design.md
+
+**Read this before making any changes to client registration, redirect URI validation,
+or discovery endpoint behaviour.**

@@ -20,10 +20,6 @@ type ServerConfig struct {
 	DomainDataPath string `toml:"domain_data_path"`
 	JWTTTLSec     int64 `toml:"jwt_ttl_sec"`
 	SessionTTLSec int64 `toml:"session_ttl_sec"`
-	// RegistrationToken, when non-empty, enables RFC 7591 dynamic client
-	// registration at POST /register. Clients must present this value as a
-	// Bearer token. Leave empty to disable the endpoint.
-	RegistrationToken string `toml:"registration_token"`
 }
 
 // ClientConfig describes a registered OIDC relying party.

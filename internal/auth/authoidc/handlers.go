@@ -2,7 +2,6 @@ package authoidc
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -182,9 +181,7 @@ func (s *Server) serveDiscovery(w http.ResponseWriter, r *http.Request, de *doma
 		ClaimsSupported:                   []string{"sub", "email", "name", "iss", "aud", "exp", "iat"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 	}
-	if s.cfg.Server.RegistrationToken != "" {
-		doc.RegistrationEndpoint = base + "/register"
-	}
+	doc.RegistrationEndpoint = base + "/register"
 	respondJSON(w, http.StatusOK, doc)
 }
 
@@ -490,16 +487,6 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, de *domainEntry) {
-	if s.cfg.Server.RegistrationToken == "" {
-		http.Error(w, "dynamic client registration is not enabled", http.StatusNotImplemented)
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(bearerToken(r)), []byte(s.cfg.Server.RegistrationToken)) != 1 {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="auth-oidc-registration"`)
-		http.Error(w, "invalid or missing registration token", http.StatusUnauthorized)
-		return
-	}
-
 	var req registrationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondJSONError(w, http.StatusBadRequest, "invalid_client_metadata", "invalid JSON body")
@@ -510,7 +497,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, de *domai
 		return
 	}
 	for _, uri := range req.RedirectURIs {
-		if err := s.validateRedirectURIDomain(uri); err != nil {
+		if err := validateRedirectURIScheme(uri); err != nil {
 			respondJSONError(w, http.StatusBadRequest, "invalid_redirect_uri", err.Error())
 			return
 		}
@@ -529,12 +516,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, de *domai
 		responseTypes = []string{"code"}
 	}
 
-	// Derive a stable, deterministic client_id so re-registration after a
-	// server restart yields the same value. The HMAC key is the registration
-	// token, so only callers who know the token can predict the client_id.
-	mac := hmac.New(sha256.New, []byte(s.cfg.Server.RegistrationToken))
-	mac.Write([]byte(de.name + "\x00" + req.ClientName))
-	clientID := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	clientID := generateToken(16)
 
 	now := time.Now()
 	s.store.RegisterClient(&registeredClient{

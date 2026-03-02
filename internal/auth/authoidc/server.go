@@ -178,21 +178,22 @@ func (s *Server) clientFor(de *domainEntry, clientID string) (*ClientConfig, boo
 	return nil, false
 }
 
-// validateRedirectURIDomain returns an error if the host of rawURI is not equal
-// to or a subdomain of a registered domain. Used as defence-in-depth during
-// RFC 7591 dynamic client registration.
-func (s *Server) validateRedirectURIDomain(rawURI string) error {
+// validateRedirectURIScheme returns an error if rawURI is not a valid redirect
+// URI for RFC 7591 dynamic client registration. HTTPS is required except for
+// localhost/127.0.0.1/[::1], which are allowed for local development.
+func validateRedirectURIScheme(rawURI string) error {
 	u, err := url.Parse(rawURI)
 	if err != nil || u.Host == "" {
 		return fmt.Errorf("invalid redirect_uri: %q", rawURI)
 	}
-	host := u.Hostname() // strips port
-	for domain := range s.domains {
-		if host == domain || strings.HasSuffix(host, "."+domain) {
-			return nil
-		}
+	host := u.Hostname() // strips port and brackets from IPv6
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return nil
 	}
-	return fmt.Errorf("redirect_uri host %q is not on a registered domain", host)
+	if u.Scheme != "https" {
+		return fmt.Errorf("redirect_uri must use https (got %q)", u.Scheme)
+	}
+	return nil
 }
 
 // validRedirectURI reports whether uri is registered for the client.

@@ -51,9 +51,8 @@ func newTestServer(t *testing.T) http.Handler {
 			Listen:            ":0",
 			DataDir:           dataDir,
 			DomainDataPath:    filepath.Join(tmpDir, "domains"),
-			JWTTTLSec:         3600,
-			SessionTTLSec:     604800,
-			RegistrationToken: "test-reg-token",
+			JWTTTLSec:     3600,
+			SessionTTLSec: 604800,
 		},
 		Clients: []authoidc.ClientConfig{
 			{
@@ -353,7 +352,7 @@ func TestLogout(t *testing.T) {
 func TestRegister_Success(t *testing.T) {
 	handler := newTestServer(t)
 	body := `{"client_name":"myapp","redirect_uris":["https://app.test.example/cb"]}`
-	rr := doRegisterRequest(handler, "test-reg-token", body)
+	rr := doRegisterRequest(handler, body)
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("register = %d; body: %s", rr.Code, rr.Body)
 	}
@@ -369,46 +368,64 @@ func TestRegister_Success(t *testing.T) {
 	}
 }
 
-func TestRegister_NoToken(t *testing.T) {
+// TestRegister_ThirdPartyDomain verifies that any HTTPS redirect URI is accepted,
+// regardless of whether the host is an infodancer domain. This is required to
+// support "Login with infodancer.net" for third-party apps.
+func TestRegister_ThirdPartyDomain(t *testing.T) {
 	handler := newTestServer(t)
-	body := `{"redirect_uris":["https://app.test.example/cb"]}`
-	rr := doRegisterRequest(handler, "", body)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("no token: got %d, want 401", rr.Code)
+	body := `{"client_name":"thirdparty","redirect_uris":["https://someapp.example.com/callback"]}`
+	rr := doRegisterRequest(handler, body)
+	if rr.Code != http.StatusCreated {
+		t.Errorf("third-party HTTPS URI: got %d, want 201; body: %s", rr.Code, rr.Body)
 	}
 }
 
-func TestRegister_BadToken(t *testing.T) {
+// TestRegister_HTTPRedirectURI verifies that plain HTTP redirect URIs are rejected
+// (except for localhost, which is allowed for local development).
+func TestRegister_HTTPRedirectURI(t *testing.T) {
 	handler := newTestServer(t)
-	body := `{"redirect_uris":["https://app.test.example/cb"]}`
-	rr := doRegisterRequest(handler, "wrong-token", body)
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("bad token: got %d, want 401", rr.Code)
+	body := `{"redirect_uris":["http://app.test.example/cb"]}`
+	rr := doRegisterRequest(handler, body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("HTTP URI: got %d, want 400", rr.Code)
 	}
 }
 
-func TestRegister_Idempotent(t *testing.T) {
+// TestRegister_LocalhostHTTP verifies that http://localhost is accepted for local dev.
+func TestRegister_LocalhostHTTP(t *testing.T) {
+	handler := newTestServer(t)
+	body := `{"redirect_uris":["http://localhost:8080/cb"]}`
+	rr := doRegisterRequest(handler, body)
+	if rr.Code != http.StatusCreated {
+		t.Errorf("localhost HTTP URI: got %d, want 201; body: %s", rr.Code, rr.Body)
+	}
+}
+
+// TestRegister_NotIdempotent verifies that two registrations with identical payloads
+// produce different client_ids, since IDs are now randomly generated (not HMAC-derived).
+func TestRegister_NotIdempotent(t *testing.T) {
 	handler := newTestServer(t)
 	body := `{"client_name":"myapp","redirect_uris":["https://app.test.example/cb"]}`
-	rr1 := doRegisterRequest(handler, "test-reg-token", body)
-	rr2 := doRegisterRequest(handler, "test-reg-token", body)
+	rr1 := doRegisterRequest(handler, body)
+	rr2 := doRegisterRequest(handler, body)
 	if rr1.Code != http.StatusCreated || rr2.Code != http.StatusCreated {
 		t.Fatalf("register status: %d, %d", rr1.Code, rr2.Code)
 	}
 	var r1, r2 map[string]any
 	_ = json.NewDecoder(rr1.Body).Decode(&r1)
 	_ = json.NewDecoder(rr2.Body).Decode(&r2)
-	if r1["client_id"] != r2["client_id"] {
-		t.Errorf("client_id not stable across registrations: %v != %v", r1["client_id"], r2["client_id"])
+	if r1["client_id"] == r2["client_id"] {
+		t.Errorf("expected different client_ids for repeated registration, got same: %v", r1["client_id"])
 	}
 }
 
-func TestRegister_UntrustedDomain(t *testing.T) {
+// TestRegister_IPv6LoopbackHTTP verifies that http://[::1] is accepted for local dev.
+func TestRegister_IPv6LoopbackHTTP(t *testing.T) {
 	handler := newTestServer(t)
-	body := `{"redirect_uris":["https://attacker.example.com/steal"]}`
-	rr := doRegisterRequest(handler, "test-reg-token", body)
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("untrusted domain: got %d, want 400", rr.Code)
+	body := `{"redirect_uris":["http://[::1]:8080/cb"]}`
+	rr := doRegisterRequest(handler, body)
+	if rr.Code != http.StatusCreated {
+		t.Errorf("IPv6 loopback HTTP URI: got %d, want 201; body: %s", rr.Code, rr.Body)
 	}
 }
 
@@ -433,7 +450,7 @@ func TestFullLoginFlow_DynamicClient(t *testing.T) {
 
 	// Register a client dynamically.
 	regBody := `{"client_name":"dynapp","redirect_uris":["https://dynapp.test.example/callback"]}`
-	regRR := doRegisterRequest(handler, "test-reg-token", regBody)
+	regRR := doRegisterRequest(handler, regBody)
 	if regRR.Code != http.StatusCreated {
 		t.Fatalf("register = %d; body: %s", regRR.Code, regRR.Body)
 	}
@@ -584,14 +601,11 @@ func doLoginRaw(t *testing.T, handler http.Handler, csrfToken string, csrfCookie
 		strings.NewReader(form.Encode()), []*http.Cookie{csrfCookie})
 }
 
-// doRegisterRequest sends a POST /register with a JSON body and optional bearer token.
-func doRegisterRequest(handler http.Handler, token, body string) *httptest.ResponseRecorder {
+// doRegisterRequest sends a POST /register with a JSON body.
+func doRegisterRequest(handler http.Handler, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/register", strings.NewReader(body))
 	req.Host = testHost
 	req.Header.Set("Content-Type", "application/json")
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	return rr

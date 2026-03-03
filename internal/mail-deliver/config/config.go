@@ -17,7 +17,7 @@ type Config struct {
 
 	// MaxMessageSize is the maximum message body size in bytes.
 	// Messages exceeding this limit are rejected with a permanent failure.
-	// Defaults to 52428800 (50 MiB) when zero.
+	// Defaults to 1048576 (1 MiB) when zero.
 	MaxMessageSize int64 `toml:"max_message_size"`
 
 	// DeliveryTimeout is the maximum time allowed for the full delivery pipeline.

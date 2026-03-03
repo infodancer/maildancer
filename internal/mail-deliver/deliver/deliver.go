@@ -95,7 +95,7 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req protocol.DeliverRequest,
 		return protocol.DeliverResponse{
 			Version:   protocol.Version,
 			Result:    protocol.ResultRejected,
-			Temporary: false,
+			Temporary: true,
 			Reason:    fmt.Sprintf("%s: %q", mderrors.ErrDomainNotFound.Error(), domainName),
 		}, nil
 	}
@@ -163,7 +163,7 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req protocol.DeliverRequest,
 		return protocol.DeliverResponse{
 			Version:   protocol.Version,
 			Result:    protocol.ResultRejected,
-			Temporary: false,
+			Temporary: true,
 			Reason:    fmt.Sprintf("%s: %q", mderrors.ErrNoDeliveryAgent.Error(), domainName),
 		}, nil
 	}

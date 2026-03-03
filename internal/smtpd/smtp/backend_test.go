@@ -16,6 +16,7 @@ func TestNewBackend(t *testing.T) {
 
 	if backend == nil {
 		t.Fatal("expected backend, got nil")
+		return
 	}
 	if backend.hostname != "localhost" {
 		t.Errorf("expected hostname 'localhost', got %q", backend.hostname)

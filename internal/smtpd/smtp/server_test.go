@@ -41,6 +41,7 @@ func TestNewServer(t *testing.T) {
 
 	if srv == nil {
 		t.Fatal("expected server, got nil")
+		return
 	}
 	if len(srv.entries) != 1 {
 		t.Errorf("expected 1 entry, got %d", len(srv.entries))

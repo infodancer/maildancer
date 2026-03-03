@@ -74,7 +74,7 @@ func run() error {
 	// Enforce a maximum size to prevent OOM from unbounded input.
 	maxSize := cfg.MaxMessageSize
 	if maxSize <= 0 {
-		maxSize = 1024 * 1024 // default 1 MiB
+		maxSize = 50 * 1024 * 1024 // default 50 MiB
 	}
 	msg, err := io.ReadAll(io.LimitReader(reader, maxSize+1))
 	if err != nil {

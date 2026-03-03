@@ -6,7 +6,7 @@ toolchain go1.25.7
 
 require (
 	git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9
-	github.com/infodancer/maildancer/auth v0.1.7
+	github.com/infodancer/maildancer/auth v0.1.10
 	github.com/infodancer/maildancer/msgstore v0.2.1
 	github.com/pelletier/go-toml/v2 v2.2.4
 )

@@ -123,7 +123,19 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req protocol.DeliverRequest,
 		}
 	}
 
-	// ── 2. Spam check ────────────────────────────────────────────────────────
+	// ── 2. Per-domain size check ─────────────────────────────────────────────
+	// The global limit in main.go guards against OOM; this enforces the
+	// per-domain policy (e.g. a domain may set a tighter limit).
+	if dom.MaxMessageSize > 0 && int64(len(msg)) > dom.MaxMessageSize {
+		return protocol.DeliverResponse{
+			Version:   protocol.Version,
+			Result:    protocol.ResultRejected,
+			Temporary: false,
+			Reason:    mderrors.ErrMessageTooLarge.Error(),
+		}, nil
+	}
+
+	// ── 3. Spam check ─────────────────────────────────────────────────────────
 	spamCfg := dlvr.resolveSpamConfig(domainName, localpart)
 	if spamCfg.IsEnabled() {
 		resp, skip, err := dlvr.checkSpam(ctx, spamCfg, msg, req)
@@ -153,12 +165,12 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req protocol.DeliverRequest,
 		}
 	}
 
-	// ── 3. Sieve script ──────────────────────────────────────────────────────
+	// ── 4. Sieve script ──────────────────────────────────────────────────────
 	// Parse the user's .sieve script. No actions are executed yet — this wires
 	// up the parser so execution can be added incrementally without a format change.
 	dlvr.parseSieve(domainName, localpart)
 
-	// ── 4. Deliver to maildir ────────────────────────────────────────────────
+	// ── 5. Deliver to maildir ────────────────────────────────────────────────
 	if dom.DeliveryAgent == nil {
 		return protocol.DeliverResponse{
 			Version:   protocol.Version,

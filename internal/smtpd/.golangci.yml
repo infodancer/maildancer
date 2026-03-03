@@ -8,3 +8,13 @@ linters:
     - staticcheck
     - unused
     - ineffassign
+  settings:
+    errcheck:
+      # Close() on connections and files is idiomatic to ignore in cleanup paths.
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (*net.TCPConn).Close
+        - (*os.File).Close
+        - (net.Listener).Close
+        - (*net.TCPListener).Close

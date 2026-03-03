@@ -1,13 +1,11 @@
 module github.com/infodancer/maildancer/internal/smtpd
 
-go 1.24.0
-
-toolchain go1.24.4
+go 1.25.7
 
 require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.24.0
-	github.com/infodancer/maildancer/auth v0.1.8
+	github.com/infodancer/maildancer/auth v0.1.11
 	github.com/infodancer/maildancer/msgstore v0.2.1
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2

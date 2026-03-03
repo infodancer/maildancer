@@ -27,7 +27,9 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
+	mderrors "github.com/infodancer/maildancer/internal/mail-deliver/errors"
 	"github.com/infodancer/maildancer/internal/mail-deliver/config"
 	"github.com/infodancer/maildancer/internal/mail-deliver/deliver"
 	"github.com/infodancer/maildancer/internal/mail-deliver/protocol"
@@ -69,9 +71,22 @@ func run() error {
 	}
 
 	// Read the message body (remainder of stdin after the JSON line).
-	msg, err := io.ReadAll(reader)
+	// Enforce a maximum size to prevent OOM from unbounded input.
+	maxSize := cfg.MaxMessageSize
+	if maxSize <= 0 {
+		maxSize = 50 * 1024 * 1024 // default 50 MiB
+	}
+	msg, err := io.ReadAll(io.LimitReader(reader, maxSize+1))
 	if err != nil {
 		return fmt.Errorf("reading message: %w", err)
+	}
+	if int64(len(msg)) > maxSize {
+		return writeResponse(protocol.DeliverResponse{
+			Version:   protocol.Version,
+			Result:    protocol.ResultRejected,
+			Temporary: false,
+			Reason:    mderrors.ErrMessageTooLarge.Error(),
+		})
 	}
 
 	dlvr, err := deliver.New(cfg)
@@ -80,7 +95,15 @@ func run() error {
 	}
 	defer func() { _ = dlvr.Close() }()
 
-	ctx := context.Background()
+	deliveryTimeout := 60 * time.Second
+	if cfg.DeliveryTimeout != "" {
+		if d, err := time.ParseDuration(cfg.DeliveryTimeout); err == nil {
+			deliveryTimeout = d
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), deliveryTimeout)
+	defer cancel()
+
 	resp, err := dlvr.Deliver(ctx, req, msg)
 	if err != nil {
 		// Internal error — write a temporary-failure response so the caller

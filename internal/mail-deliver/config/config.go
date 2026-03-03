@@ -15,6 +15,15 @@ type Config struct {
 	// Defaults to DomainsPath when empty.
 	DomainsDataPath string `toml:"domains_data_path"`
 
+	// MaxMessageSize is the maximum message body size in bytes.
+	// Messages exceeding this limit are rejected with a permanent failure.
+	// Defaults to 52428800 (50 MiB) when zero.
+	MaxMessageSize int64 `toml:"max_message_size"`
+
+	// DeliveryTimeout is the maximum time allowed for the full delivery pipeline.
+	// Defaults to "60s" when empty or unparseable.
+	DeliveryTimeout string `toml:"delivery_timeout"`
+
 	// Rspamd holds the global rspamd connection and threshold defaults.
 	// Per-domain and per-user spam.toml files override these values.
 	Rspamd SpamConfig `toml:"rspamd"`
@@ -36,12 +45,14 @@ type SpamConfig struct {
 	Timeout string `toml:"timeout"`
 
 	// RejectThreshold is the score at or above which messages are rejected (5xx).
-	// 0 means use rspamd's action field only (no threshold override).
-	RejectThreshold float64 `toml:"reject_threshold"`
+	// nil means use rspamd's action field only (no threshold override).
+	// Use a pointer so that 0.0 is a valid threshold and nil means "not set / inherit".
+	RejectThreshold *float64 `toml:"reject_threshold"`
 
 	// TempFailThreshold is the score at or above which messages receive a
-	// temporary failure (4xx). 0 means disabled.
-	TempFailThreshold float64 `toml:"tempfail_threshold"`
+	// temporary failure (4xx). nil means disabled.
+	// Use a pointer so that 0.0 is a valid threshold and nil means "not set / inherit".
+	TempFailThreshold *float64 `toml:"tempfail_threshold"`
 
 	// FailMode controls behaviour when rspamd is unreachable.
 	// Valid values: "open" (accept), "tempfail" (4xx), "reject" (5xx).
@@ -102,10 +113,10 @@ func (s SpamConfig) Merge(override SpamConfig) SpamConfig {
 	if override.Timeout != "" {
 		s.Timeout = override.Timeout
 	}
-	if override.RejectThreshold != 0 {
+	if override.RejectThreshold != nil {
 		s.RejectThreshold = override.RejectThreshold
 	}
-	if override.TempFailThreshold != 0 {
+	if override.TempFailThreshold != nil {
 		s.TempFailThreshold = override.TempFailThreshold
 	}
 	if override.FailMode != "" {

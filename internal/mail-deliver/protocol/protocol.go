@@ -50,8 +50,8 @@ type DeliverResponse struct {
 	// Result is one of the Result* constants below.
 	Result string `json:"result"`
 
-	// Addresses contains redirect target addresses when Result == ResultRedirected.
-	// Multiple addresses are valid (e.g. a forwarding rule with comma-separated targets).
+	// Addresses contains exactly one redirect target address when Result == ResultRedirected.
+	// Only one forward destination is permitted per recipient.
 	Addresses []string `json:"addresses,omitempty"`
 
 	// Temporary qualifies a ResultRejected response: true means the dispatcher

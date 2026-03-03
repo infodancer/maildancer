@@ -19,6 +19,7 @@ import (
 	_ "github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir"
+	mderrors "github.com/infodancer/maildancer/internal/mail-deliver/errors"
 	"github.com/infodancer/maildancer/internal/mail-deliver/config"
 	"github.com/infodancer/maildancer/internal/mail-deliver/rspamd"
 	"github.com/infodancer/maildancer/internal/mail-deliver/protocol"
@@ -65,25 +66,37 @@ func (dlvr *Deliverer) Close() error {
 // An error is returned only for internal failures (I/O, programming errors);
 // policy decisions (spam reject, forward) are expressed in the response.
 func (dlvr *Deliverer) Deliver(ctx context.Context, req protocol.DeliverRequest, msg []byte) (protocol.DeliverResponse, error) {
-	if len(req.Recipients) == 0 {
+	if len(req.Recipients) != 1 {
 		return protocol.DeliverResponse{
 			Version:   protocol.Version,
 			Result:    protocol.ResultRejected,
 			Temporary: false,
-			Reason:    "no recipients in envelope",
+			Reason:    fmt.Sprintf("%s: got %d", mderrors.ErrNoRecipients.Error(), len(req.Recipients)),
 		}, nil
 	}
 
 	recipient := req.Recipients[0]
 	localpart, domainName := splitAddress(recipient)
 
+	// Reject addresses with path-traversal characters before any filesystem access.
+	if localpart == "" || domainName == "" ||
+		strings.ContainsAny(localpart, "/\\") || strings.ContainsAny(domainName, "/\\") ||
+		strings.Contains(localpart, "..") || strings.Contains(domainName, "..") {
+		return protocol.DeliverResponse{
+			Version:   protocol.Version,
+			Result:    protocol.ResultRejected,
+			Temporary: false,
+			Reason:    "invalid recipient address",
+		}, nil
+	}
+
 	dom := dlvr.dp.GetDomain(domainName)
 	if dom == nil {
 		return protocol.DeliverResponse{
 			Version:   protocol.Version,
 			Result:    protocol.ResultRejected,
-			Temporary: true,
-			Reason:    fmt.Sprintf("domain %q not configured", domainName),
+			Temporary: false,
+			Reason:    fmt.Sprintf("%s: %q", mderrors.ErrDomainNotFound.Error(), domainName),
 		}, nil
 	}
 
@@ -150,8 +163,8 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req protocol.DeliverRequest,
 		return protocol.DeliverResponse{
 			Version:   protocol.Version,
 			Result:    protocol.ResultRejected,
-			Temporary: true,
-			Reason:    fmt.Sprintf("no delivery agent for domain %q", domainName),
+			Temporary: false,
+			Reason:    fmt.Sprintf("%s: %q", mderrors.ErrNoDeliveryAgent.Error(), domainName),
 		}, nil
 	}
 
@@ -229,21 +242,21 @@ func (dlvr *Deliverer) checkSpam(ctx context.Context, spamCfg config.SpamConfig,
 		slog.Bool("is_spam", result.IsSpam))
 
 	// Apply threshold overrides, then fall back to rspamd's action.
-	if spamCfg.RejectThreshold > 0 && result.Score >= spamCfg.RejectThreshold {
+	if spamCfg.RejectThreshold != nil && result.Score >= *spamCfg.RejectThreshold {
 		return protocol.DeliverResponse{
 			Version:   protocol.Version,
 			Result:    protocol.ResultRejected,
 			Temporary: false,
-			Reason:    fmt.Sprintf("spam score %.1f exceeds reject threshold %.1f", result.Score, spamCfg.RejectThreshold),
+			Reason:    fmt.Sprintf("spam score %.1f exceeds reject threshold %.1f", result.Score, *spamCfg.RejectThreshold),
 		}, false, nil
 	}
 
-	if spamCfg.TempFailThreshold > 0 && result.Score >= spamCfg.TempFailThreshold {
+	if spamCfg.TempFailThreshold != nil && result.Score >= *spamCfg.TempFailThreshold {
 		return protocol.DeliverResponse{
 			Version:   protocol.Version,
 			Result:    protocol.ResultRejected,
 			Temporary: true,
-			Reason:    fmt.Sprintf("spam score %.1f exceeds tempfail threshold %.1f", result.Score, spamCfg.TempFailThreshold),
+			Reason:    fmt.Sprintf("spam score %.1f exceeds tempfail threshold %.1f", result.Score, *spamCfg.TempFailThreshold),
 		}, false, nil
 	}
 

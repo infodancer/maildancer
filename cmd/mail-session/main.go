@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	mserrors "github.com/infodancer/maildancer/internal/mail-session/errors"
@@ -19,6 +22,54 @@ import (
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir"
 )
+
+// keyEnvelope is the JSON structure written to fd 3 by the spawning daemon.
+// Using a versioned JSON envelope (rather than raw bytes) lets us add fields
+// without a breaking protocol change — e.g. Algorithm, KeyID, Expires, or a
+// Keys array for keyring support. When auth implements DeriveKeyPair it will
+// encode this envelope; pop3d/imapd write a stub version for now.
+// See: infodancer/infodancer/docs/encryption-design.md
+type keyEnvelope struct {
+	Version int    `json:"version"`
+	Key     []byte `json:"key"` // 32-byte NaCl session key, base64-encoded
+}
+
+// maybeWrapWithDecryptingStore attempts to read a keyEnvelope from fd 3
+// (ExtraFiles[0] as set by the spawning daemon). If fd 3 is present and
+// contains a valid v1 envelope with a 32-byte key, the store is wrapped in a
+// PassthroughDecryptingStore with the key applied; otherwise the store is
+// returned unchanged (encryption not configured or fd 3 absent).
+func maybeWrapWithDecryptingStore(underlying msgstore.MessageStore) msgstore.MessageStore {
+	keyFile := os.NewFile(3, "key-pipe")
+	var env keyEnvelope
+	err := json.NewDecoder(keyFile).Decode(&env)
+	_ = keyFile.Close()
+	if err != nil || env.Version != 1 || len(env.Key) != 32 {
+		// fd 3 absent, parse error, or unexpected envelope — use store as-is.
+		if err != nil && !isErrBadFd(err) {
+			slog.Warn("fd 3 key envelope invalid, skipping encryption", "error", err)
+		}
+		return underlying
+	}
+	ds := msgstore.NewPassthroughDecryptingStore(underlying)
+	ds.SetSessionKey(env.Key)
+	// Zero the local copy; ds holds the only in-memory key bytes.
+	for i := range env.Key {
+		env.Key[i] = 0
+	}
+	slog.Debug("session key loaded from fd 3", "version", env.Version)
+	return ds
+}
+
+// isErrBadFd reports whether err is an os.PathError wrapping EBADF,
+// which indicates fd 3 was not passed by the spawning daemon.
+func isErrBadFd(err error) bool {
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return pe.Err == syscall.EBADF
+	}
+	return false
+}
 
 func main() {
 	storeType := flag.String("type", "maildir", "message store type")
@@ -43,6 +94,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ── Encryption seam: fd 3 key pipe ───────────────────────────────────────
+	// Try to read a 32-byte session key from fd 3. The spawning daemon creates
+	// the pipe and writes the key before sending the first command. If fd 3 is
+	// absent (no encryption configured), the underlying store is used as-is.
+	// sessionStore is a MessageStore view used by the session; store retains
+	// the full MsgStore interface for any future delivery use.
+	// See: infodancer/infodancer/docs/encryption-design.md
+	sessionStore := maybeWrapWithDecryptingStore(store)
+	// ─────────────────────────────────────────────────────────────────────────
+
 	var rspamdClient *rspamd.Client
 	if *rspamdURL != "" {
 		rspamdClient = rspamd.New(*rspamdURL)
@@ -50,7 +111,7 @@ func main() {
 
 	r := protocol.NewReader(os.Stdin)
 	w := protocol.NewWriter(os.Stdout)
-	sess := session.New(store)
+	sess := session.New(sessionStore)
 	ctx := context.Background()
 
 	var mailboxOpen bool

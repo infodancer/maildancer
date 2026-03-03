@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -296,12 +297,55 @@ func (s *Session) CopyMessage(ctx context.Context, uid, destFolder string) (stri
 	return newUID, nil
 }
 
-// hasFlag reports whether flags contains the given flag string.
-func hasFlag(flags []string, flag string) bool {
-	for _, f := range flags {
-		if f == flag {
-			return true
+// RetrieveFrom returns the content of a message by UID from an explicit folder,
+// ignoring the currently selected folder. Used to fetch message bytes for rspamd
+// learning before a move operation changes the message's location.
+func (s *Session) RetrieveFrom(ctx context.Context, folder, uid string) (io.ReadCloser, error) {
+	if folder == "" || strings.EqualFold(folder, "INBOX") {
+		return s.store.Retrieve(ctx, s.mailbox, uid)
+	}
+	if s.folderStore == nil {
+		return nil, fmt.Errorf("folder operations not supported")
+	}
+	return s.folderStore.RetrieveFromFolder(ctx, s.mailbox, folder, uid)
+}
+
+// MoveMessage copies a message from srcFolder to destFolder, then deletes and
+// expunges it from the source. Returns the new UID in the destination.
+// srcFolder "" is treated as INBOX.
+func (s *Session) MoveMessage(ctx context.Context, uid, srcFolder, destFolder string) (string, error) {
+	if s.folderStore == nil {
+		return "", fmt.Errorf("folder operations not supported")
+	}
+	if srcFolder == "" {
+		srcFolder = "INBOX"
+	}
+
+	newUID, err := s.folderStore.CopyMessage(ctx, s.mailbox, srcFolder, uid, destFolder)
+	if err != nil {
+		return "", fmt.Errorf("copy %q from %q to %q: %w", uid, srcFolder, destFolder, err)
+	}
+
+	if strings.EqualFold(srcFolder, "INBOX") {
+		if err := s.store.Delete(ctx, s.mailbox, uid); err != nil {
+			return "", fmt.Errorf("delete %q from INBOX: %w", uid, err)
+		}
+		if err := s.store.Expunge(ctx, s.mailbox); err != nil {
+			return "", fmt.Errorf("expunge INBOX: %w", err)
+		}
+	} else {
+		if err := s.folderStore.DeleteInFolder(ctx, s.mailbox, srcFolder, uid); err != nil {
+			return "", fmt.Errorf("delete %q from %q: %w", uid, srcFolder, err)
+		}
+		if err := s.folderStore.ExpungeFolder(ctx, s.mailbox, srcFolder); err != nil {
+			return "", fmt.Errorf("expunge %q: %w", srcFolder, err)
 		}
 	}
-	return false
+
+	return newUID, nil
+}
+
+// hasFlag reports whether flags contains the given flag string.
+func hasFlag(flags []string, flag string) bool {
+	return slices.Contains(flags, flag)
 }

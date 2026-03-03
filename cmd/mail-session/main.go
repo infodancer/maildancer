@@ -14,6 +14,7 @@ import (
 
 	mserrors "github.com/infodancer/maildancer/internal/mail-session/errors"
 	"github.com/infodancer/maildancer/internal/mail-session/protocol"
+	"github.com/infodancer/maildancer/internal/mail-session/rspamd"
 	"github.com/infodancer/maildancer/internal/mail-session/session"
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir"
@@ -22,6 +23,8 @@ import (
 func main() {
 	storeType := flag.String("type", "maildir", "message store type")
 	basePath := flag.String("basepath", "", "path to store root (required)")
+	rspamdURL := flag.String("rspamd", "", "rspamd controller URL (e.g. http://rspamd:11334); empty disables learning")
+	junkFolder := flag.String("junk-folder", "Junk", "name of the Junk/Spam folder for rspamd learning")
 	flag.Parse()
 
 	if *basePath == "" {
@@ -36,6 +39,11 @@ func main() {
 	if err != nil {
 		slog.Error("open store", "err", err)
 		os.Exit(1)
+	}
+
+	var rspamdClient *rspamd.Client
+	if *rspamdURL != "" {
+		rspamdClient = rspamd.New(*rspamdURL)
 	}
 
 	r := protocol.NewReader(os.Stdin)
@@ -383,10 +391,62 @@ func main() {
 			}
 			_ = w.WriteOKLine(newUID)
 
+		case protocol.CmdMove:
+			// MOVE <uid> <src-folder> <dest-folder>
+			if !mailboxOpen {
+				_ = w.WriteErr(mserrors.ErrMailboxNotOpen.Error())
+				continue
+			}
+			if len(cmd.Args) < 3 {
+				_ = w.WriteErr("MOVE requires: <uid> <src-folder> <dest-folder>")
+				continue
+			}
+			uid, srcFolder, destFolder := cmd.Args[0], cmd.Args[1], cmd.Args[2]
+
+			// Retrieve message bytes for rspamd learning before the move.
+			var msgBytes []byte
+			if rspamdClient != nil && (isJunk(srcFolder, *junkFolder) || isJunk(destFolder, *junkFolder)) {
+				if rc, rerr := sess.RetrieveFrom(ctx, srcFolder, uid); rerr == nil {
+					msgBytes, _ = io.ReadAll(rc)
+					rc.Close()
+				}
+			}
+
+			newUID, err := sess.MoveMessage(ctx, uid, srcFolder, destFolder)
+			if err != nil {
+				_ = w.WriteErr(err.Error())
+				continue
+			}
+
+			// Fire-and-forget rspamd learning — never blocks or fails the MOVE.
+			if rspamdClient != nil && len(msgBytes) > 0 {
+				learnSpam := isJunk(destFolder, *junkFolder)
+				user := sess.Mailbox()
+				go func(spam bool, data []byte) {
+					lctx := context.Background()
+					var lerr error
+					if spam {
+						lerr = rspamdClient.LearnSpam(lctx, user, data)
+					} else {
+						lerr = rspamdClient.LearnHam(lctx, user, data)
+					}
+					if lerr != nil {
+						slog.Warn("rspamd learn failed", "error", lerr)
+					}
+				}(learnSpam, msgBytes)
+			}
+
+			_ = w.WriteOKLine(newUID)
+
 		default:
 			_ = w.WriteErr("unknown command")
 		}
 	}
+}
+
+// isJunk reports whether folder is the configured Junk folder (case-insensitive).
+func isJunk(folder, junkName string) bool {
+	return strings.EqualFold(folder, junkName)
 }
 
 // extractHeaders returns the header section of a message plus up to nLines of body.

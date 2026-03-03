@@ -13,8 +13,8 @@ github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 h1:oP4q0fw+fOSWn3
 github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6/go.mod h1:iL2twTeMvZnrg54ZoPDNfJaJaqy0xIQFuBdrLsmspwQ=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=
 github.com/google/go-cmp v0.7.0/go.mod h1:pXiqmnSA92OHEEa9HXL2W4E7lf9JzCmGVUdgjX3N/iU=
-github.com/infodancer/maildancer/auth v0.1.9 h1:xaN2X4uQEZS0q/P+5fLvhk1O8IxwzEXkko7llHy2lwg=
-github.com/infodancer/maildancer/auth v0.1.9/go.mod h1:iRqh/nhxV5gjccsxVuN+znww4yvfHXbd7OP1iL+LOco=
+github.com/infodancer/maildancer/auth v0.1.11 h1:+5GZBTFKnSxhOWoirNQ6xXi0xk7rA5jOgqq+CRBOO18=
+github.com/infodancer/maildancer/auth v0.1.11/go.mod h1:2dXiObhJy38u6kHkuSrGlA+mN4HEHuh2uAgXYdluUFM=
 github.com/infodancer/maildancer/msgstore v0.2.1 h1:++W58+tPMMj7tNQrh4BDze6LJvVoEzJdQYNjvjFlkQ4=
 github.com/infodancer/maildancer/msgstore v0.2.1/go.mod h1:rW0pT8rguFR8OPbFoQyA7gk1X39at2q8YNmFFNnrx24=
 github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=

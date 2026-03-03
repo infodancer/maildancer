@@ -26,6 +26,7 @@ func main() {
 	rspamdURL := flag.String("rspamd", "", "rspamd controller URL (e.g. http://rspamd:11334); empty disables learning")
 	junkFolder := flag.String("junk-folder", "Junk", "name of the Junk/Spam folder for rspamd learning")
 	rspamdUser := flag.String("user", "", "user@domain identity passed to rspamd as User: header for per-user Bayes")
+	maxMessageSize := flag.Int64("max-message-size", 50*1024*1024, "maximum message size in bytes for rspamd learning (0 = use default)")
 	flag.Parse()
 
 	if *basePath == "" {
@@ -408,7 +409,10 @@ func main() {
 			// Only when rspamd is configured and exactly one of src/dest is Junk
 			// (both being Junk is rejected by MoveMessage; src==dest is also rejected).
 			// Cap at 50 MiB to bound memory allocation; oversized messages skip learning.
-			const rspamdMaxSize int64 = 50 << 20
+			rspamdMaxSize := *maxMessageSize
+			if rspamdMaxSize <= 0 {
+				rspamdMaxSize = 50 * 1024 * 1024
+			}
 			srcIsJunk := isJunk(srcFolder, *junkFolder)
 			destIsJunk := isJunk(destFolder, *junkFolder)
 			var msgBytes []byte

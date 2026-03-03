@@ -509,3 +509,76 @@ func TestCopyMessage(t *testing.T) {
 		t.Errorf("copiedCount = %d, want 1", store.copiedCount)
 	}
 }
+
+func TestMoveMessage_FolderToFolder(t *testing.T) {
+	store := newMockFullStore(map[string]string{}, []string{})
+	// Seed Sent with a message.
+	store.folderBodies["Sent"] = map[string]string{"s1": "msg body"}
+	store.folderMsgs["Sent"] = []msgstore.MessageInfo{{UID: "s1", Size: 8}}
+
+	s := openSession(t, store)
+	newUID, err := s.MoveMessage(context.Background(), "s1", "Sent", "Archive")
+	if err != nil {
+		t.Fatalf("MoveMessage: %v", err)
+	}
+	if newUID == "" {
+		t.Error("MoveMessage returned empty UID")
+	}
+	// Copy must have been called.
+	if store.copiedCount != 1 {
+		t.Errorf("copiedCount = %d, want 1", store.copiedCount)
+	}
+	// Delete must have been called for the source folder entry.
+	if len(store.deleted) != 1 || store.deleted[0] != "Sent/s1" {
+		t.Errorf("deleted = %v, want [Sent/s1]", store.deleted)
+	}
+	// ExpungeFolder must have been called for Sent.
+	if len(store.expungedFolders) != 1 || store.expungedFolders[0] != "Sent" {
+		t.Errorf("expungedFolders = %v, want [Sent]", store.expungedFolders)
+	}
+}
+
+func TestMoveMessage_InboxToFolder(t *testing.T) {
+	store := newMockFullStore(
+		map[string]string{"i1": "inbox message"},
+		[]string{"i1"},
+	)
+	s := openSession(t, store)
+	newUID, err := s.MoveMessage(context.Background(), "i1", "INBOX", "Junk")
+	if err != nil {
+		t.Fatalf("MoveMessage INBOX->Junk: %v", err)
+	}
+	if newUID == "" {
+		t.Error("returned empty UID")
+	}
+	// INBOX path: store.Delete (not DeleteInFolder) must be called.
+	if len(store.deleted) != 1 || store.deleted[0] != "i1" {
+		t.Errorf("store.deleted = %v, want [i1]", store.deleted)
+	}
+}
+
+func TestMoveMessage_SameFolder_Error(t *testing.T) {
+	store := newMockFullStore(map[string]string{}, []string{})
+	s := openSession(t, store)
+	_, err := s.MoveMessage(context.Background(), "uid1", "Junk", "Junk")
+	if err == nil {
+		t.Fatal("expected error for same-folder move, got nil")
+	}
+}
+
+func TestMoveMessage_EmptySrcTreatedAsINBOX(t *testing.T) {
+	store := newMockFullStore(
+		map[string]string{"i1": "msg"},
+		[]string{"i1"},
+	)
+	s := openSession(t, store)
+	// Empty srcFolder should be treated as INBOX, not fail.
+	_, err := s.MoveMessage(context.Background(), "i1", "", "Sent")
+	if err != nil {
+		t.Fatalf("MoveMessage with empty src: %v", err)
+	}
+	// INBOX path: store.deleted should contain "i1" (not "INBOX/i1").
+	if len(store.deleted) != 1 || store.deleted[0] != "i1" {
+		t.Errorf("store.deleted = %v, want [i1]", store.deleted)
+	}
+}

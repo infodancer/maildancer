@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -53,7 +54,11 @@ func (c *Client) learn(ctx context.Context, endpoint, user string, msg []byte) e
 	if err != nil {
 		return fmt.Errorf("POST %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	// Always drain and close the body so the HTTP connection can be reused.
+	defer func() {
+		io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20)) //nolint:errcheck
+		resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("rspamd %s returned %s", endpoint, resp.Status)
 	}

@@ -25,6 +25,7 @@ func main() {
 	basePath := flag.String("basepath", "", "path to store root (required)")
 	rspamdURL := flag.String("rspamd", "", "rspamd controller URL (e.g. http://rspamd:11334); empty disables learning")
 	junkFolder := flag.String("junk-folder", "Junk", "name of the Junk/Spam folder for rspamd learning")
+	rspamdUser := flag.String("user", "", "user@domain identity passed to rspamd as User: header for per-user Bayes")
 	flag.Parse()
 
 	if *basePath == "" {
@@ -404,11 +405,20 @@ func main() {
 			uid, srcFolder, destFolder := cmd.Args[0], cmd.Args[1], cmd.Args[2]
 
 			// Retrieve message bytes for rspamd learning before the move.
+			// Only when rspamd is configured and exactly one of src/dest is Junk
+			// (both being Junk is rejected by MoveMessage; src==dest is also rejected).
+			// Cap at 50 MiB to bound memory allocation; oversized messages skip learning.
+			const rspamdMaxSize int64 = 50 << 20
+			srcIsJunk := isJunk(srcFolder, *junkFolder)
+			destIsJunk := isJunk(destFolder, *junkFolder)
 			var msgBytes []byte
-			if rspamdClient != nil && (isJunk(srcFolder, *junkFolder) || isJunk(destFolder, *junkFolder)) {
+			if rspamdClient != nil && (srcIsJunk || destIsJunk) {
 				if rc, rerr := sess.RetrieveFrom(ctx, srcFolder, uid); rerr == nil {
-					msgBytes, _ = io.ReadAll(rc)
+					limited, _ := io.ReadAll(io.LimitReader(rc, rspamdMaxSize+1))
 					rc.Close()
+					if int64(len(limited)) <= rspamdMaxSize {
+						msgBytes = limited
+					}
 				}
 			}
 
@@ -420,20 +430,18 @@ func main() {
 
 			// Fire-and-forget rspamd learning — never blocks or fails the MOVE.
 			if rspamdClient != nil && len(msgBytes) > 0 {
-				learnSpam := isJunk(destFolder, *junkFolder)
-				user := sess.Mailbox()
 				go func(spam bool, data []byte) {
 					lctx := context.Background()
 					var lerr error
 					if spam {
-						lerr = rspamdClient.LearnSpam(lctx, user, data)
+						lerr = rspamdClient.LearnSpam(lctx, *rspamdUser, data)
 					} else {
-						lerr = rspamdClient.LearnHam(lctx, user, data)
+						lerr = rspamdClient.LearnHam(lctx, *rspamdUser, data)
 					}
 					if lerr != nil {
 						slog.Warn("rspamd learn failed", "error", lerr)
 					}
-				}(learnSpam, msgBytes)
+				}(destIsJunk, msgBytes)
 			}
 
 			_ = w.WriteOKLine(newUID)

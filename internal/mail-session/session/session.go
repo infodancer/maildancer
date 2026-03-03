@@ -320,6 +320,9 @@ func (s *Session) MoveMessage(ctx context.Context, uid, srcFolder, destFolder st
 	if srcFolder == "" {
 		srcFolder = "INBOX"
 	}
+	if strings.EqualFold(srcFolder, destFolder) {
+		return "", fmt.Errorf("source and destination folder are the same")
+	}
 
 	newUID, err := s.folderStore.CopyMessage(ctx, s.mailbox, srcFolder, uid, destFolder)
 	if err != nil {

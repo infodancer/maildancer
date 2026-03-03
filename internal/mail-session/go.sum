@@ -6,7 +6,9 @@ github.com/infodancer/maildancer/auth v0.1.11 h1:+5GZBTFKnSxhOWoirNQ6xXi0xk7rA5j
 github.com/infodancer/maildancer/auth v0.1.11/go.mod h1:2dXiObhJy38u6kHkuSrGlA+mN4HEHuh2uAgXYdluUFM=
 github.com/infodancer/maildancer/msgstore v0.2.1 h1:++W58+tPMMj7tNQrh4BDze6LJvVoEzJdQYNjvjFlkQ4=
 github.com/infodancer/maildancer/msgstore v0.2.1/go.mod h1:rW0pT8rguFR8OPbFoQyA7gk1X39at2q8YNmFFNnrx24=
-golang.org/x/crypto v0.47.0 h1:V6e3FRj+n4dbpw86FJ8Fv7XVOql7TEwpHapKoMJ/GO8=
-golang.org/x/crypto v0.47.0/go.mod h1:ff3Y9VzzKbwSSEzWqJsJVBnWmRwRSHt/6Op5n9bQc4A=
+github.com/infodancer/maildancer/msgstore v0.2.2-0.20260303202932-60ef82df8079 h1:iDt5k1Qge6va+DnfWXsDzBk0XdN9sAfVcEMJCX4bIbk=
+github.com/infodancer/maildancer/msgstore v0.2.2-0.20260303202932-60ef82df8079/go.mod h1:rW0pT8rguFR8OPbFoQyA7gk1X39at2q8YNmFFNnrx24=
+golang.org/x/crypto v0.48.0 h1:/VRzVqiRSggnhY7gNRxPauEQ5Drw9haKdM0jqfcCFts=
+golang.org/x/crypto v0.48.0/go.mod h1:r0kV5h3qnFPlQnBSrULhlsRfryS2pmewsg+XfMgkVos=
 golang.org/x/sys v0.41.0 h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=
 golang.org/x/sys v0.41.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=

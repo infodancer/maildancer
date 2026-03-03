@@ -1,5 +1,83 @@
 {{define "title"}}Dashboard{{end}}
 {{define "content"}}
+
+{{/* --- Mail server stats (fetched client-side from /api/mailstats) --- */}}
+<section id="mail-stats">
+  <div id="stats-loading" style="color:var(--pico-muted-color);margin-bottom:1.5rem">Loading mail server stats…</div>
+
+  <div id="stats-unavailable" style="display:none;color:var(--pico-muted-color);margin-bottom:1.5rem">
+    Mail server stats unavailable — Prometheus not configured.
+  </div>
+
+  <div id="stats-content" style="display:none">
+
+    {{/* Active connection stat cards */}}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem">
+      <article style="margin:0;padding:1rem;text-align:center">
+        <div style="font-size:2rem;font-weight:bold" id="stat-smtp">—</div>
+        <div style="font-size:0.875rem;color:var(--pico-muted-color)">SMTP active</div>
+      </article>
+      <article style="margin:0;padding:1rem;text-align:center">
+        <div style="font-size:2rem;font-weight:bold" id="stat-pop3">—</div>
+        <div style="font-size:0.875rem;color:var(--pico-muted-color)">POP3 active</div>
+      </article>
+      <article style="margin:0;padding:1rem;text-align:center">
+        <div style="font-size:2rem;font-weight:bold" id="stat-imap">—</div>
+        <div style="font-size:0.875rem;color:var(--pico-muted-color)">IMAP active</div>
+      </article>
+    </div>
+
+    {{/* Charts row */}}
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:1.5rem;margin-bottom:1.5rem;align-items:start">
+
+      {{/* Per-domain incoming bar chart */}}
+      <div>
+        <h3 style="margin-bottom:0.5rem">Incoming mail (24h)</h3>
+        <canvas id="incomingChart" style="max-height:250px"></canvas>
+      </div>
+
+      {{/* Ham / spam / maybe donut */}}
+      <div>
+        <h3 style="margin-bottom:0.5rem">Verdict (24h)</h3>
+        <canvas id="verdictChart" style="max-height:250px"></canvas>
+      </div>
+    </div>
+
+    {{/* Accept / reject + delivery summary row */}}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1.5rem">
+      <article style="margin:0;padding:1rem">
+        <h4 style="margin:0 0 0.5rem">Accept vs reject (24h)</h4>
+        <table style="margin:0">
+          <tbody>
+            <tr><td>Accepted</td><td id="stat-accepted" style="text-align:right">—</td></tr>
+            <tr><td>Rejected</td><td id="stat-rejected" style="text-align:right">—</td></tr>
+          </tbody>
+        </table>
+      </article>
+      <article style="margin:0;padding:1rem">
+        <h4 style="margin:0 0 0.5rem">Delivery (24h)</h4>
+        <table style="margin:0">
+          <tbody>
+            <tr><td>Delivered</td><td id="stat-delivered" style="text-align:right">—</td></tr>
+            <tr><td>Temp failure</td><td id="stat-temp-fail" style="text-align:right">—</td></tr>
+            <tr><td>Perm failure</td><td id="stat-perm-fail" style="text-align:right">—</td></tr>
+          </tbody>
+        </table>
+      </article>
+    </div>
+
+    {{/* Outbound placeholder */}}
+    <article style="margin:0 0 1.5rem;padding:1rem;border:1px dashed var(--pico-muted-border-color)">
+      <h4 style="margin:0 0 0.25rem">Outbound</h4>
+      <p style="margin:0;color:var(--pico-muted-color);font-size:0.875rem">No outbound daemon metrics yet.</p>
+    </article>
+
+  </div>
+</section>
+
+<hr style="margin:1.5rem 0">
+
+{{/* --- Domain table --- */}}
 <hgroup>
   <h1>Domains</h1>
   <p>{{len .Data.Domains}} domain{{if ne (len .Data.Domains) 1}}s{{end}} configured</p>
@@ -43,35 +121,94 @@
     {{end}}
   </tbody>
 </table>
-
-<h2 style="margin-top:2rem">Users per Domain</h2>
-<canvas id="usersChart" style="max-height:300px"></canvas>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-<script>
-(function(){
-  var labels = [{{range .Data.Domains}}"{{.Name}}",{{end}}];
-  var data   = [{{range .Data.Domains}}{{.UserCount}},{{end}}];
-  new Chart(document.getElementById('usersChart'), {
-    type: 'bar',
-    data: {
-      labels: labels,
-      datasets: [{
-        label: 'Users',
-        data: data,
-        backgroundColor: 'rgba(54,162,235,0.6)',
-        borderColor: 'rgba(54,162,235,1)',
-        borderWidth: 1
-      }]
-    },
-    options: {
-      responsive: true,
-      plugins: { legend: { display: false } },
-      scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
-    }
-  });
-})();
-</script>
 {{else}}
 <p>No domains configured. Add one to get started.</p>
 {{end}}
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+(function(){
+  var incomingChart, verdictChart;
+
+  fetch('/api/mailstats', {credentials: 'same-origin'})
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      document.getElementById('stats-loading').style.display = 'none';
+      if (!d.available) {
+        document.getElementById('stats-unavailable').style.display = '';
+        return;
+      }
+      document.getElementById('stats-content').style.display = '';
+
+      // Active connections
+      document.getElementById('stat-smtp').textContent = d.active_connections.smtp;
+      document.getElementById('stat-pop3').textContent = d.active_connections.pop3;
+      document.getElementById('stat-imap').textContent = d.active_connections.imap;
+
+      // Accept / reject
+      document.getElementById('stat-accepted').textContent = d.accept_reject_24h.accepted;
+      document.getElementById('stat-rejected').textContent = d.accept_reject_24h.rejected;
+
+      // Delivery
+      document.getElementById('stat-delivered').textContent = d.delivery_24h.success;
+      document.getElementById('stat-temp-fail').textContent = d.delivery_24h.temp_failure;
+      document.getElementById('stat-perm-fail').textContent = d.delivery_24h.perm_failure;
+
+      // Per-domain incoming bar chart
+      var domains = (d.incoming_24h.by_domain || []).map(function(x){ return x.domain; });
+      var counts  = (d.incoming_24h.by_domain || []).map(function(x){ return x.count; });
+      incomingChart = new Chart(document.getElementById('incomingChart'), {
+        type: 'bar',
+        data: {
+          labels: domains.length ? domains : ['(no data)'],
+          datasets: [{
+            label: 'Messages',
+            data: counts.length ? counts : [0],
+            backgroundColor: 'rgba(54,162,235,0.6)',
+            borderColor: 'rgba(54,162,235,1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: { legend: { display: false } },
+          scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+        }
+      });
+
+      // Verdict donut
+      var v = d.verdict_24h;
+      verdictChart = new Chart(document.getElementById('verdictChart'), {
+        type: 'doughnut',
+        data: {
+          labels: ['Ham', 'Spam', 'Maybe'],
+          datasets: [{
+            data: [v.ham, v.spam, v.maybe],
+            backgroundColor: [
+              'rgba(75,192,92,0.7)',
+              'rgba(255,99,132,0.7)',
+              'rgba(255,205,86,0.7)'
+            ],
+            borderColor: [
+              'rgba(75,192,92,1)',
+              'rgba(255,99,132,1)',
+              'rgba(255,205,86,1)'
+            ],
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { position: 'bottom' }
+          }
+        }
+      });
+    })
+    .catch(function(){
+      document.getElementById('stats-loading').style.display = 'none';
+      document.getElementById('stats-unavailable').style.display = '';
+    });
+})();
+</script>
 {{end}}

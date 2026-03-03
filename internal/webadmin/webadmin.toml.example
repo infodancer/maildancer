@@ -30,6 +30,11 @@ timeout_minutes = 30
 # cert_file = "/etc/ssl/certs/mail.pem"
 # key_file = "/etc/ssl/private/mail.key"
 
+# Optional: Prometheus integration for mail server stats on the dashboard.
+# List all Prometheus instances; results are aggregated across them.
+# [webadmin.prometheus]
+# urls = ["http://prometheus:9090"]
+
 # rspamd connection settings live in [spamcheck] alongside smtpd's config.
 # webadmin edits these in-place when the super_admin saves settings.
 # [spamcheck]

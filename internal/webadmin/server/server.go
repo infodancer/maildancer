@@ -21,6 +21,7 @@ import (
 	"github.com/infodancer/maildancer/internal/webadmin/handlers"
 	"github.com/infodancer/maildancer/internal/webadmin/metrics"
 	"github.com/infodancer/maildancer/internal/webadmin/middleware"
+	"github.com/infodancer/maildancer/internal/webadmin/promclient"
 	"github.com/infodancer/maildancer/internal/webadmin/rbac"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 	"github.com/pelletier/go-toml/v2"
@@ -123,6 +124,7 @@ func (s *Server) registerRoutes() {
 	domainHandler := handlers.NewDomainHandler(s.cfg.DomainsPath, s.cfg.EffectiveDataPath(), s.sessions, s.logger, currentRoles, s.auditLog)
 	userHandler := handlers.NewUserHandler(s.cfg.DomainsPath, s.cfg.EffectiveDataPath(), s.sessions, s.logger, s.auditLog)
 	statsHandler := handlers.NewStatsHandler(s.cfg.DomainsPath, s.sessions, s.logger, nil)
+	mailStatsHandler := handlers.NewMailStatsHandler(promclient.New(s.cfg.Prometheus.URLs), s.sessions, s.logger)
 	webHandler := handlers.NewWebHandler(s.cfg.DomainsPath, s.sessions, s.logger, currentRoles)
 	dashboardHandler := handlers.NewDashboardHandler(s.cfg.DomainsPath, s.sessions, s.logger)
 	rspamdHandler := handlers.NewRspamdHandler(s.cfg.FilePath, s.sessions, s.logger)
@@ -208,6 +210,12 @@ func (s *Server) registerRoutes() {
 	// Dashboard stats API
 	s.mux.Handle("GET /api/dashboard", middleware.Chain(
 		http.HandlerFunc(dashboardHandler.HandleGetDashboard),
+		requireAuth,
+	))
+
+	// Mail server stats API (queries Prometheus)
+	s.mux.Handle("GET /api/mailstats", middleware.Chain(
+		http.HandlerFunc(mailStatsHandler.HandleGetMailStats),
 		requireAuth,
 	))
 

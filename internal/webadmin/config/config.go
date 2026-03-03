@@ -13,6 +13,15 @@ type Config struct {
 	WebAdmin WebAdminConfig `toml:"webadmin"`
 }
 
+// PrometheusConfig holds optional Prometheus integration settings.
+type PrometheusConfig struct {
+	// URLs is a list of Prometheus base URLs to query for mail server metrics.
+	// When multiple URLs are configured, results are aggregated (summed) across
+	// all instances, supporting multi-node deployments. If empty, mail server
+	// stats are unavailable on the dashboard.
+	URLs []string `toml:"urls"`
+}
+
 // WebAdminConfig holds all webadmin-specific settings.
 type WebAdminConfig struct {
 	// ListenAddress is the address to listen on (default: "localhost:8080").
@@ -40,6 +49,9 @@ type WebAdminConfig struct {
 
 	// Audit holds audit logging configuration.
 	Audit AuditConfig `toml:"audit"`
+
+	// Prometheus holds optional Prometheus integration for mail server stats.
+	Prometheus PrometheusConfig `toml:"prometheus"`
 
 	// FilePath is the path to the config file this struct was loaded from.
 	// Not a TOML field — set programmatically by Load(). Used by handlers

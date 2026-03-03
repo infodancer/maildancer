@@ -58,6 +58,13 @@ func (a *ExecDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envel
 		req.ClientIP = envelope.ClientIP.String()
 	}
 
+	// ── Encryption seam ───────────────────────────────────────────────────────
+	// When the recipient has encryption enabled, set req.EncryptionKeyHint to
+	// the key fingerprint resolved via auth.KeyProvider using envelope.Recipients[0].
+	// Deferred: real key lookup requires auth.KeyProvider integration.
+	// See: infodancer/infodancer/docs/encryption-design.md
+	// ─────────────────────────────────────────────────────────────────────────
+
 	jsonBytes, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("mail-deliver: marshalling envelope: %w", err)

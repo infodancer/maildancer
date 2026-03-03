@@ -17,4 +17,12 @@ type DeliverRequest struct {
 	ClientHostname string   `json:"client_hostname,omitempty"`
 	UID            int      `json:"uid"` // setuid target; 0 = no privilege drop
 	GID            int      `json:"gid"` // setgid target; 0 = no privilege drop
+
+	// EncryptionKeyHint identifies the recipient's public key for at-rest
+	// encryption. Empty means no encryption. The hint format is a key
+	// fingerprint or identifier resolved by auth.KeyProvider. When non-empty,
+	// mail-deliver wraps the DeliveryAgent with msgstore.EncryptingDeliveryAgent
+	// before writing to the maildir. This field is omitempty for backward
+	// compatibility. See: infodancer/infodancer/docs/encryption-design.md
+	EncryptionKeyHint string `json:"encryption_key_hint,omitempty"`
 }

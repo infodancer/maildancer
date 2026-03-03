@@ -239,10 +239,11 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		slog.String("store_type", cfg.MsgStore.Type))
 
 	return &Domain{
-		Name:          name,
-		AuthAgent:     finalAuth,
-		DeliveryAgent: finalDelivery,
-		MessageStore:  store,
+		Name:           name,
+		AuthAgent:      finalAuth,
+		DeliveryAgent:  finalDelivery,
+		MessageStore:   store,
+		MaxMessageSize: cfg.MaxMessageSize,
 	}, nil
 }
 

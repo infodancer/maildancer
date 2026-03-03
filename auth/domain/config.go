@@ -16,6 +16,11 @@ type DomainConfig struct {
 	// 0 means not configured.
 	Gid uint32 `toml:"gid"`
 
+	// MaxMessageSize is the maximum message size in bytes for this domain.
+	// Applies to both delivery (mail-deliver) and rspamd learning (mail-session).
+	// 0 means use the global default (50 MiB).
+	MaxMessageSize int64 `toml:"max_message_size"`
+
 	// Forwards maps localpart to comma-separated forwarding targets.
 	// The special key "*" is a catchall. A nil map means "not set" and allows
 	// the system default forwards to apply. An empty non-nil map (forwards = {})
@@ -56,6 +61,9 @@ func mergeConfig(base, override DomainConfig) DomainConfig {
 	result := base
 	if override.Gid != 0 {
 		result.Gid = override.Gid
+	}
+	if override.MaxMessageSize != 0 {
+		result.MaxMessageSize = override.MaxMessageSize
 	}
 	if override.Auth.Type != "" {
 		result.Auth.Type = override.Auth.Type

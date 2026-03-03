@@ -35,6 +35,10 @@ type Domain struct {
 
 	// MessageStore provides read access to stored messages for this domain.
 	MessageStore msgstore.MessageStore
+
+	// MaxMessageSize is the maximum message size in bytes for this domain.
+	// 0 means use the global default.
+	MaxMessageSize int64
 }
 
 // Close releases resources held by the domain's agents.

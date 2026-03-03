@@ -24,14 +24,18 @@ const (
 	maxMessageCount = 1_000_000
 )
 
-// validateProtocolArg rejects strings that contain CR, LF, or null bytes.
-// These characters could inject additional commands into the pipe protocol.
+// validateProtocolArg rejects strings that could corrupt the pipe protocol.
+// The protocol uses space as argument delimiter, so spaces are also rejected.
 func validateProtocolArg(s string) error {
-	if strings.ContainsAny(s, "\r\n\x00") {
-		return fmt.Errorf("invalid argument: contains control characters")
+	if strings.ContainsAny(s, "\r\n\x00 ") {
+		return fmt.Errorf("invalid argument: contains disallowed characters")
 	}
 	return nil
 }
+
+// Compile-time assertion: SubprocessStore must satisfy the mover interface
+// defined in storeops.go so that Move uses the atomic path.
+var _ mover = (*SubprocessStore)(nil)
 
 // SubprocessStore implements msgstore.MessageStore and msgstore.FolderStore by
 // speaking the mail-session pipe protocol. A mutex serialises all protocol I/O.
@@ -635,6 +639,32 @@ func (s *SubprocessStore) CopyMessage(_ context.Context, _ string, srcFolder str
 		return "", err
 	}
 	if err := s.sendCmd("COPY " + uid + " " + destFolder); err != nil {
+		return "", err
+	}
+	newUID, err := s.readOKData()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(newUID), nil
+}
+
+// MoveMessage atomically moves a message from srcFolder to destFolder via the
+// mail-session MOVE command. mail-session handles the copy+delete+expunge and
+// triggers rspamd learning when either folder is Junk.
+// Returns the new UID in destFolder.
+func (s *SubprocessStore) MoveMessage(_ context.Context, _ string, srcFolder string, uid string, destFolder string) (string, error) {
+	if err := validateProtocolArg(srcFolder); err != nil {
+		return "", fmt.Errorf("src folder: %w", err)
+	}
+	if err := validateProtocolArg(uid); err != nil {
+		return "", fmt.Errorf("uid: %w", err)
+	}
+	if err := validateProtocolArg(destFolder); err != nil {
+		return "", fmt.Errorf("dest folder: %w", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.sendCmd("MOVE " + uid + " " + srcFolder + " " + destFolder); err != nil {
 		return "", err
 	}
 	newUID, err := s.readOKData()

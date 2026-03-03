@@ -353,6 +353,39 @@ func TestSubprocStore_ErrorResponse(t *testing.T) {
 	}
 }
 
+func TestSubprocStore_MoveMessage(t *testing.T) {
+	store := newTestStore(t, func(fs *fakeServer) {
+		if cmd := fs.readLine(); cmd != "MOVE uid1 INBOX Junk" {
+			fs.send("-ERR unexpected: " + cmd)
+			return
+		}
+		fs.send("+OK newuid789")
+	})
+
+	newUID, err := store.MoveMessage(context.Background(), "user@example.com", "INBOX", "uid1", "Junk")
+	if err != nil {
+		t.Fatalf("MoveMessage: %v", err)
+	}
+	if newUID != "newuid789" {
+		t.Errorf("newUID = %q, want newuid789", newUID)
+	}
+}
+
+func TestSubprocStore_MoveMessage_Error(t *testing.T) {
+	store := newTestStore(t, func(fs *fakeServer) {
+		fs.readLine() // MOVE command
+		fs.send("-ERR source and destination folder are the same")
+	})
+
+	_, err := store.MoveMessage(context.Background(), "user@example.com", "Junk", "uid1", "Junk")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "same") {
+		t.Errorf("error = %q, want to mention 'same'", err)
+	}
+}
+
 func TestSubprocStore_EnsureFolder_SelectsOnce(t *testing.T) {
 	// Verify that two consecutive List calls on INBOX do not insert a SELECT
 	// between them. If ensureFolderLocked incorrectly sends SELECT INBOX, the

@@ -32,6 +32,16 @@ type ServerConfig struct {
 	TLS         TLSConfig `toml:"tls"`
 }
 
+// RspamdConfig holds configuration for rspamd ham/spam learning.
+type RspamdConfig struct {
+	// Controller is the rspamd HTTP controller URL (e.g. "http://rspamd:11334").
+	// Empty disables learning.
+	Controller string `toml:"controller"`
+	// JunkFolder is the name of the Junk/Spam folder that triggers learning.
+	// Defaults to "Junk" when empty.
+	JunkFolder string `toml:"junk_folder"`
+}
+
 // Config holds the IMAP-specific server configuration.
 type Config struct {
 	Hostname       string           `toml:"hostname"`
@@ -45,6 +55,7 @@ type Config struct {
 	Auth           AuthConfig       `toml:"auth"`
 	Store          StoreConfig      `toml:"store"`
 	MailSessionCmd string           `toml:"mail_session"` // path to mail-session binary; empty = in-process
+	Rspamd         RspamdConfig     `toml:"rspamd"`
 }
 
 // AuthConfig holds configuration for the authentication agent.

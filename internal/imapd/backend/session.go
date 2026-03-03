@@ -3,6 +3,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -142,12 +143,24 @@ func (s *Session) spawnMailSession(username string) (*SubprocessStore, error) {
 		return nil, fmt.Errorf("invalid username %q: missing @domain", username)
 	}
 
-	uid, gid, basePath, storeType, err := s.lookupMailSessionParams(localpart, domainName)
+	uid, gid, basePath, storeType, maxMsgSize, err := s.lookupMailSessionParams(localpart, domainName)
 	if err != nil {
 		return nil, err
 	}
 
-	cmd := exec.Command(s.cfg.MailSessionCmd, "--type", storeType, "--basepath", basePath)
+	args := []string{"--type", storeType, "--basepath", basePath, "--user", username}
+	if maxMsgSize > 0 {
+		args = append(args, "--max-message-size", fmt.Sprintf("%d", maxMsgSize))
+	}
+	if s.cfg.Rspamd.Controller != "" {
+		args = append(args, "--rspamd", s.cfg.Rspamd.Controller)
+		junk := s.cfg.Rspamd.JunkFolder
+		if junk == "" {
+			junk = "Junk"
+		}
+		args = append(args, "--junk-folder", junk)
+	}
+	cmd := exec.Command(s.cfg.MailSessionCmd, args...)
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
@@ -156,18 +169,47 @@ func (s *Session) spawnMailSession(username string) (*SubprocessStore, error) {
 		},
 	}
 
-	return NewSubprocessStore(cmd, s.mailbox)
+	// ── Encryption seam: key pipe (fd 3 in mail-session) ─────────────────────
+	// mail-session reads exactly 32 bytes from fd 3 before entering its command
+	// loop. NewSubprocessStore starts the process and immediately sends MAILBOX,
+	// so the key write runs in a goroutine to avoid a deadlock: mail-session
+	// blocks reading fd 3 while NewSubprocessStore waits for the MAILBOX reply.
+	// Stub: zeroed bytes are written; real key derivation (auth.DeriveKeyPair)
+	// is deferred to a future PR.
+	// See: infodancer/infodancer/docs/encryption-design.md
+	// ─────────────────────────────────────────────────────────────────────────
+	keyPipeR, keyPipeW, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("key pipe: %w", err)
+	}
+	cmd.ExtraFiles = []*os.File{keyPipeR} // fd 3: read-only session key
+
+	go func() {
+		defer keyPipeW.Close()
+		// Stub: write a zeroed key envelope so mail-session can proceed.
+		// The envelope format is versioned JSON so future fields (algorithm,
+		// key_id, keyring) can be added without a breaking protocol change.
+		// Real key derivation (auth.DeriveKeyPair) is deferred.
+		_ = json.NewEncoder(keyPipeW).Encode(struct {
+			Version int    `json:"version"`
+			Key     []byte `json:"key"`
+		}{Version: 1, Key: make([]byte, 32)})
+	}()
+
+	store, err := NewSubprocessStore(cmd, s.mailbox)
+	_ = keyPipeR.Close() // child owns fd 3; release parent's copy
+	return store, err
 }
 
 // lookupMailSessionParams reads the per-domain config and passwd file to obtain
 // the uid, gid, basePath, and store type for spawning mail-session.
 // Mirrors the logic in pop3d's lookupCredentials.
-func (s *Session) lookupMailSessionParams(localpart, domainName string) (uid, gid uint32, basePath, storeType string, err error) {
+func (s *Session) lookupMailSessionParams(localpart, domainName string) (uid, gid uint32, basePath, storeType string, maxMsgSize int64, err error) {
 	domainDir := filepath.Join(s.cfg.DomainsPath, domainName)
 
 	cfg, err := domain.LoadDomainConfig(filepath.Join(domainDir, "config.toml"))
 	if err != nil {
-		return 0, 0, "", "", fmt.Errorf("load domain config for %q: %w", domainName, err)
+		return 0, 0, "", "", 0, fmt.Errorf("load domain config for %q: %w", domainName, err)
 	}
 
 	gid = cfg.Gid
@@ -183,7 +225,7 @@ func (s *Session) lookupMailSessionParams(localpart, domainName string) (uid, gi
 
 	uid, err = passwd.LookupUID(passwdPath, localpart)
 	if err != nil {
-		return 0, 0, "", "", fmt.Errorf("lookup uid for %q in %q: %w", localpart, passwdPath, err)
+		return 0, 0, "", "", 0, fmt.Errorf("lookup uid for %q in %q: %w", localpart, passwdPath, err)
 	}
 
 	base := cfg.MsgStore.BasePath
@@ -199,7 +241,7 @@ func (s *Session) lookupMailSessionParams(localpart, domainName string) (uid, gi
 		storeType = "maildir"
 	}
 
-	return uid, gid, base, storeType, nil
+	return uid, gid, base, storeType, cfg.MaxMessageSize, nil
 }
 
 // Subscribe is a no-op (subscription state not tracked).

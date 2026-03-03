@@ -1,0 +1,14 @@
+git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9 h1:MaPyH1+nMX0azKxKQ+X6IiFWTlQokcKO5DKchAR9x5A=
+git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9/go.mod h1:ewD6qhJ+zMwEeAElDEJOYYdkpxZSHRodJwq9Z0OG30w=
+github.com/emersion/go-maildir v0.6.0 h1:MPx2RSS1Xq8j1cNOzfq7YyF+5Leoeif1XqSeuytdET8=
+github.com/emersion/go-maildir v0.6.0/go.mod h1:Wpgtt9EOIJWe++WKa+JRvDwv+qIV7MeFdvZu/VbsXN4=
+github.com/infodancer/maildancer/auth v0.1.7 h1:kTBS8/UTY9yPA00CRkfY03GyvIG4c5Z2SzNnaUxUXg4=
+github.com/infodancer/maildancer/auth v0.1.7/go.mod h1:iRqh/nhxV5gjccsxVuN+znww4yvfHXbd7OP1iL+LOco=
+github.com/infodancer/maildancer/msgstore v0.2.1 h1:++W58+tPMMj7tNQrh4BDze6LJvVoEzJdQYNjvjFlkQ4=
+github.com/infodancer/maildancer/msgstore v0.2.1/go.mod h1:rW0pT8rguFR8OPbFoQyA7gk1X39at2q8YNmFFNnrx24=
+github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
+github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
+golang.org/x/crypto v0.47.0 h1:V6e3FRj+n4dbpw86FJ8Fv7XVOql7TEwpHapKoMJ/GO8=
+golang.org/x/crypto v0.47.0/go.mod h1:ff3Y9VzzKbwSSEzWqJsJVBnWmRwRSHt/6Op5n9bQc4A=
+golang.org/x/sys v0.41.0 h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=
+golang.org/x/sys v0.41.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=

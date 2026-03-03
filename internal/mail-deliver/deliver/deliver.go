@@ -91,9 +91,17 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req protocol.DeliverRequest,
 	// Skipped when Forwarded=true to enforce the 1-hop limit.
 	if !req.Forwarded && dom.AuthAgent != nil {
 		if targets, ok := dom.AuthAgent.ResolveForward(ctx, localpart); ok {
+			if len(targets) > 1 {
+				return protocol.DeliverResponse{
+					Version:   protocol.Version,
+					Result:    protocol.ResultRejected,
+					Temporary: false,
+					Reason:    fmt.Sprintf("forwarding misconfiguration: only one forward destination allowed, %d configured", len(targets)),
+				}, nil
+			}
 			slog.Debug("forwarding message",
 				slog.String("recipient", recipient),
-				slog.Any("targets", targets))
+				slog.String("target", targets[0]))
 			return protocol.DeliverResponse{
 				Version:   protocol.Version,
 				Result:    protocol.ResultRedirected,

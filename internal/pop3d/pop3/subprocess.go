@@ -2,6 +2,7 @@ package pop3
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -280,10 +281,30 @@ func (s *SubprocessServer) dispatchSession(
 		return
 	}
 
+	// ── Encryption seam: key pipe (fd 3 in mail-session) ────────────────────
+	// Create a one-shot pipe to pass the session decryption key to mail-session.
+	// mail-session reads exactly 32 bytes from fd 3 before entering its command
+	// loop. The write end is closed after writing so mail-session gets EOF.
+	// When encryption is not configured for this user, zeroed bytes are written;
+	// real key derivation (auth.DeriveKeyPair) is deferred to a future PR.
+	// See: infodancer/infodancer/docs/encryption-design.md
+	// ─────────────────────────────────────────────────────────────────────────
+	keyPipeR, keyPipeW, err := os.Pipe()
+	if err != nil {
+		s.logger.Error("failed to create key pipe",
+			slog.String("client_ip", clientIP),
+			slog.String("username", sig.Username),
+			slog.String("error", err.Error()))
+		_ = toSessR.Close()
+		_ = fromSessW.Close()
+		return
+	}
+
 	msCmd := exec.Command(s.mailSessionPath, "--type", "maildir", "--basepath", basePath)
 	msCmd.Stdin = toSessR
 	msCmd.Stdout = fromSessW
 	msCmd.Stderr = os.Stderr
+	msCmd.ExtraFiles = []*os.File{keyPipeR} // fd 3: read-only session key
 	msCmd.SysProcAttr = &syscall.SysProcAttr{
 		Credential: &syscall.Credential{
 			Uid: uid,
@@ -298,12 +319,25 @@ func (s *SubprocessServer) dispatchSession(
 			slog.String("error", err.Error()))
 		_ = toSessR.Close()
 		_ = fromSessW.Close()
+		_ = keyPipeR.Close()
+		_ = keyPipeW.Close()
 		return
 	}
 
 	// Parent closes its copies; the child processes own these fds now.
 	_ = toSessR.Close()
 	_ = fromSessW.Close()
+	_ = keyPipeR.Close()
+
+	// Stub: write a zeroed key envelope and close the pipe so mail-session
+	// can proceed. Real key derivation (auth.DeriveKeyPair) is deferred.
+	// The envelope format is versioned JSON so future fields (algorithm,
+	// key_id, keyring) can be added without a breaking protocol change.
+	_ = json.NewEncoder(keyPipeW).Encode(struct {
+		Version int    `json:"version"`
+		Key     []byte `json:"key"`
+	}{Version: 1, Key: make([]byte, 32)})
+	_ = keyPipeW.Close()
 
 	s.logger.Debug("spawned mail-session",
 		slog.Int("pid", msCmd.Process.Pid),

@@ -39,19 +39,45 @@ type ServerConfig struct {
 
 // Config holds the complete SMTP server configuration.
 type Config struct {
-	Hostname    string           `toml:"hostname"`
-	LogLevel    string           `toml:"log_level"`
+	Hostname        string           `toml:"hostname"`
+	LogLevel        string           `toml:"log_level"`
 	DomainsPath     string           `toml:"domains_path"`
 	DomainsDataPath string           `toml:"domains_data_path"`
-	Listeners   []ListenerConfig `toml:"listeners"`
-	TLS         TLSConfig        `toml:"tls"`
-	Limits      LimitsConfig     `toml:"limits"`
-	Timeouts    TimeoutsConfig   `toml:"timeouts"`
-	Metrics     MetricsConfig    `toml:"metrics"`
-	Delivery    DeliveryConfig   `toml:"delivery"`
-	Encryption  EncryptionConfig `toml:"encryption"`
-	Auth        AuthConfig       `toml:"auth"`
-	SpamCheck   SpamCheckConfig  `toml:"spamcheck"`
+	Listeners       []ListenerConfig `toml:"listeners"`
+	TLS             TLSConfig        `toml:"tls"`
+	Limits          LimitsConfig     `toml:"limits"`
+	Timeouts        TimeoutsConfig   `toml:"timeouts"`
+	Metrics         MetricsConfig    `toml:"metrics"`
+	Delivery        DeliveryConfig   `toml:"delivery"`
+	Queue           QueueConfig      `toml:"queue"`
+	Encryption      EncryptionConfig `toml:"encryption"`
+	Auth            AuthConfig       `toml:"auth"`
+	SpamCheck       SpamCheckConfig  `toml:"spamcheck"`
+}
+
+// QueueConfig holds configuration for the outbound mail queue.
+// When Dir is set, remote messages from authenticated senders are written
+// to the queue for delivery by mail-remote / queue-manager.
+type QueueConfig struct {
+	// Dir is the root of the on-disk mail queue (e.g. "/var/spool/mail-queue").
+	// Required for remote delivery. Empty disables queue injection.
+	Dir string `toml:"dir"`
+
+	// MessageTTL is how long a queued message is retried before expiry.
+	// Accepts Go duration strings (e.g. "168h" for 7 days). Defaults to "168h".
+	MessageTTL string `toml:"message_ttl"`
+}
+
+// GetMessageTTL returns MessageTTL as a time.Duration, defaulting to 7 days.
+func (q *QueueConfig) GetMessageTTL() time.Duration {
+	if q.MessageTTL == "" {
+		return 7 * 24 * time.Hour
+	}
+	d, err := time.ParseDuration(q.MessageTTL)
+	if err != nil {
+		return 7 * 24 * time.Hour
+	}
+	return d
 }
 
 // EncryptionConfig holds configuration for message encryption.

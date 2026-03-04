@@ -30,26 +30,33 @@ func TestWriteCreatesFiles(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	// Body must exist under msg/com/example/{msgid}.
+	// Body must exist under msg/com/example/{msgidHex} (hex only, no @domain).
 	msgDir := filepath.Join(cfg.Dir, "msg", "com", "example")
 	bodies := readDir(t, msgDir)
 	if len(bodies) != 1 {
 		t.Fatalf("expected 1 body file, got %d: %v", len(bodies), bodies)
 	}
-	msgid := bodies[0]
+	msgidHex := bodies[0]
 
-	// Body must not be a tmp_ file.
-	if strings.HasPrefix(msgid, "tmp_") {
-		t.Fatalf("body file is a tmp_ file: %s", msgid)
+	// Body filename must be hex-only (no "@").
+	if strings.HasPrefix(msgidHex, "tmp_") {
+		t.Fatalf("body file is a tmp_ file: %s", msgidHex)
+	}
+	if strings.Contains(msgidHex, "@") {
+		t.Fatalf("body filename contains '@', should be hex only: %s", msgidHex)
 	}
 
-	// Body content must be non-empty.
-	bodyContent, err := os.ReadFile(filepath.Join(msgDir, msgid))
+	// Full msgid is hex@hostname.
+	wantMsgID := msgidHex + "@mail.example.com"
+
+	// Body content must include the injected Message-ID header.
+	bodyContent, err := os.ReadFile(filepath.Join(msgDir, msgidHex))
 	if err != nil {
 		t.Fatalf("read body: %v", err)
 	}
-	if len(bodyContent) == 0 {
-		t.Fatal("body file is empty")
+	wantHeader := "Message-ID: <" + wantMsgID + ">"
+	if !strings.Contains(string(bodyContent), wantHeader) {
+		t.Errorf("body missing Message-ID header %q; got:\n%s", wantHeader, bodyContent)
 	}
 
 	// One envelope per recipient.
@@ -59,9 +66,10 @@ func TestWriteCreatesFiles(t *testing.T) {
 		envDir := filepath.Join(cfg.Dir, "env", rcptTLD, rcptSLD)
 		envFiles := readDir(t, envDir)
 
+		// Envelope filename uses hex part only: localpart@hex.n
 		var found string
 		for _, name := range envFiles {
-			if strings.HasPrefix(name, rcptLocal+"@"+msgid) {
+			if strings.HasPrefix(name, rcptLocal+"@"+msgidHex) {
 				found = name
 				break
 			}
@@ -77,7 +85,8 @@ func TestWriteCreatesFiles(t *testing.T) {
 			t.Fatalf("read envelope %s: %v", found, err)
 		}
 		env := string(envContent)
-		checkEnvelopeField(t, env, "MSGID", msgid)
+		// MSGID field must be full RFC 5322 form: hex@hostname
+		checkEnvelopeField(t, env, "MSGID", wantMsgID)
 		checkEnvelopeField(t, env, "RECIPIENT", rcpt)
 
 		wantSender := "bounces+" + rcptLocal + "=" + rcptDomain + "@mail.example.com"

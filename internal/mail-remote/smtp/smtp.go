@@ -30,6 +30,12 @@ func SmarthostFromEnv(addr, username string) Smarthost {
 	}
 }
 
+// dialFunc dials an SMTP server and returns a connected client.
+// Overrideable in tests to substitute a plain (non-TLS) connection.
+var dialFunc = func(addr string) (*gosmtp.Client, error) {
+	return gosmtp.DialStartTLS(addr, nil)
+}
+
 // DeliverViaSmarthost opens one SMTP connection to the configured smarthost
 // and delivers each envelope in turn. Each envelope is a separate MAIL FROM
 // transaction (required because VERP produces a unique sender per recipient).
@@ -40,7 +46,7 @@ func SmarthostFromEnv(addr, username string) Smarthost {
 func DeliverViaSmarthost(_ context.Context, sh Smarthost, bodyPath string, envs []*envelope.Envelope) map[string]error {
 	results := make(map[string]error, len(envs))
 
-	c, err := gosmtp.DialStartTLS(sh.Addr, nil)
+	c, err := dialFunc(sh.Addr)
 	if err != nil {
 		for _, env := range envs {
 			results[env.Path] = fmt.Errorf("dial %s: %w", sh.Addr, err)

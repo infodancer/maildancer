@@ -16,6 +16,7 @@ import (
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/auth/domain"
+	"github.com/infodancer/maildancer/internal/smtpd/queue"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
 
@@ -82,16 +83,17 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // Session implements the go-smtp Session interface.
 // It also implements AuthSession for AUTH support.
 type Session struct {
-	backend      *Backend
-	conn         *smtp.Conn
-	clientIP     string
-	helo         string
-	from         string
-	mailFromSeen bool // true once MAIL FROM is accepted (from may be "" for bounces)
-	recipients   []string
-	authUser     string
-	domain       *domain.Domain // Set during RCPT TO for delivery
-	logger       *slog.Logger
+	backend          *Backend
+	conn             *smtp.Conn
+	clientIP         string
+	helo             string
+	from             string
+	mailFromSeen     bool // true once MAIL FROM is accepted (from may be "" for bounces)
+	recipients       []string // local recipients → mail-deliver
+	remoteRecipients []string // remote recipients → queue (authenticated submission only)
+	authUser         string
+	domain           *domain.Domain // Set during RCPT TO for delivery
+	logger           *slog.Logger
 }
 
 // AuthMechanisms returns the available authentication mechanisms.
@@ -235,8 +237,9 @@ func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 // Rcpt handles the RCPT TO command.
 // Implements smtp.Session interface.
 func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
-	// Enforce single recipient per message to avoid partial delivery scenarios
-	if len(s.recipients) > 0 {
+	// Enforce single recipient per message to avoid partial delivery scenarios.
+	// Remote (queued) recipients count against the same limit.
+	if len(s.recipients)+len(s.remoteRecipients) > 0 {
 		return &smtp.SMTPError{
 			Code:         452,
 			EnhancedCode: smtp.EnhancedCode{4, 5, 3},
@@ -258,12 +261,22 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	if s.backend.domainProvider != nil {
 		d := s.backend.domainProvider.GetDomain(domainName)
 		if d == nil {
-			s.logger.Debug("domain not accepted", slog.String("domain", domainName))
-			return &smtp.SMTPError{
-				Code:         550,
-				EnhancedCode: smtp.EnhancedCode{5, 1, 2},
-				Message:      "Domain not accepted",
+			// Domain is not local. Allow relay only for authenticated senders.
+			if s.authUser == "" {
+				s.logger.Debug("relay denied: unauthenticated", slog.String("domain", domainName))
+				return &smtp.SMTPError{
+					Code:         550,
+					EnhancedCode: smtp.EnhancedCode{5, 7, 1},
+					Message:      "Relay denied",
+				}
 			}
+			// Authenticated submission: queue for remote delivery.
+			s.remoteRecipients = append(s.remoteRecipients, to)
+			if s.backend.collector != nil {
+				s.backend.collector.CommandProcessed("RCPT")
+			}
+			s.logger.Debug("RCPT TO (remote, queued)", slog.String("to", to))
+			return nil
 		}
 
 		// Check if user exists (AuthRouter handles domain splitting)
@@ -348,7 +361,7 @@ func (s *Session) Data(r io.Reader) error {
 			Message:      "Bad sequence of commands: MAIL FROM required",
 		}
 	}
-	if len(s.recipients) == 0 {
+	if len(s.recipients)+len(s.remoteRecipients) == 0 {
 		return &smtp.SMTPError{
 			Code:         503,
 			EnhancedCode: smtp.EnhancedCode{5, 5, 1},
@@ -356,20 +369,32 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
-	// Resolve the delivery agent before reading data. Failing here avoids
-	// consuming the message body only to discard it.
+	// Resolve the local delivery agent (only needed if we have local recipients).
+	// Fail early to avoid buffering the body only to discard it.
 	var deliveryAgent msgstore.DeliveryAgent
-	if s.domain != nil && s.domain.DeliveryAgent != nil {
-		deliveryAgent = s.domain.DeliveryAgent
-	} else if s.backend.delivery != nil {
-		deliveryAgent = s.backend.delivery
+	if len(s.recipients) > 0 {
+		if s.domain != nil && s.domain.DeliveryAgent != nil {
+			deliveryAgent = s.domain.DeliveryAgent
+		} else if s.backend.delivery != nil {
+			deliveryAgent = s.backend.delivery
+		}
+		if deliveryAgent == nil {
+			s.logger.Debug("no delivery agent configured")
+			return &smtp.SMTPError{
+				Code:         451,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+				Message:      "Delivery not configured, try again later",
+			}
+		}
 	}
-	if deliveryAgent == nil {
-		s.logger.Debug("no delivery agent configured")
+
+	// For remote-only delivery, ensure queue is configured before buffering.
+	if len(s.recipients) == 0 && len(s.remoteRecipients) > 0 && s.backend.queueCfg.Dir == "" {
+		s.logger.Debug("queue not configured for remote delivery")
 		return &smtp.SMTPError{
 			Code:         451,
 			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
-			Message:      "Delivery not configured, try again later",
+			Message:      "Remote delivery not available, try again later",
 		}
 	}
 
@@ -501,38 +526,67 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
-	// Deliver the message (deliveryAgent is guaranteed non-nil; checked above).
-	envelope := msgstore.Envelope{
-		From:           s.from,
-		Recipients:     s.recipients,
-		ReceivedTime:   time.Now(),
-		ClientIP:       net.ParseIP(s.clientIP),
-		ClientHostname: s.helo,
-	}
+	// Local delivery (synchronous; failures reject at SMTP time).
+	if len(s.recipients) > 0 {
+		envelope := msgstore.Envelope{
+			From:           s.from,
+			Recipients:     s.recipients,
+			ReceivedTime:   time.Now(),
+			ClientIP:       net.ParseIP(s.clientIP),
+			ClientHostname: s.helo,
+		}
 
-	if err := deliveryAgent.Deliver(ctx, envelope, tmp.reader()); err != nil {
-		s.logger.Debug("delivery failed", slog.String("error", err.Error()))
+		if err := deliveryAgent.Deliver(ctx, envelope, tmp.reader()); err != nil {
+			s.logger.Debug("local delivery failed", slog.String("error", err.Error()))
+
+			if s.backend.collector != nil {
+				recipientDomain := sessionExtractRecipientDomain(s.recipients)
+				s.backend.collector.MessageRejected(recipientDomain, "delivery_error")
+			}
+
+			return &smtp.SMTPError{
+				Code:         451,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+				Message:      "Delivery failed",
+			}
+		}
 
 		if s.backend.collector != nil {
 			recipientDomain := sessionExtractRecipientDomain(s.recipients)
-			s.backend.collector.MessageRejected(recipientDomain, "delivery_error")
+			s.backend.collector.MessageReceived(recipientDomain, counter.n)
 		}
 
-		return &smtp.SMTPError{
-			Code:         451,
-			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
-			Message:      "Delivery failed",
+		s.logger.Debug("local delivery complete",
+			slog.Int64("size", counter.n),
+			slog.Int("recipients", len(s.recipients)))
+	}
+
+	// Remote delivery: write to queue for mail-remote / queue-manager.
+	if len(s.remoteRecipients) > 0 {
+		if err := queue.Write(s.backend.queueCfg, s.from, s.remoteRecipients, tmp.reader()); err != nil {
+			s.logger.Debug("queue write failed", slog.String("error", err.Error()))
+
+			if s.backend.collector != nil {
+				recipientDomain := sessionExtractRecipientDomain(s.remoteRecipients)
+				s.backend.collector.MessageRejected(recipientDomain, "queue_error")
+			}
+
+			return &smtp.SMTPError{
+				Code:         451,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+				Message:      "Temporary queue failure, try again later",
+			}
 		}
-	}
 
-	if s.backend.collector != nil {
-		recipientDomain := sessionExtractRecipientDomain(s.recipients)
-		s.backend.collector.MessageReceived(recipientDomain, counter.n)
-	}
+		if s.backend.collector != nil {
+			recipientDomain := sessionExtractRecipientDomain(s.remoteRecipients)
+			s.backend.collector.MessageReceived(recipientDomain, counter.n)
+		}
 
-	s.logger.Debug("message delivered",
-		slog.Int64("size", counter.n),
-		slog.Int("recipients", len(s.recipients)))
+		s.logger.Debug("queued for remote delivery",
+			slog.Int64("size", counter.n),
+			slog.Int("recipients", len(s.remoteRecipients)))
+	}
 
 	return nil
 }
@@ -543,6 +597,7 @@ func (s *Session) Reset() {
 	s.from = ""
 	s.mailFromSeen = false
 	s.recipients = nil
+	s.remoteRecipients = nil
 	s.domain = nil
 	s.logger.Debug("session reset")
 }

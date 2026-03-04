@@ -13,6 +13,7 @@ import (
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
+	"github.com/infodancer/maildancer/internal/smtpd/queue"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
 
@@ -127,9 +128,19 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		tempDir = filepath.Join(cfg.Config.Delivery.BasePath, "tmp")
 	}
 
+	queueCfg := queue.Config{
+		Dir:        cfg.Config.Queue.Dir,
+		MessageTTL: cfg.Config.Queue.GetMessageTTL(),
+		Hostname:   cfg.Config.Hostname,
+	}
+	if queueCfg.Dir != "" {
+		logger.Info("queue injection enabled", "dir", queueCfg.Dir)
+	}
+
 	backend := NewBackend(BackendConfig{
 		Hostname:       cfg.Config.Hostname,
 		Delivery:       delivery,
+		QueueConfig:    queueCfg,
 		AuthAgent:      authAgent,
 		AuthRouter:     authRouter,
 		DomainProvider: domainProvider,

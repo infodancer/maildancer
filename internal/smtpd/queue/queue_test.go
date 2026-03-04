@@ -46,8 +46,8 @@ func TestWriteCreatesFiles(t *testing.T) {
 		t.Fatalf("body filename contains '@', should be hex only: %s", msgidHex)
 	}
 
-	// Full msgid is hex@hostname.
-	wantMsgID := msgidHex + "@mail.example.com"
+	// Full msgid uses sender domain (alice@example.com → example.com), not cfg.Hostname.
+	wantMsgID := msgidHex + "@example.com"
 
 	// Body content must include the injected Message-ID header.
 	bodyContent, err := os.ReadFile(filepath.Join(msgDir, msgidHex))

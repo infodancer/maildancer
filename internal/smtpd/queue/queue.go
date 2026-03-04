@@ -42,7 +42,12 @@ type Config struct {
 // If smtpd crashes between steps the orphaned tmp_ files are swept by
 // queue-manager (they never match the envelope filename pattern).
 func Write(cfg Config, from string, recipients []string, body io.Reader) error {
-	msgid, msgidHex, err := newMsgID(cfg.Hostname)
+	// Use the sender's domain in the msgid (RFC 5322 §3.6.4). The right-hand
+	// side authenticates the message as originating from that domain, and in
+	// the new messaging protocol the recipient resolves _mail._tcp.{sender-domain}
+	// SRV to find the retrieval endpoint. cfg.Hostname is still used for VERP.
+	fromDomain := extractDomain(from)
+	msgid, msgidHex, err := newMsgID(fromDomain)
 	if err != nil {
 		return fmt.Errorf("queue: generate msgid: %w", err)
 	}
@@ -51,11 +56,12 @@ func Write(cfg Config, from string, recipients []string, body io.Reader) error {
 
 	// --- body ---
 	// Prepend Message-ID header. smtpd is the originating MTA for authenticated
-	// submissions; the domain part encodes the retrieval host for the new protocol.
+	// submissions; the domain part ties the message to the sender's domain and
+	// encodes the retrieval address for the new messaging protocol.
 	messageIDHeader := fmt.Sprintf("Message-ID: <%s>\r\n", msgid)
 	bodyWithHeader := io.MultiReader(strings.NewReader(messageIDHeader), body)
 
-	senderTLD, senderDomain := splitDomainLabels(extractDomain(from))
+	senderTLD, senderDomain := splitDomainLabels(fromDomain)
 	msgDir := filepath.Join(cfg.Dir, "msg", senderTLD, senderDomain)
 	if err := os.MkdirAll(msgDir, 0700); err != nil {
 		return fmt.Errorf("queue: mkdir %s: %w", msgDir, err)

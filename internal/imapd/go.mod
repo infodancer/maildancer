@@ -9,7 +9,7 @@ require (
 	github.com/infodancer/maildancer/msgstore v0.2.1
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
-	golang.org/x/crypto v0.47.0
+	golang.org/x/crypto v0.48.0
 )
 
 require (

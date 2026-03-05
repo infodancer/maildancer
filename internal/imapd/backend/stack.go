@@ -70,6 +70,9 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	var domainProvider domain.DomainProvider
 	if cfg.Config.DomainsPath != "" {
 		dp := domain.NewFilesystemDomainProvider(cfg.Config.DomainsPath, logger)
+		if cfg.Config.DomainsDataPath != "" {
+			dp = dp.WithDataPath(cfg.Config.DomainsDataPath)
+		}
 		domainProvider = dp.WithDefaults(domain.DomainConfig{
 			Auth: domain.DomainAuthConfig{
 				Type:              "passwd",

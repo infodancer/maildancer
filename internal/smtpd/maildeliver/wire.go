@@ -25,4 +25,15 @@ type DeliverRequest struct {
 	// before writing to the maildir. This field is omitempty for backward
 	// compatibility. See: infodancer/infodancer/docs/encryption-design.md
 	EncryptionKeyHint string `json:"encryption_key_hint,omitempty"`
+
+	// SpamScore is the numeric spam score from the upstream checker.
+	// Zero means no spam check was performed or the message scored zero.
+	SpamScore float64 `json:"spam_score,omitempty"`
+
+	// SpamAction is the recommended action from the spam checker:
+	// "accept", "flag", "reject", "tempfail". Empty means no check was performed.
+	SpamAction string `json:"spam_action,omitempty"`
+
+	// SpamChecker identifies which checker produced the result (e.g., "rspamd").
+	SpamChecker string `json:"spam_checker,omitempty"`
 }

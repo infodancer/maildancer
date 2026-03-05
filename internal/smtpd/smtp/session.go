@@ -12,10 +12,10 @@ import (
 
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
+	"github.com/infodancer/maildancer/auth/domain"
 	autherrors "github.com/infodancer/maildancer/auth/errors"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
-	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/smtpd/queue"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
@@ -47,8 +47,8 @@ func (b *fileTempBuf) cleanup() {
 type memTempBuf struct{ buf bytes.Buffer }
 
 func (b *memTempBuf) Write(p []byte) (int, error) { return b.buf.Write(p) }
-func (b *memTempBuf) reader() io.Reader            { return bytes.NewReader(b.buf.Bytes()) }
-func (b *memTempBuf) cleanup()                     {}
+func (b *memTempBuf) reader() io.Reader           { return bytes.NewReader(b.buf.Bytes()) }
+func (b *memTempBuf) cleanup()                    {}
 
 // newTempBuffer tries to create a temp file in dir (falling back to os.TempDir
 // when dir is ""). If file creation fails for any reason, it returns an
@@ -88,7 +88,7 @@ type Session struct {
 	clientIP         string
 	helo             string
 	from             string
-	mailFromSeen     bool // true once MAIL FROM is accepted (from may be "" for bounces)
+	mailFromSeen     bool     // true once MAIL FROM is accepted (from may be "" for bounces)
 	recipients       []string // local recipients → mail-deliver
 	remoteRecipients []string // remote recipients → queue (authenticated submission only)
 	authUser         string
@@ -412,6 +412,7 @@ func (s *Session) Data(r io.Reader) error {
 	counter := &countingReader{r: tee}
 
 	// Spam check (if enabled) - reads through counter, which fills tmpFile
+	var spamResult *spamcheck.CheckResult
 	if s.backend.spamChecker != nil && s.backend.spamConfig.IsEnabled() {
 		checkResult, checkErr := s.backend.spamChecker.Check(ctx, counter, spamcheck.CheckOptions{
 			From:       s.from,
@@ -511,8 +512,8 @@ func (s *Session) Data(r io.Reader) error {
 				}
 			}
 
-			// Note: Header injection is not supported with go-smtp.
-			// Spam check can reject but cannot modify the message.
+			// Preserve the result for the delivery envelope.
+			spamResult = checkResult
 		}
 	} else {
 		// No spam check - read the entire message into tmp
@@ -534,6 +535,13 @@ func (s *Session) Data(r io.Reader) error {
 			ReceivedTime:   time.Now(),
 			ClientIP:       net.ParseIP(s.clientIP),
 			ClientHostname: s.helo,
+		}
+		if spamResult != nil {
+			envelope.SpamResult = &msgstore.SpamResult{
+				Score:   spamResult.Score,
+				Action:  string(spamResult.Action),
+				Checker: spamResult.CheckerName,
+			}
 		}
 
 		if err := deliveryAgent.Deliver(ctx, envelope, tmp.reader()); err != nil {

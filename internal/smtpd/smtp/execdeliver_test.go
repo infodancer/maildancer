@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/infodancer/maildancer/msgstore"
-	smtpserver "github.com/infodancer/maildancer/internal/smtpd/smtp"
 	"github.com/infodancer/maildancer/internal/smtpd/maildeliver"
+	smtpserver "github.com/infodancer/maildancer/internal/smtpd/smtp"
 )
 
 // buildFakeDeliver builds a minimal binary that reads all stdin and writes it
@@ -94,10 +94,71 @@ func TestExecDeliveryAgent_Format(t *testing.T) {
 		t.Errorf("recipients: got %v, want [rcpt@example.com]", req.Recipients)
 	}
 
+	// SpamResult fields should be absent when no spam result set.
+	if req.SpamAction != "" {
+		t.Errorf("SpamAction should be empty, got %q", req.SpamAction)
+	}
+	if req.SpamScore != 0 {
+		t.Errorf("SpamScore should be 0, got %f", req.SpamScore)
+	}
+
 	// Remainder after the JSON line must be the raw message bytes.
 	rest := string(data[idx+1:])
 	if !strings.Contains(rest, "Subject: test") {
 		t.Errorf("message body not found after JSON line; got: %q", rest)
+	}
+}
+
+// TestExecDeliveryAgent_SpamResult verifies that SpamResult on the envelope
+// is serialized to the wire protocol correctly.
+func TestExecDeliveryAgent_SpamResult(t *testing.T) {
+	t.Parallel()
+
+	outFile := filepath.Join(t.TempDir(), "captured.bin")
+	bin := buildFakeDeliver(t, outFile)
+
+	agent := smtpserver.NewExecDeliveryAgent(smtpserver.ExecDeliveryConfig{
+		Cmd:        bin,
+		ConfigPath: "/nonexistent/smtpd.toml",
+	})
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"rcpt@example.com"},
+		SpamResult: &msgstore.SpamResult{
+			Score:   8.3,
+			Action:  "flag",
+			Checker: "rspamd",
+		},
+	}
+	message := strings.NewReader("Subject: spam test\r\n\r\nbody\r\n")
+
+	if err := agent.Deliver(t.Context(), envelope, message); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("reading captured output: %v", err)
+	}
+
+	idx := strings.IndexByte(string(data), '\n')
+	if idx < 0 {
+		t.Fatal("no newline in captured stdin")
+	}
+
+	var req maildeliver.DeliverRequest
+	if err := json.Unmarshal(data[:idx], &req); err != nil {
+		t.Fatalf("JSON decode: %v", err)
+	}
+	if req.SpamScore != 8.3 {
+		t.Errorf("SpamScore = %f, want 8.3", req.SpamScore)
+	}
+	if req.SpamAction != "flag" {
+		t.Errorf("SpamAction = %q, want %q", req.SpamAction, "flag")
+	}
+	if req.SpamChecker != "rspamd" {
+		t.Errorf("SpamChecker = %q, want %q", req.SpamChecker, "rspamd")
 	}
 }
 

@@ -65,6 +65,12 @@ func (a *ExecDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envel
 	// See: infodancer/infodancer/docs/encryption-design.md
 	// ─────────────────────────────────────────────────────────────────────────
 
+	if envelope.SpamResult != nil {
+		req.SpamScore = envelope.SpamResult.Score
+		req.SpamAction = envelope.SpamResult.Action
+		req.SpamChecker = envelope.SpamResult.Checker
+	}
+
 	jsonBytes, err := json.Marshal(req)
 	if err != nil {
 		return fmt.Errorf("mail-deliver: marshalling envelope: %w", err)

@@ -174,8 +174,9 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 	var srcUIDs, destUIDs imap.UIDSet
 
 	srcFolder := s.selectedMailbox
-	isJunkSrc := strings.EqualFold(srcFolder, "Junk")
-	isJunkDest := strings.EqualFold(dest, "Junk")
+	junkFolder := s.junkFolderName()
+	isJunkSrc := strings.EqualFold(srcFolder, junkFolder)
+	isJunkDest := strings.EqualFold(dest, junkFolder)
 
 	for _, idx := range indices {
 		if idx < 0 || idx >= len(s.messages) {
@@ -274,6 +275,14 @@ func (s *Session) triggerLearn(ctx context.Context, srcFolder, uid string, toJun
 		s.logger.Debug("spam learn: trained",
 			"uid", uid, "direction", learnDirection(toJunk), "user", s.username)
 	}
+}
+
+// junkFolderName returns the configured Junk folder name, defaulting to "Junk".
+func (s *Session) junkFolderName() string {
+	if s.cfg != nil && s.cfg.Rspamd.JunkFolder != "" {
+		return s.cfg.Rspamd.JunkFolder
+	}
+	return "Junk"
 }
 
 func learnDirection(toJunk bool) string {

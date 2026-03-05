@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// spamLearner calls rspamd's learn_spam/learn_ham HTTP endpoints.
+// spamLearner calls rspamd's learnspam/learnham HTTP controller endpoints.
 type spamLearner struct {
 	baseURL    string
 	password   string
@@ -29,12 +29,12 @@ func newSpamLearner(baseURL, password string) *spamLearner {
 
 // learnSpam trains rspamd that this message is spam for the given user.
 func (l *spamLearner) learnSpam(ctx context.Context, user string, message io.Reader) error {
-	return l.learn(ctx, "learn_spam", user, message)
+	return l.learn(ctx, "learnspam", user, message)
 }
 
 // learnHam trains rspamd that this message is ham for the given user.
 func (l *spamLearner) learnHam(ctx context.Context, user string, message io.Reader) error {
-	return l.learn(ctx, "learn_ham", user, message)
+	return l.learn(ctx, "learnham", user, message)
 }
 
 func (l *spamLearner) learn(ctx context.Context, endpoint, user string, message io.Reader) error {

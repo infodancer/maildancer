@@ -32,8 +32,8 @@ func TestSpamLearner_LearnSpam(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if gotEndpoint != "/learn_spam" {
-		t.Errorf("endpoint = %q, want /learn_spam", gotEndpoint)
+	if gotEndpoint != "/learnspam" {
+		t.Errorf("endpoint = %q, want /learnspam", gotEndpoint)
 	}
 	if gotUser != "user@example.com" {
 		t.Errorf("user = %q, want user@example.com", gotUser)
@@ -63,8 +63,8 @@ func TestSpamLearner_LearnHam(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if gotEndpoint != "/learn_ham" {
-		t.Errorf("endpoint = %q, want /learn_ham", gotEndpoint)
+	if gotEndpoint != "/learnham" {
+		t.Errorf("endpoint = %q, want /learnham", gotEndpoint)
 	}
 }
 

@@ -202,6 +202,22 @@ func mergeConfig(dst, src Config) Config {
 		dst.DomainsPath = src.DomainsPath
 	}
 
+	if src.DomainsDataPath != "" {
+		dst.DomainsDataPath = src.DomainsDataPath
+	}
+
+	if src.MailSessionCmd != "" {
+		dst.MailSessionCmd = src.MailSessionCmd
+	}
+
+	if src.Rspamd.Controller != "" {
+		dst.Rspamd.Controller = src.Rspamd.Controller
+	}
+
+	if src.Rspamd.JunkFolder != "" {
+		dst.Rspamd.JunkFolder = src.Rspamd.JunkFolder
+	}
+
 	// Merge auth config
 	if src.Auth.Type != "" {
 		dst.Auth.Type = src.Auth.Type

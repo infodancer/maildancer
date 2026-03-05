@@ -446,6 +446,42 @@ func TestTimeoutHelpers(t *testing.T) {
 }
 
 // TestAuthConfigIsConfigured verifies the IsConfigured helper.
+func TestMergeConfigDomainsDataPathAndRspamd(t *testing.T) {
+	const tomlContent = `
+[imapd]
+hostname = "mail.example.com"
+domains_path = "/etc/domains"
+domains_data_path = "/opt/domains"
+mail_session = "/usr/bin/mail-session"
+
+[imapd.rspamd]
+controller = "http://rspamd:11334"
+junk_folder = "Junk"
+
+[[imapd.listeners]]
+address = ":143"
+mode = "imap"
+`
+	path := writeTempTOML(t, tomlContent)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.DomainsDataPath != "/opt/domains" {
+		t.Errorf("domains_data_path = %q, want %q", cfg.DomainsDataPath, "/opt/domains")
+	}
+	if cfg.MailSessionCmd != "/usr/bin/mail-session" {
+		t.Errorf("mail_session = %q, want %q", cfg.MailSessionCmd, "/usr/bin/mail-session")
+	}
+	if cfg.Rspamd.Controller != "http://rspamd:11334" {
+		t.Errorf("rspamd.controller = %q, want %q", cfg.Rspamd.Controller, "http://rspamd:11334")
+	}
+	if cfg.Rspamd.JunkFolder != "Junk" {
+		t.Errorf("rspamd.junk_folder = %q, want %q", cfg.Rspamd.JunkFolder, "Junk")
+	}
+}
+
 func TestAuthConfigIsConfigured(t *testing.T) {
 	a := AuthConfig{}
 	if a.IsConfigured() {

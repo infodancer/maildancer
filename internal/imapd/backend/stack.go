@@ -85,7 +85,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 			},
 		})
 		s.closers = append(s.closers, domainProvider)
-		logger.Info("domain provider enabled", "path", cfg.Config.DomainsPath)
+		logger.Info("domain provider enabled", "path", cfg.Config.DomainsPath, "data_path", cfg.Config.DomainsDataPath)
 	}
 
 	// Create auth router (centralizes domain-aware auth routing).

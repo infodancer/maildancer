@@ -71,4 +71,22 @@ type Envelope struct {
 	// nil indicates plaintext (unencrypted) message.
 	// Note: smtpd encrypts before delivery, msgstore only stores the blob.
 	Encryption *EncryptionInfo
+
+	// SpamResult contains the spam check result from the upstream checker.
+	// nil indicates no spam check was performed (e.g., authenticated submission).
+	// This is envelope metadata — the message body is never modified.
+	SpamResult *SpamResult
+}
+
+// SpamResult carries the outcome of a spam check as envelope metadata.
+// The delivery agent uses this to route flagged messages (e.g., to a Junk folder).
+type SpamResult struct {
+	// Score is the spam score from the checker (higher = more likely spam).
+	Score float64
+
+	// Action is the recommended action: "accept", "flag", "reject", "tempfail".
+	Action string
+
+	// Checker identifies which spam checker produced this result (e.g., "rspamd").
+	Checker string
 }

@@ -124,9 +124,30 @@ func (s *MaildirStore) ensureMaildir(mailbox string) (maildir.Dir, error) {
 		if err := dir.Init(); err != nil {
 			return "", err
 		}
+		// Create default folders for newly provisioned mailboxes.
+		if err := s.EnsureDefaultFolders(context.Background(), mailbox); err != nil {
+			slog.Warn("failed to create default folders",
+				slog.String("mailbox", mailbox),
+				slog.String("error", err.Error()),
+			)
+		}
 	}
 
 	return dir, nil
+}
+
+// EnsureDefaultFolders creates all default folders for a mailbox.
+// Folders that already exist are silently skipped. Safe to call repeatedly.
+func (s *MaildirStore) EnsureDefaultFolders(ctx context.Context, mailbox string) error {
+	for _, spec := range msgstore.DefaultFolders {
+		if err := s.CreateFolder(ctx, mailbox, spec.Name); err != nil {
+			if err == errors.ErrFolderExists {
+				continue
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 // --- Common helpers ---

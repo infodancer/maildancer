@@ -109,6 +109,55 @@ type FolderStore interface {
 	UIDValidity(ctx context.Context, mailbox string, folder string) (uint32, error)
 }
 
+// FolderSpec defines a default folder with an optional IMAP SPECIAL-USE attribute (RFC 6154).
+type FolderSpec struct {
+	// Name is the folder name (e.g., "Junk", "Sent").
+	Name string
+
+	// SpecialUse is the IMAP SPECIAL-USE attribute (e.g., "\\Junk").
+	// Empty if the folder has no RFC 6154 attribute.
+	SpecialUse string
+}
+
+// DefaultFolders lists the folders that should be created for every new mailbox.
+// Folders with SpecialUse attributes are discoverable by IMAP clients via LIST.
+var DefaultFolders = []FolderSpec{
+	{Name: "Junk", SpecialUse: "\\Junk"},
+	{Name: "Trash", SpecialUse: "\\Trash"},
+	{Name: "Sent", SpecialUse: "\\Sent"},
+	{Name: "Drafts", SpecialUse: "\\Drafts"},
+	{Name: "List", SpecialUse: ""},
+	{Name: "Bulk", SpecialUse: ""},
+}
+
+// FolderAliases maps well-known synonyms to canonical folder names.
+// Used by IMAP backends to normalize client-hardcoded folder names
+// (e.g., "Spam" → "Junk") so only one physical folder exists.
+var FolderAliases = map[string]string{
+	"Spam": "Junk",
+}
+
+// ResolveFolder returns the canonical folder name for a given name.
+// If the name is a known alias, the canonical name is returned.
+// Otherwise the original name is returned unchanged.
+func ResolveFolder(name string) string {
+	if canonical, ok := FolderAliases[name]; ok {
+		return canonical
+	}
+	return name
+}
+
+// SpecialUseFor returns the IMAP SPECIAL-USE attribute for the given folder name.
+// Returns an empty string if the folder has no SPECIAL-USE attribute.
+func SpecialUseFor(folderName string) string {
+	for _, f := range DefaultFolders {
+		if f.Name == folderName {
+			return f.SpecialUse
+		}
+	}
+	return ""
+}
+
 // DecryptingStore wraps MessageStore to provide transparent decryption.
 // Used by pop3d to decrypt messages during an authenticated session.
 // The session key must be set after successful authentication.

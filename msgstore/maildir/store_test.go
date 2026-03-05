@@ -540,10 +540,10 @@ func TestMaildirStore_MaildirSubdir(t *testing.T) {
 
 func TestSplitEmail(t *testing.T) {
 	tests := []struct {
-		name           string
-		email          string
-		wantLocalpart  string
-		wantDomain     string
+		name          string
+		email         string
+		wantLocalpart string
+		wantDomain    string
 	}{
 		{
 			name:          "standard email",
@@ -841,11 +841,12 @@ func TestMaildirStore_ListFolders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListFolders failed: %v", err)
 	}
-	if len(folders) != 3 {
-		t.Fatalf("expected 3 folders, got %d: %v", len(folders), folders)
+	// 6 default folders + 3 custom folders = 9
+	if len(folders) != 9 {
+		t.Fatalf("expected 9 folders, got %d: %v", len(folders), folders)
 	}
 
-	// Check all folders present (order may vary)
+	// Check all custom folders present (order may vary)
 	found := make(map[string]bool)
 	for _, f := range folders {
 		found[f] = true
@@ -875,8 +876,9 @@ func TestMaildirStore_ListFoldersEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListFolders failed: %v", err)
 	}
-	if len(folders) != 0 {
-		t.Fatalf("expected 0 folders, got %d", len(folders))
+	// Default folders are auto-created with the mailbox
+	if len(folders) != len(msgstore.DefaultFolders) {
+		t.Fatalf("expected %d default folders, got %d: %v", len(msgstore.DefaultFolders), len(folders), folders)
 	}
 }
 
@@ -1620,3 +1622,109 @@ func TestValidateFolderName(t *testing.T) {
 	}
 }
 
+func TestEnsureDefaultFolders(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	// Create the mailbox first (ensureMaildir without triggering default folders
+	// by creating the INBOX structure manually).
+	mboxPath := filepath.Join(basePath, "user")
+	dir := maildir.Dir(mboxPath)
+	if err := os.MkdirAll(mboxPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Call EnsureDefaultFolders
+	if err := store.EnsureDefaultFolders(ctx, "user"); err != nil {
+		t.Fatalf("EnsureDefaultFolders failed: %v", err)
+	}
+
+	// Verify all default folders were created
+	folders, err := store.ListFolders(ctx, "user")
+	if err != nil {
+		t.Fatalf("ListFolders failed: %v", err)
+	}
+
+	expected := map[string]bool{
+		"Junk": false, "Trash": false, "Sent": false,
+		"Drafts": false, "List": false, "Bulk": false,
+	}
+	for _, f := range folders {
+		if _, ok := expected[f]; ok {
+			expected[f] = true
+		}
+	}
+	for name, found := range expected {
+		if !found {
+			t.Errorf("default folder %q was not created", name)
+		}
+	}
+}
+
+func TestEnsureDefaultFolders_Idempotent(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	// Create INBOX manually
+	mboxPath := filepath.Join(basePath, "user")
+	dir := maildir.Dir(mboxPath)
+	if err := os.MkdirAll(mboxPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := dir.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Call twice — second call should succeed without error
+	if err := store.EnsureDefaultFolders(ctx, "user"); err != nil {
+		t.Fatalf("first EnsureDefaultFolders failed: %v", err)
+	}
+	if err := store.EnsureDefaultFolders(ctx, "user"); err != nil {
+		t.Fatalf("second EnsureDefaultFolders failed: %v", err)
+	}
+
+	// Verify no duplicate folders
+	folders, err := store.ListFolders(ctx, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	for _, f := range folders {
+		if seen[f] {
+			t.Errorf("duplicate folder: %s", f)
+		}
+		seen[f] = true
+	}
+}
+
+func TestEnsureMaildir_CreatesDefaultFolders(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	// ensureMaildir on a new mailbox should create INBOX + default folders
+	if _, err := store.ensureMaildir("newuser"); err != nil {
+		t.Fatalf("ensureMaildir failed: %v", err)
+	}
+
+	folders, err := store.ListFolders(ctx, "newuser")
+	if err != nil {
+		t.Fatalf("ListFolders failed: %v", err)
+	}
+
+	expected := []string{"Junk", "Trash", "Sent", "Drafts", "List", "Bulk"}
+	found := make(map[string]bool)
+	for _, f := range folders {
+		found[f] = true
+	}
+	for _, name := range expected {
+		if !found[name] {
+			t.Errorf("ensureMaildir did not create default folder %q", name)
+		}
+	}
+}

@@ -21,6 +21,7 @@ import (
 	"github.com/infodancer/maildancer/internal/imapd/logging"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 	"github.com/infodancer/maildancer/msgstore"
+	storeerrors "github.com/infodancer/maildancer/msgstore/errors"
 )
 
 // Session implements imapserver.Session backed by the msgstore interface.
@@ -104,9 +105,26 @@ func (s *Session) Login(username, password string) error {
 		s.folderStore, _ = result.Domain.MessageStore.(msgstore.FolderStore)
 	}
 
+	// Ensure default folders exist (idempotent).
+	if s.folderStore != nil {
+		s.ensureDefaultFolders()
+	}
+
 	s.collector.AuthAttempt(s.userDomain, true)
 	s.logger.Info("login success", "username", username)
 	return nil
+}
+
+// ensureDefaultFolders creates all default IMAP folders if they don't exist.
+func (s *Session) ensureDefaultFolders() {
+	ctx := context.Background()
+	for _, spec := range msgstore.DefaultFolders {
+		if err := s.folderStore.CreateFolder(ctx, s.mailbox, spec.Name); err != nil {
+			if err != storeerrors.ErrFolderExists {
+				s.logger.Warn("default folder creation failed", "folder", spec.Name, "error", err)
+			}
+		}
+	}
 }
 
 // Poll checks for mailbox updates.

@@ -152,7 +152,8 @@ type mover interface {
 //
 // If the underlying store is a SubprocessStore (i.e. mail-session is in use),
 // the MOVE is handled atomically there — including rspamd Junk-folder learning.
-// Otherwise we fall back to Copy + mark-\Deleted + Expunge.
+// Otherwise we fall back to Copy + mark-\Deleted + Expunge, with direct
+// rspamd learning when a spamLearner is configured.
 func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string) error {
 	if s.folderStore == nil {
 		return &imap.Error{Type: imap.StatusResponseTypeNo, Text: "Move not supported"}
@@ -172,6 +173,10 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 
 	var srcUIDs, destUIDs imap.UIDSet
 
+	srcFolder := s.selectedMailbox
+	isJunkSrc := strings.EqualFold(srcFolder, "Junk")
+	isJunkDest := strings.EqualFold(dest, "Junk")
+
 	for _, idx := range indices {
 		if idx < 0 || idx >= len(s.messages) {
 			continue
@@ -180,14 +185,21 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 		srcUID := imap.UID(idx + 1)
 
 		if hasMover {
-			if _, err := mv.MoveMessage(ctx, s.mailbox, s.selectedMailbox, info.UID, dest); err != nil {
+			// SubprocessStore handles MOVE atomically, including rspamd learning.
+			if _, err := mv.MoveMessage(ctx, s.mailbox, srcFolder, info.UID, dest); err != nil {
 				return err
 			}
 		} else {
-			if _, err := s.folderStore.CopyMessage(ctx, s.mailbox, s.selectedMailbox, info.UID, dest); err != nil {
+			// Fallback: Copy + Delete. Trigger direct rspamd learn when
+			// crossing the Junk boundary and a learner is configured.
+			if s.learner != nil && (isJunkSrc || isJunkDest) && isJunkSrc != isJunkDest {
+				s.triggerLearn(ctx, srcFolder, info.UID, isJunkDest)
+			}
+
+			if _, err := s.folderStore.CopyMessage(ctx, s.mailbox, srcFolder, info.UID, dest); err != nil {
 				return err
 			}
-			if err := s.deleteMessage(ctx, s.selectedMailbox, info.UID); err != nil {
+			if err := s.deleteMessage(ctx, srcFolder, info.UID); err != nil {
 				return err
 			}
 		}
@@ -199,7 +211,7 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 
 	// Fallback path needs an explicit expunge; mover already expunged atomically.
 	if !hasMover && len(indices) > 0 {
-		if err := s.expungeMailbox(ctx, s.selectedMailbox); err != nil {
+		if err := s.expungeMailbox(ctx, srcFolder); err != nil {
 			return err
 		}
 	}
@@ -229,11 +241,44 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 		s.collector.MessageExpunged(s.userDomain)
 	}
 
-	msgs, err := s.listMessages(ctx, s.selectedMailbox)
+	msgs, err := s.listMessages(ctx, srcFolder)
 	if err != nil {
 		return err
 	}
 	s.messages = msgs
 
 	return nil
+}
+
+// triggerLearn reads a message from the source folder and sends it to rspamd
+// for Bayes training. Errors are logged but do not fail the MOVE operation.
+func (s *Session) triggerLearn(ctx context.Context, srcFolder, uid string, toJunk bool) {
+	rc, err := s.folderStore.RetrieveFromFolder(ctx, s.mailbox, srcFolder, uid)
+	if err != nil {
+		s.logger.Warn("spam learn: failed to retrieve message",
+			"uid", uid, "folder", srcFolder, "error", err)
+		return
+	}
+	defer func() { _ = rc.Close() }()
+
+	var learnErr error
+	if toJunk {
+		learnErr = s.learner.learnSpam(ctx, s.username, rc)
+	} else {
+		learnErr = s.learner.learnHam(ctx, s.username, rc)
+	}
+	if learnErr != nil {
+		s.logger.Warn("spam learn: rspamd call failed",
+			"uid", uid, "direction", learnDirection(toJunk), "error", learnErr)
+	} else {
+		s.logger.Debug("spam learn: trained",
+			"uid", uid, "direction", learnDirection(toJunk), "user", s.username)
+	}
+}
+
+func learnDirection(toJunk bool) string {
+	if toJunk {
+		return "spam"
+	}
+	return "ham"
 }

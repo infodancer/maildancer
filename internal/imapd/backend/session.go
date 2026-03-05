@@ -37,6 +37,9 @@ type Session struct {
 	collector  metrics.Collector
 	logger     *slog.Logger
 
+	// Spam learning (nil when disabled)
+	learner *spamLearner
+
 	// Selected state
 	selectedMailbox string
 	messages        []msgstore.MessageInfo
@@ -51,12 +54,18 @@ func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.Au
 	if store != nil {
 		folderStore, _ = store.(msgstore.FolderStore)
 	}
+	var learner *spamLearner
+	if cfg.Rspamd.Controller != "" {
+		learner = newSpamLearner(cfg.Rspamd.Controller, "")
+	}
+
 	return &Session{
 		conn:        conn,
 		cfg:         cfg,
 		authRouter:  authRouter,
 		store:       store,
 		folderStore: folderStore,
+		learner:     learner,
 		collector:   collector,
 		logger:      logging.WithConnection(logger, conn.NetConn().RemoteAddr().String()),
 	}

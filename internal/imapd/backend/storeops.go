@@ -101,17 +101,24 @@ func (s *Session) Store(w *imapserver.FetchWriter, numSet imap.NumSet, flags *im
 }
 
 // Copy copies messages to another mailbox.
+// When copying across the Junk boundary and a learner is configured,
+// spam/ham learning is triggered (clients that use COPY+DELETE instead of MOVE).
 func (s *Session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) {
 	if s.folderStore == nil {
 		return nil, &imap.Error{Type: imap.StatusResponseTypeNo, Text: "Copy not supported"}
 	}
-	if !isValidMailboxName(dest) {
+	if !strings.EqualFold(dest, "INBOX") && !isValidMailboxName(dest) {
 		return nil, &imap.Error{Type: imap.StatusResponseTypeNo, Text: "Invalid mailbox name"}
 	}
 
 	ctx := context.Background()
 	destMsgs, _ := s.listMessages(ctx, dest)
 	nextDestUID := imap.UID(len(destMsgs) + 1)
+
+	srcFolder := s.selectedMailbox
+	junkFolder := s.junkFolderName()
+	isJunkSrc := strings.EqualFold(srcFolder, junkFolder)
+	isJunkDest := strings.EqualFold(dest, junkFolder)
 
 	indices := s.resolveNumSet(numSet)
 	var srcUIDs imap.UIDSet
@@ -123,6 +130,10 @@ func (s *Session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) 
 		}
 		info := s.messages[idx]
 		srcUID := imap.UID(idx + 1)
+
+		if s.learner != nil && (isJunkSrc || isJunkDest) && isJunkSrc != isJunkDest {
+			s.triggerLearn(ctx, srcFolder, info.UID, isJunkDest)
+		}
 
 		if _, err := s.folderStore.CopyMessage(ctx, s.mailbox, s.selectedMailbox, info.UID, dest); err != nil {
 			return nil, err

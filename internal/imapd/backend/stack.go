@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
@@ -111,16 +112,20 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 
 	// Create IMAP server.
-	srv := imapserver.New(&imapserver.Options{
+	opts := &imapserver.Options{
 		NewSession: func(conn *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
 			collector.ConnectionOpened()
 			session := NewSession(conn, &cfg.Config, authRouter, store, collector, logger)
 			return session, &imapserver.GreetingData{}, nil
 		},
-		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}},
+		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapMove: {}},
 		TLSConfig:    cfg.TLSConfig,
 		InsecureAuth: cfg.TLSConfig == nil,
-	})
+	}
+	if cfg.Config.LogLevel == "debug" {
+		opts.DebugWriter = os.Stderr
+	}
+	srv := imapserver.New(opts)
 	s.srv = srv
 
 	// Create listeners for each configured address.

@@ -6,7 +6,7 @@ require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-message v0.18.2
 	github.com/infodancer/maildancer/auth v0.1.11
-	github.com/infodancer/maildancer/msgstore v0.2.2
+	github.com/infodancer/maildancer/msgstore v0.2.3
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.48.0

@@ -126,7 +126,9 @@ task hooks:install  # Install git hooks
 
 ## Versioning
 
-`mail-deliver` and `mail-session` use **synchronized versioning** — both repos
-must always be at the same version tag.
+All infodancer repos follow a unified versioning policy defined in
+[infodancer/infodancer CLAUDE.md](https://github.com/infodancer/infodancer/blob/main/CLAUDE.md).
 
-**Version scheme**: `v0.0.x` during pre-release development.
+- Only the patch version (`x` in `v0.N.x`) is auto-incremented when tagging.
+- Never bump the minor version (`N`) without explicit human approval.
+- All repos stay at `v0.x.y` (pre-1.0) until production-ready.

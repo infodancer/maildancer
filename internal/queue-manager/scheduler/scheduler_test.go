@@ -216,6 +216,169 @@ func TestProcessDomainDir_SkipsNotReady(t *testing.T) {
 	}
 }
 
+// --- parseTTL ---
+
+func TestParseTTL_Valid(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "test.env")
+	ttl := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+	content := "TTL " + ttl.Format(time.RFC3339) + "\nSENDER x@y.com\nRECIPIENT a@b.com\nMSGID abc123\n"
+	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := parseTTL(envPath)
+	if err != nil {
+		t.Fatalf("parseTTL: %v", err)
+	}
+	if !got.Equal(ttl) {
+		t.Errorf("parseTTL = %v, want %v", got, ttl)
+	}
+}
+
+func TestParseTTL_Missing(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "test.env")
+	if err := os.WriteFile(envPath, []byte("SENDER x@y.com\nRECIPIENT a@b.com\nMSGID abc123\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := parseTTL(envPath)
+	if err != nil {
+		t.Fatalf("parseTTL: %v", err)
+	}
+	if !got.IsZero() {
+		t.Errorf("expected zero time for missing TTL, got %v", got)
+	}
+}
+
+func TestParseTTL_Invalid(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "test.env")
+	if err := os.WriteFile(envPath, []byte("TTL not-a-date\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := parseTTL(envPath)
+	if err == nil {
+		t.Error("expected error for invalid TTL")
+	}
+}
+
+// --- expired envelope cleanup ---
+
+func TestProcessDomainDir_ExpiredEnvelopesDeleted(t *testing.T) {
+	fakeBin := buildFakeMailRemote(t)
+	dir := t.TempDir()
+	msgid := "expired1234"
+
+	// Body file.
+	bodyDir := filepath.Join(dir, "msg", "com", "example")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Expired envelope (TTL in the past).
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	expiredTTL := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	envContent := "TTL " + expiredTTL + "\nSENDER bounce@example.com\nRECIPIENT alice@gmail.com\nMSGID " + msgid + "\n"
+	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Age the mtime so isReady is also true.
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	recordFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
+
+	s := New(Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	// mail-remote should have been invoked (final attempt).
+	if _, err := os.Stat(recordFile); os.IsNotExist(err) {
+		t.Error("expected mail-remote to be invoked for final delivery attempt")
+	}
+
+	// Envelope should be deleted after final attempt.
+	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
+		t.Error("expected expired envelope to be deleted after final attempt")
+	}
+}
+
+// --- orphan body cleanup ---
+
+func TestCleanOrphanBodies(t *testing.T) {
+	dir := t.TempDir()
+	msgid := "orphan5678"
+
+	// Body file with no envelopes.
+	bodyDir := filepath.Join(dir, "msg", "com", "example")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	bodyPath := filepath.Join(bodyDir, msgid)
+	if err := os.WriteFile(bodyPath, []byte("orphan body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty env dir (no envelopes).
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
+	s.cleanOrphanBodies(envDir)
+
+	if _, err := os.Stat(bodyPath); !os.IsNotExist(err) {
+		t.Error("expected orphan body to be deleted")
+	}
+}
+
+func TestCleanOrphanBodies_PreservesActive(t *testing.T) {
+	dir := t.TempDir()
+	msgid := "active9876"
+
+	// Body file.
+	bodyDir := filepath.Join(dir, "msg", "com", "example")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	bodyPath := filepath.Join(bodyDir, msgid)
+	if err := os.WriteFile(bodyPath, []byte("active body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Envelope still exists.
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte("MSGID "+msgid+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
+	s.cleanOrphanBodies(envDir)
+
+	if _, err := os.Stat(bodyPath); os.IsNotExist(err) {
+		t.Error("active body should NOT be deleted")
+	}
+}
+
 // --- RunOnce (empty queue) ---
 
 func TestRunOnce_EmptyQueue(t *testing.T) {

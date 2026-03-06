@@ -90,12 +90,18 @@ func run() int {
 			if removeErr := os.Remove(path); removeErr != nil {
 				slog.Warn("could not remove delivered envelope", "path", path, "error", removeErr)
 			}
+			continue
+		}
+
+		if smtp.IsPermanent(err) {
+			slog.Error("permanent delivery failure", "envelope", path, "error", err)
+			permFail = true
+			if removeErr := os.Remove(path); removeErr != nil {
+				slog.Warn("could not remove rejected envelope", "path", path, "error", removeErr)
+			}
 		} else {
-			// All errors are treated as temporary for now. Permanent vs temporary
-			// distinction (based on SMTP reply codes) will be added with DNS delivery.
-			slog.Error("delivery failed", "envelope", path, "error", err)
+			slog.Error("temporary delivery failure", "envelope", path, "error", err)
 			tempFail = true
-			_ = permFail
 			// Touch mtime to update the backoff clock.
 			now := time.Now()
 			if touchErr := os.Chtimes(path, now, now); touchErr != nil {
@@ -104,8 +110,12 @@ func run() int {
 		}
 	}
 
-	if tempFail {
+	switch {
+	case permFail && !tempFail:
+		return exUnavailable
+	case tempFail:
 		return exTempFail
+	default:
+		return exOK
 	}
-	return exOK
 }

@@ -3,6 +3,7 @@ package smtp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
@@ -10,6 +11,34 @@ import (
 	gosmtp "github.com/emersion/go-smtp"
 	"github.com/infodancer/maildancer/internal/mail-remote/envelope"
 )
+
+// PermanentError wraps an error that indicates a permanent delivery failure
+// (SMTP 5xx). The envelope should be deleted; retrying will not help.
+type PermanentError struct {
+	Err error
+}
+
+func (e *PermanentError) Error() string { return e.Err.Error() }
+func (e *PermanentError) Unwrap() error { return e.Err }
+
+// IsPermanent reports whether err indicates a permanent delivery failure.
+func IsPermanent(err error) bool {
+	var pe *PermanentError
+	return errors.As(err, &pe)
+}
+
+// classifyError wraps SMTP 5xx errors as PermanentError. All other errors
+// (4xx, dial failures, I/O errors) are returned unchanged (temporary).
+func classifyError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var smtpErr *gosmtp.SMTPError
+	if errors.As(err, &smtpErr) && smtpErr.Code >= 500 {
+		return &PermanentError{Err: err}
+	}
+	return err
+}
 
 // Smarthost holds configuration for relaying via a fixed SMTP smarthost.
 type Smarthost struct {
@@ -53,7 +82,7 @@ func DeliverViaSmarthost(_ context.Context, sh Smarthost, bodyPath string, envs 
 		}
 		return results
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if sh.Username != "" {
 		auth := sasl.NewPlainClient("", sh.Username, sh.Password)
@@ -77,10 +106,10 @@ func deliver(c *gosmtp.Client, bodyPath string, env *envelope.Envelope) error {
 	if err != nil {
 		return fmt.Errorf("open body %s: %w", bodyPath, err)
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	if err := c.SendMail(env.Sender, []string{env.Recipient}, body); err != nil {
-		return fmt.Errorf("smtp send to %s: %w", env.Recipient, err)
+		return classifyError(fmt.Errorf("smtp send to %s: %w", env.Recipient, err))
 	}
 	return nil
 }

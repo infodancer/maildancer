@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -35,6 +36,11 @@ func (s *testSession) Mail(from string, _ *gosmtp.MailOptions) error {
 }
 
 func (s *testSession) Rcpt(to string, _ *gosmtp.RcptOptions) error {
+	if s.be.rejectRcpt != nil {
+		if err := s.be.rejectRcpt(to); err != nil {
+			return err
+		}
+	}
 	s.rcpts = append(s.rcpts, to)
 	return nil
 }
@@ -64,6 +70,8 @@ func (s *testSession) Logout() error { return nil }
 type testBackend struct {
 	mu         sync.Mutex
 	deliveries []delivery
+	// rejectRcpt is called for each RCPT TO; return non-nil to reject.
+	rejectRcpt func(to string) error
 }
 
 func (b *testBackend) NewSession(_ *gosmtp.Conn) (gosmtp.Session, error) {
@@ -86,8 +94,8 @@ func startTestServer(t *testing.T) (addr string, be *testBackend, stop func()) {
 	go srv.Serve(ln) //nolint:errcheck
 
 	stop = func() {
-		srv.Close()
-		ln.Close()
+		_ = srv.Close()
+		_ = ln.Close()
 	}
 	return ln.Addr().String(), be, stop
 }
@@ -238,5 +246,121 @@ func TestDeliverViaSmarthost_MissingBody(t *testing.T) {
 	results := DeliverViaSmarthost(context.Background(), sh, "/nonexistent/body", []*envelope.Envelope{env})
 	if results[env.Path] == nil {
 		t.Error("expected error for missing body file, got nil")
+	}
+}
+
+func TestDeliverViaSmarthost_PermanentFailure(t *testing.T) {
+	addr, be, stop := startTestServer(t)
+	defer stop()
+	overrideDialFunc(t)
+
+	// Reject all recipients with 550.
+	be.rejectRcpt = func(_ string) error {
+		return &gosmtp.SMTPError{
+			Code:    550,
+			Message: "User unknown",
+		}
+	}
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("Subject: test\r\n\r\nHello\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	env := makeEnvFile(t, dir, "nobody@abc123.0",
+		"bounces+nobody=example.com@origin.example.com",
+		"nobody@example.com",
+		"abc123@example.com",
+	)
+
+	sh := Smarthost{Addr: addr}
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env})
+
+	err := results[env.Path]
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !IsPermanent(err) {
+		t.Errorf("expected PermanentError for 550, got: %v", err)
+	}
+}
+
+func TestDeliverViaSmarthost_TemporaryFailure(t *testing.T) {
+	addr, be, stop := startTestServer(t)
+	defer stop()
+	overrideDialFunc(t)
+
+	// Reject all recipients with 451 (temporary).
+	be.rejectRcpt = func(_ string) error {
+		return &gosmtp.SMTPError{
+			Code:    451,
+			Message: "Try again later",
+		}
+	}
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("Subject: test\r\n\r\nHello\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	env := makeEnvFile(t, dir, "alice@abc123.0",
+		"bounces+alice=example.com@origin.example.com",
+		"alice@example.com",
+		"abc123@example.com",
+	)
+
+	sh := Smarthost{Addr: addr}
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env})
+
+	err := results[env.Path]
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if IsPermanent(err) {
+		t.Errorf("expected temporary error for 451, got permanent: %v", err)
+	}
+}
+
+func TestDeliverViaSmarthost_DialFailureIsTemporary(t *testing.T) {
+	overrideDialFunc(t)
+	sh := Smarthost{Addr: "127.0.0.1:1"}
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := makeEnvFile(t, dir, "alice@abc123.0",
+		"bounces+alice=example.com@origin.example.com",
+		"alice@example.com",
+		"abc123@example.com",
+	)
+
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env})
+	err := results[env.Path]
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if IsPermanent(err) {
+		t.Errorf("dial failure should be temporary, got permanent: %v", err)
+	}
+}
+
+func TestIsPermanent(t *testing.T) {
+	if IsPermanent(nil) {
+		t.Error("nil should not be permanent")
+	}
+	if IsPermanent(fmt.Errorf("some error")) {
+		t.Error("plain error should not be permanent")
+	}
+	if !IsPermanent(&PermanentError{Err: fmt.Errorf("550 rejected")}) {
+		t.Error("PermanentError should be permanent")
+	}
+	// Wrapped PermanentError
+	wrapped := fmt.Errorf("delivery: %w", &PermanentError{Err: fmt.Errorf("550")})
+	if !IsPermanent(wrapped) {
+		t.Error("wrapped PermanentError should be permanent")
 	}
 }

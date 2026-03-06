@@ -61,6 +61,7 @@ func TestTriggerLearn_ToJunk_LearnSpam(t *testing.T) {
 	defer rspamd.close()
 
 	s := &Session{
+		store:       store,
 		folderStore: store,
 		mailbox:     "testuser@example.com",
 		username:    "testuser@example.com",
@@ -95,6 +96,7 @@ func TestTriggerLearn_FromJunk_LearnHam(t *testing.T) {
 	defer rspamd.close()
 
 	s := &Session{
+		store:       store,
 		folderStore: store,
 		mailbox:     "testuser@example.com",
 		username:    "testuser@example.com",
@@ -128,6 +130,7 @@ func TestTriggerLearn_RspamdError_DoesNotPanic(t *testing.T) {
 	defer srv.Close()
 
 	s := &Session{
+		store:       store,
 		folderStore: store,
 		mailbox:     "testuser@example.com",
 		username:    "testuser@example.com",
@@ -147,6 +150,7 @@ func TestTriggerLearn_MissingMessage_DoesNotPanic(t *testing.T) {
 	defer rspamd.close()
 
 	s := &Session{
+		store:       store,
 		folderStore: store,
 		mailbox:     "testuser@example.com",
 		username:    "testuser@example.com",

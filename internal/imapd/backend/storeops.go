@@ -265,7 +265,7 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 // triggerLearn reads a message from the source folder and sends it to rspamd
 // for Bayes training. Errors are logged but do not fail the MOVE operation.
 func (s *Session) triggerLearn(ctx context.Context, srcFolder, uid string, toJunk bool) {
-	rc, err := s.folderStore.RetrieveFromFolder(ctx, s.mailbox, srcFolder, uid)
+	rc, err := s.retrieveMessage(ctx, srcFolder, uid)
 	if err != nil {
 		s.logger.Warn("spam learn: failed to retrieve message",
 			"uid", uid, "folder", srcFolder, "error", err)

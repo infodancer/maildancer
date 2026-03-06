@@ -135,6 +135,19 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 	if queueCfg.Dir != "" {
 		logger.Info("queue injection enabled", "dir", queueCfg.Dir)
+
+		// Wire DKIM signing via lazy domain lookup. The domain provider
+		// loads domains on demand, so we avoid forcing eager loading here.
+		if domainProvider != nil {
+			dp := domainProvider
+			queueCfg.DKIMSign = func(senderDomain string, msg io.Reader) (io.Reader, error) {
+				dom := dp.GetDomain(senderDomain)
+				if dom == nil || dom.DKIMKey == nil {
+					return msg, nil
+				}
+				return queue.SignDKIM(senderDomain, dom.DKIMSelector, dom.DKIMKey, msg)
+			}
+		}
 	}
 
 	backend := NewBackend(BackendConfig{

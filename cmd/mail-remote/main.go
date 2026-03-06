@@ -10,6 +10,7 @@
 //
 //	--smarthost host:port  Relay all mail via this SMTP smarthost (STARTTLS).
 //	--smarthost-user user  SMTP AUTH username. Password from MAIL_REMOTE_PASSWORD env var.
+//	--final                Signal that this is the final delivery attempt (try all transports).
 //
 // Exit codes:
 //
@@ -49,6 +50,7 @@ func main() {
 func run() int {
 	smarthostAddr := flag.String("smarthost", "", "SMTP smarthost address (host:port)")
 	smarthostUser := flag.String("smarthost-user", "", "SMTP AUTH username for smarthost")
+	final := flag.Bool("final", false, "final delivery attempt (try all transports)")
 	flag.Parse()
 
 	args := flag.Args()
@@ -76,8 +78,14 @@ func run() int {
 	}
 
 	if *smarthostAddr == "" {
+		// TODO: implement DNS-based delivery (SRV → new-protocol, MX → SMTP).
+		// When --final is set, try all available transports before giving up.
 		fmt.Fprintln(os.Stderr, "error: DNS-based delivery not yet implemented; --smarthost is required")
 		return exUsage
+	}
+
+	if *final {
+		slog.Info("final delivery attempt", "envelopes", len(envs))
 	}
 
 	sh := smtp.SmarthostFromEnv(*smarthostAddr, *smarthostUser)

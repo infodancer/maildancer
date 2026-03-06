@@ -12,6 +12,8 @@ github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 h1:NMZiJj8QnKe1LgsbDayM4UoHwbvw
 github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0/go.mod h1:ZXNYxsqcloTdSy/rNShjYzMhyjf0LaoftYK0p+A3h40=
 github.com/emersion/go-maildir v0.6.0 h1:MPx2RSS1Xq8j1cNOzfq7YyF+5Leoeif1XqSeuytdET8=
 github.com/emersion/go-maildir v0.6.0/go.mod h1:Wpgtt9EOIJWe++WKa+JRvDwv+qIV7MeFdvZu/VbsXN4=
+github.com/emersion/go-msgauth v0.7.0 h1:vj2hMn6KhFtW41kshIBTXvp6KgYSqpA/ZN9Pv4g1INc=
+github.com/emersion/go-msgauth v0.7.0/go.mod h1:mmS9I6HkSovrNgq0HNXTeu8l3sRAAuQ9RMvbM4KU7Ck=
 github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 h1:oP4q0fw+fOSWn3DfFi4EXdT+B+gTtzx8GC9xsc26Znk=
 github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6/go.mod h1:iL2twTeMvZnrg54ZoPDNfJaJaqy0xIQFuBdrLsmspwQ=
 github.com/emersion/go-smtp v0.24.0 h1:g6AfoF140mvW0vLNPD/LuCBLEAdlxOjIXqbIkJIS6Wk=
@@ -24,6 +26,8 @@ github.com/infodancer/maildancer/auth v0.1.11 h1:+5GZBTFKnSxhOWoirNQ6xXi0xk7rA5j
 github.com/infodancer/maildancer/auth v0.1.11/go.mod h1:2dXiObhJy38u6kHkuSrGlA+mN4HEHuh2uAgXYdluUFM=
 github.com/infodancer/maildancer/auth v0.1.12 h1:N+pSbuwaC4dpfg1zf/gMhsSyDuvj9Yc0pjhjuOMQwwY=
 github.com/infodancer/maildancer/auth v0.1.12/go.mod h1:Vd8guaF2+FD/BPpBN4Tr+dAMXm++OZ2h38cXpl8OZcA=
+github.com/infodancer/maildancer/auth v0.1.13-0.20260306224503-f73c2235cec2 h1:GJCKYo2rUxAWtU9Jp+Y5w9GQwgmiD7HwSfEKgUPbu6I=
+github.com/infodancer/maildancer/auth v0.1.13-0.20260306224503-f73c2235cec2/go.mod h1:Vd8guaF2+FD/BPpBN4Tr+dAMXm++OZ2h38cXpl8OZcA=
 github.com/infodancer/maildancer/msgstore v0.2.1 h1:++W58+tPMMj7tNQrh4BDze6LJvVoEzJdQYNjvjFlkQ4=
 github.com/infodancer/maildancer/msgstore v0.2.1/go.mod h1:rW0pT8rguFR8OPbFoQyA7gk1X39at2q8YNmFFNnrx24=
 github.com/infodancer/maildancer/msgstore v0.2.4 h1:Rs/57J2iYJYbfu9+WprrjkryBohB2y/pjlEHECVfdlM=

@@ -23,6 +23,10 @@ type Config struct {
 	MessageTTL time.Duration
 	// Hostname is the smtpd hostname, used as the domain in VERP bounce addresses.
 	Hostname string
+	// DKIMSign signs a message for the given sender domain, returning a reader
+	// over the signed message (DKIM-Signature header prepended). If nil or if
+	// it returns the input unchanged, DKIM signing is skipped.
+	DKIMSign func(senderDomain string, msg io.Reader) (io.Reader, error)
 }
 
 // Write atomically injects a message into the queue.
@@ -59,7 +63,16 @@ func Write(cfg Config, from string, recipients []string, body io.Reader) error {
 	// submissions; the domain part ties the message to the sender's domain and
 	// encodes the retrieval address for the new messaging protocol.
 	messageIDHeader := fmt.Sprintf("Message-ID: <%s>\r\n", msgid)
-	bodyWithHeader := io.MultiReader(strings.NewReader(messageIDHeader), body)
+	bodyReader := io.MultiReader(strings.NewReader(messageIDHeader), body)
+
+	// DKIM sign the message if a signer is configured for this domain.
+	if cfg.DKIMSign != nil {
+		signed, err := cfg.DKIMSign(fromDomain, bodyReader)
+		if err != nil {
+			return fmt.Errorf("queue: DKIM sign: %w", err)
+		}
+		bodyReader = signed
+	}
 
 	senderTLD, senderDomain := splitDomainLabels(fromDomain)
 	msgDir := filepath.Join(cfg.Dir, "msg", senderTLD, senderDomain)
@@ -69,7 +82,7 @@ func Write(cfg Config, from string, recipients []string, body io.Reader) error {
 
 	bodyPath := filepath.Join(msgDir, msgidHex)
 	if err := atomicWrite(msgDir, bodyPath, func(w io.Writer) error {
-		_, err := io.Copy(w, bodyWithHeader)
+		_, err := io.Copy(w, bodyReader)
 		return err
 	}); err != nil {
 		return fmt.Errorf("queue: write body: %w", err)

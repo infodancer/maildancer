@@ -4,6 +4,7 @@ package domain
 
 import (
 	"context"
+	"crypto"
 	"errors"
 
 	"github.com/infodancer/maildancer/auth"
@@ -44,6 +45,13 @@ type Domain struct {
 	// "rcpt" = reject at RCPT TO (default); "data" = defer rejection to after DATA.
 	// Empty means use the global default.
 	RecipientRejection string
+
+	// DKIMSelector is the DKIM selector name for DNS lookup.
+	DKIMSelector string
+
+	// DKIMKey is the loaded Ed25519 private key for DKIM signing.
+	// Nil means DKIM is not configured for this domain.
+	DKIMKey crypto.Signer
 }
 
 // Close releases resources held by the domain's agents.

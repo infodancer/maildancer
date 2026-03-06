@@ -12,8 +12,9 @@
 //	--binary     path    Path to the mail-remote binary (default: mail-remote in PATH).
 //	--smarthost  h:port  Pass --smarthost to mail-remote for all deliveries.
 //	--smarthost-user u   Pass --smarthost-user to mail-remote.
-//	--interval   dur     How often to scan the queue (default: 1m).
-//	--once               Scan once and exit (useful for cron / testing).
+//	--interval    dur     How often to scan the queue (default: 1m).
+//	--message-ttl dur     Default message TTL for backoff calculation (default: 168h).
+//	--once                Scan once and exit (useful for cron / testing).
 package main
 
 import (
@@ -39,6 +40,7 @@ func run() error {
 	smarthostAddr := flag.String("smarthost", "", "SMTP smarthost address (host:port)")
 	smarthostUser := flag.String("smarthost-user", "", "SMTP AUTH username for smarthost")
 	interval := flag.Duration("interval", time.Minute, "queue scan interval")
+	messageTTL := flag.Duration("message-ttl", 7*24*time.Hour, "default message TTL (for backoff calculation)")
 	once := flag.Bool("once", false, "scan once and exit")
 	flag.Parse()
 
@@ -52,6 +54,7 @@ func run() error {
 		SmarthostAddr: *smarthostAddr,
 		SmarthostUser: *smarthostUser,
 		Interval:      *interval,
+		MessageTTL:    *messageTTL,
 	}
 
 	sched := scheduler.New(cfg)

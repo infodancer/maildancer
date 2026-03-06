@@ -102,3 +102,12 @@ https://github.com/infodancer/infodancer/blob/master/docs/oidc-federation-design
 
 **Read this before making any changes to client registration, redirect URI validation,
 or discovery endpoint behaviour.**
+
+## Versioning
+
+All infodancer repos follow a unified versioning policy defined in
+[infodancer/infodancer CLAUDE.md](https://github.com/infodancer/infodancer/blob/main/CLAUDE.md).
+
+- Only the patch version (`x` in `v0.N.x`) is auto-incremented when tagging.
+- Never bump the minor version (`N`) without explicit human approval.
+- All repos stay at `v0.x.y` (pre-1.0) until production-ready.

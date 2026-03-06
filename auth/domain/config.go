@@ -11,6 +11,7 @@ import (
 type DomainConfig struct {
 	Auth     DomainAuthConfig     `toml:"auth"`
 	MsgStore DomainMsgStoreConfig `toml:"msgstore"`
+	DKIM     DKIMConfig           `toml:"dkim"`
 
 	// Gid is the OS group ID under which mail-session runs for this domain.
 	// 0 means not configured.
@@ -59,6 +60,16 @@ type DomainMsgStoreConfig struct {
 	Options map[string]string `toml:"options"`
 }
 
+// DKIMConfig holds DKIM signing configuration for a domain.
+type DKIMConfig struct {
+	// Selector is the DKIM selector name (e.g., "default", "sel1").
+	// Published in DNS as selector._domainkey.domain.
+	Selector string `toml:"selector"`
+
+	// PrivateKeyPath is the path to the Ed25519 private key in PEM format.
+	PrivateKeyPath string `toml:"private_key"`
+}
+
 // mergeConfig returns a new DomainConfig with base values overridden by
 // non-zero values from override. Fields absent in override retain the base value.
 func mergeConfig(base, override DomainConfig) DomainConfig {
@@ -92,6 +103,12 @@ func mergeConfig(base, override DomainConfig) DomainConfig {
 	}
 	if len(override.MsgStore.Options) > 0 {
 		result.MsgStore.Options = override.MsgStore.Options
+	}
+	if override.DKIM.Selector != "" {
+		result.DKIM.Selector = override.DKIM.Selector
+	}
+	if override.DKIM.PrivateKeyPath != "" {
+		result.DKIM.PrivateKeyPath = override.DKIM.PrivateKeyPath
 	}
 	return result
 }

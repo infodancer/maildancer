@@ -238,14 +238,34 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		slog.String("auth_type", cfg.Auth.Type),
 		slog.String("store_type", cfg.MsgStore.Type))
 
-	return &Domain{
+	dom := &Domain{
 		Name:               name,
 		AuthAgent:          finalAuth,
 		DeliveryAgent:      finalDelivery,
 		MessageStore:       store,
 		MaxMessageSize:     cfg.MaxMessageSize,
 		RecipientRejection: cfg.RecipientRejection,
-	}, nil
+	}
+
+	// Load DKIM signing key if configured.
+	if cfg.DKIM.Selector != "" && cfg.DKIM.PrivateKeyPath != "" {
+		keyPath := resolvePath(domainPath, cfg.DKIM.PrivateKeyPath)
+		key, err := LoadDKIMKey(keyPath)
+		if err != nil {
+			p.logger.Warn("failed to load DKIM key",
+				slog.String("domain", name),
+				slog.String("path", keyPath),
+				slog.String("error", err.Error()))
+		} else {
+			dom.DKIMSelector = cfg.DKIM.Selector
+			dom.DKIMKey = key
+			p.logger.Info("DKIM signing enabled",
+				slog.String("domain", name),
+				slog.String("selector", cfg.DKIM.Selector))
+		}
+	}
+
+	return dom, nil
 }
 
 // Domains returns the list of domain names handled by this provider.

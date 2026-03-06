@@ -534,8 +534,7 @@ func (s *Session) Data(r io.Reader) error {
 				}
 			}
 
-			// Note: Header injection is not supported with go-smtp.
-			// Spam check can reject but cannot modify the message.
+			// checkResult is used below for the delivery envelope.
 		}
 	} else {
 		// No spam check - read the entire message into tmp
@@ -593,6 +592,13 @@ func (s *Session) Data(r io.Reader) error {
 			ReceivedTime:   time.Now(),
 			ClientIP:       net.ParseIP(s.clientIP),
 			ClientHostname: s.helo,
+		}
+		if checkResult != nil {
+			envelope.SpamResult = &msgstore.SpamResult{
+				Score:   checkResult.Score,
+				Action:  string(checkResult.Action),
+				Checker: checkResult.CheckerName,
+			}
 		}
 
 		if err := deliveryAgent.Deliver(ctx, envelope, tmp.reader()); err != nil {

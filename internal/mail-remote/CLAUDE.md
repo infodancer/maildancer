@@ -69,3 +69,12 @@ task check    # build + test + vet + lint + vulncheck
 |---------|---------|
 | `internal/envelope` | Parse and validate envelope files |
 | `internal/smtp` | SMTP delivery (smarthost; direct TBD) |
+
+## Versioning
+
+All infodancer repos follow a unified versioning policy defined in
+[infodancer/infodancer CLAUDE.md](https://github.com/infodancer/infodancer/blob/main/CLAUDE.md).
+
+- Only the patch version (`x` in `v0.N.x`) is auto-incremented when tagging.
+- Never bump the minor version (`N`) without explicit human approval.
+- All repos stay at `v0.x.y` (pre-1.0) until production-ready.

@@ -21,6 +21,10 @@ type DomainConfig struct {
 	// 0 means use the global default (50 MiB).
 	MaxMessageSize int64 `toml:"max_message_size"`
 
+	// RecipientRejection controls when unknown recipients are rejected.
+	// "rcpt" = reject at RCPT TO (default); "data" = defer rejection to after DATA.
+	RecipientRejection string `toml:"recipient_rejection"`
+
 	// Forwards maps localpart to comma-separated forwarding targets.
 	// The special key "*" is a catchall. A nil map means "not set" and allows
 	// the system default forwards to apply. An empty non-nil map (forwards = {})
@@ -64,6 +68,9 @@ func mergeConfig(base, override DomainConfig) DomainConfig {
 	}
 	if override.MaxMessageSize != 0 {
 		result.MaxMessageSize = override.MaxMessageSize
+	}
+	if override.RecipientRejection != "" {
+		result.RecipientRejection = override.RecipientRejection
 	}
 	if override.Auth.Type != "" {
 		result.Auth.Type = override.Auth.Type

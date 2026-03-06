@@ -32,6 +32,22 @@ base_path = "users"
 	}
 }
 
+func TestMergeConfig_RecipientRejection(t *testing.T) {
+	base := DomainConfig{RecipientRejection: "rcpt"}
+	override := DomainConfig{RecipientRejection: "data"}
+
+	result := mergeConfig(base, override)
+	if result.RecipientRejection != "data" {
+		t.Errorf("expected merged RecipientRejection %q, got %q", "data", result.RecipientRejection)
+	}
+
+	// Empty override should not overwrite base
+	result = mergeConfig(base, DomainConfig{})
+	if result.RecipientRejection != "rcpt" {
+		t.Errorf("expected base RecipientRejection %q retained, got %q", "rcpt", result.RecipientRejection)
+	}
+}
+
 func TestMergeConfig_Gid(t *testing.T) {
 	base := DomainConfig{Gid: 1000}
 	override := DomainConfig{Gid: 2001}

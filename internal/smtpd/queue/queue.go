@@ -63,7 +63,7 @@ func Write(cfg Config, from string, recipients []string, body io.Reader) error {
 	// submissions; the domain part ties the message to the sender's domain and
 	// encodes the retrieval address for the new messaging protocol.
 	messageIDHeader := fmt.Sprintf("Message-ID: <%s>\r\n", msgid)
-	var bodyReader io.Reader = io.MultiReader(strings.NewReader(messageIDHeader), body)
+	bodyReader := io.MultiReader(strings.NewReader(messageIDHeader), body)
 
 	// DKIM sign the message if a signer is configured for this domain.
 	if cfg.DKIMSign != nil {

@@ -99,17 +99,11 @@ task hooks:install  # Install git hooks
 - Use `crypto/rand` for security-sensitive random generation
 - Never expose internal error details over the protocol pipe
 
-## Versioning & Releases
+## Versioning
 
-`mail-session` and `mail-deliver` use **synchronized versioning** — both repos
-must always be at the same version tag.
+All infodancer repos follow a unified versioning policy defined in
+[infodancer/infodancer CLAUDE.md](https://github.com/infodancer/infodancer/blob/main/CLAUDE.md).
 
-**Version scheme**: `v0.0.x` during pre-release development.
-
-Tag with:
-```bash
-git tag v0.0.1
-git push origin v0.0.1
-```
-
-GoReleaser will build cross-platform binaries automatically.
+- Only the patch version (`x` in `v0.N.x`) is auto-incremented when tagging.
+- Never bump the minor version (`N`) without explicit human approval.
+- All repos stay at `v0.x.y` (pre-1.0) until production-ready.

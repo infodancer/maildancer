@@ -44,8 +44,11 @@ func (s *Scheduler) Run() {
 }
 
 // RunOnce performs a single queue scan pass.
+// It first recovers any envelopes left in .delivering state from a previous
+// crash, then scans for ready envelopes.
 func (s *Scheduler) RunOnce() error {
 	envDir := filepath.Join(s.cfg.QueueDir, "env")
+	s.recoverStaleDeliveries(envDir)
 	return s.scanEnvDir(envDir)
 }
 
@@ -121,24 +124,52 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 			continue
 		}
 
+		// Claim all envelopes atomically before dispatch. If any claim
+		// fails (e.g. already .delivering from a concurrent run), skip it.
+		type claimedEntry struct {
+			original string
+			claimed  string
+			expired  bool
+		}
+		var claimed []claimedEntry
+		for _, e := range entries {
+			cp, err := claim(e.path)
+			if err != nil {
+				slog.Warn("could not claim envelope, skipping", "path", e.path, "error", err)
+				continue
+			}
+			claimed = append(claimed, claimedEntry{original: e.path, claimed: cp, expired: e.expired})
+		}
+
 		// Split expired envelopes from active ones. Expired envelopes get
 		// individual --final invocations so the flag applies only to that
 		// single recipient, not the whole batch.
 		var activePaths []string
-		for _, e := range entries {
-			if e.expired {
-				s.invoke(bodyPath, []string{e.path}, true)
-				slog.Info("removing expired envelope after final attempt", "path", e.path)
-				if rmErr := os.Remove(e.path); rmErr != nil && !os.IsNotExist(rmErr) {
-					slog.Warn("could not remove expired envelope", "path", e.path, "error", rmErr)
+		for _, ce := range claimed {
+			if ce.expired {
+				s.invoke(bodyPath, []string{ce.claimed}, true)
+				slog.Info("removing expired envelope after final attempt", "path", ce.claimed)
+				if rmErr := os.Remove(ce.claimed); rmErr != nil && !os.IsNotExist(rmErr) {
+					slog.Warn("could not remove expired envelope", "path", ce.claimed, "error", rmErr)
 				}
 			} else {
-				activePaths = append(activePaths, e.path)
+				activePaths = append(activePaths, ce.claimed)
 			}
 		}
 
 		if len(activePaths) > 0 {
 			s.invoke(bodyPath, activePaths, false)
+		}
+
+		// Unclaim surviving envelopes (temp failures — mail-remote touched
+		// their mtime but left them on disk).
+		for _, p := range activePaths {
+			if _, err := os.Stat(p); err != nil {
+				continue // already deleted by mail-remote (success or perm fail)
+			}
+			if _, err := unclaim(p); err != nil {
+				slog.Warn("could not unclaim envelope", "path", p, "error", err)
+			}
 		}
 	}
 
@@ -247,7 +278,11 @@ func (s *Scheduler) buildArgs(bodyPath string, envPaths []string, final bool) []
 }
 
 // extractMsgID parses a msgid from an envelope filename: localpart@msgid.nnn
+// Files with a .delivering suffix are ignored (in-flight envelopes).
 func extractMsgID(name string) (string, bool) {
+	if strings.HasSuffix(name, deliveringSuffix) {
+		return "", false
+	}
 	at := strings.LastIndex(name, "@")
 	if at < 0 {
 		return "", false
@@ -337,14 +372,73 @@ func (s *Scheduler) cleanOrphanBodies(domainPath string) {
 	}
 }
 
-// bodyHasEnvelopes checks if any envelope in the queue references this msgid.
+// bodyHasEnvelopes checks if any envelope in the queue references this msgid,
+// including envelopes currently being delivered (.delivering suffix).
 func (s *Scheduler) bodyHasEnvelopes(msgid string) bool {
 	envDir := filepath.Join(s.cfg.QueueDir, "env")
-	// Envelope filename format: {localpart}@{msgid}.{n}
+	// Envelope filename format: {localpart}@{msgid}.{n} or {localpart}@{msgid}.{n}.delivering
 	// Glob for any file containing @{msgid}. in any domain directory.
 	pattern := filepath.Join(envDir, "*", "*", "*@"+msgid+".*")
 	matches, _ := filepath.Glob(pattern)
 	return len(matches) > 0
+}
+
+const deliveringSuffix = ".delivering"
+
+// claim atomically renames an envelope file to mark it as in-flight.
+// Returns the new path. A concurrent scanner will skip .delivering files
+// because extractMsgID won't match the suffix.
+func claim(envPath string) (string, error) {
+	claimed := envPath + deliveringSuffix
+	if err := os.Rename(envPath, claimed); err != nil {
+		return "", fmt.Errorf("claim %s: %w", envPath, err)
+	}
+	return claimed, nil
+}
+
+// unclaim renames a .delivering file back to its original name so it
+// becomes visible to future scans. os.Rename preserves mtime.
+func unclaim(claimedPath string) (string, error) {
+	original := strings.TrimSuffix(claimedPath, deliveringSuffix)
+	if err := os.Rename(claimedPath, original); err != nil {
+		return "", fmt.Errorf("unclaim %s: %w", claimedPath, err)
+	}
+	return original, nil
+}
+
+// recoverStaleDeliveries finds .delivering files left behind by a previous
+// crash and renames them back so they become eligible for retry. SMTP
+// receivers deduplicate on Message-ID, so a possible re-delivery after
+// crash is the correct trade-off versus silent loss.
+func (s *Scheduler) recoverStaleDeliveries(envDir string) {
+	tlds, err := readdir(envDir)
+	if err != nil {
+		return
+	}
+	for _, tld := range tlds {
+		domains, err := readdir(filepath.Join(envDir, tld))
+		if err != nil {
+			continue
+		}
+		for _, domain := range domains {
+			domainPath := filepath.Join(envDir, tld, domain)
+			entries, err := readdir(domainPath)
+			if err != nil {
+				continue
+			}
+			for _, name := range entries {
+				if !strings.HasSuffix(name, deliveringSuffix) {
+					continue
+				}
+				claimedPath := filepath.Join(domainPath, name)
+				if _, err := unclaim(claimedPath); err != nil {
+					slog.Warn("could not recover stale delivery", "path", claimedPath, "error", err)
+				} else {
+					slog.Info("recovered stale delivery", "path", claimedPath)
+				}
+			}
+		}
+	}
 }
 
 func readdir(path string) ([]string, error) {

@@ -26,6 +26,8 @@ func TestExtractMsgID(t *testing.T) {
 		{"abc123def456", "", false},
 		// no "." after msgid: invalid
 		{"alice@abc123", "", false},
+		// .delivering suffix: in-flight, skip
+		{"alice@abc123def456.0.delivering", "", false},
 		// empty
 		{"", "", false},
 	}
@@ -566,6 +568,178 @@ func TestRunOnce_EmptyQueue(t *testing.T) {
 	})
 	if err := s.RunOnce(); err != nil {
 		t.Fatalf("RunOnce on empty queue: %v", err)
+	}
+}
+
+// --- claim / unclaim ---
+
+func TestClaimUnclaim(t *testing.T) {
+	dir := t.TempDir()
+	original := filepath.Join(dir, "alice@abc123.0")
+	if err := os.WriteFile(original, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Claim renames to .delivering.
+	claimed, err := claim(original)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if claimed != original+deliveringSuffix {
+		t.Errorf("claimed = %q, want %q", claimed, original+deliveringSuffix)
+	}
+	if _, err := os.Stat(original); !os.IsNotExist(err) {
+		t.Error("original should not exist after claim")
+	}
+	if _, err := os.Stat(claimed); err != nil {
+		t.Error("claimed file should exist")
+	}
+
+	// Unclaim renames back.
+	restored, err := unclaim(claimed)
+	if err != nil {
+		t.Fatalf("unclaim: %v", err)
+	}
+	if restored != original {
+		t.Errorf("restored = %q, want %q", restored, original)
+	}
+	if _, err := os.Stat(original); err != nil {
+		t.Error("original should exist after unclaim")
+	}
+}
+
+func TestClaim_AlreadyClaimed(t *testing.T) {
+	dir := t.TempDir()
+	original := filepath.Join(dir, "alice@abc123.0")
+	if err := os.WriteFile(original, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := claim(original); err != nil {
+		t.Fatalf("first claim: %v", err)
+	}
+
+	// Second claim should fail (original no longer exists).
+	if _, err := claim(original); err == nil {
+		t.Error("expected error on second claim")
+	}
+}
+
+func TestClaim_PreservesMtime(t *testing.T) {
+	dir := t.TempDir()
+	original := filepath.Join(dir, "alice@abc123.0")
+	if err := os.WriteFile(original, []byte("data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-30 * time.Minute)
+	if err := os.Chtimes(original, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := claim(original)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	fi, err := os.Stat(claimed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rename preserves mtime on Linux/macOS.
+	diff := fi.ModTime().Sub(old)
+	if diff < 0 {
+		diff = -diff
+	}
+	if diff > time.Second {
+		t.Errorf("mtime changed by %v after claim; expected preserved", diff)
+	}
+}
+
+// TestProcessDomainDir_ClaimedSkippedByConcurrentScan verifies that
+// .delivering files are invisible to a concurrent scan.
+func TestProcessDomainDir_ClaimedSkippedByConcurrentScan(t *testing.T) {
+	dir := t.TempDir()
+	msgid := "concurrent1234"
+
+	bodyDir := filepath.Join(dir, "msg", "com", "example")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create an envelope already in .delivering state (simulating in-flight).
+	claimedFile := filepath.Join(envDir, "alice@"+msgid+".0"+deliveringSuffix)
+	if err := os.WriteFile(claimedFile, []byte("MSGID "+msgid+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(claimedFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeBin := buildFakeMailRemote(t)
+	recordFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
+
+	s := New(Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
+	// processDomainDir directly — no recovery pass, simulating concurrent scan.
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	// mail-remote should NOT have been invoked.
+	if _, err := os.Stat(recordFile); !os.IsNotExist(err) {
+		t.Error("expected mail-remote NOT to be invoked for .delivering envelope")
+	}
+
+	// The .delivering file should still be there (not our responsibility).
+	if _, err := os.Stat(claimedFile); os.IsNotExist(err) {
+		t.Error(".delivering file should still exist")
+	}
+}
+
+func TestRecoverStaleDeliveries(t *testing.T) {
+	dir := t.TempDir()
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a stale .delivering file.
+	staleOriginal := filepath.Join(envDir, "alice@stale1234.0")
+	staleClaimed := staleOriginal + deliveringSuffix
+	if err := os.WriteFile(staleClaimed, []byte("MSGID stale1234\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Also a normal envelope that shouldn't be touched.
+	normalEnv := filepath.Join(envDir, "bob@normal5678.0")
+	if err := os.WriteFile(normalEnv, []byte("MSGID normal5678\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
+	s.recoverStaleDeliveries(filepath.Join(dir, "env"))
+
+	// Stale .delivering should be renamed back to original.
+	if _, err := os.Stat(staleClaimed); !os.IsNotExist(err) {
+		t.Error("stale .delivering file should be gone after recovery")
+	}
+	if _, err := os.Stat(staleOriginal); err != nil {
+		t.Error("original envelope should be restored after recovery")
+	}
+
+	// Normal envelope untouched.
+	if _, err := os.Stat(normalEnv); err != nil {
+		t.Error("normal envelope should be untouched")
 	}
 }
 

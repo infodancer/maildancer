@@ -47,7 +47,7 @@ func TestIsReady_OldEnough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	// Set mtime to 10 minutes ago — should be ready (zero TTL falls back to 5m minimum).
 	old := time.Now().Add(-10 * time.Minute)
@@ -66,7 +66,7 @@ func TestIsReady_TooRecent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	// mtime is effectively now — not ready.
 	s := New(Config{QueueDir: t.TempDir(), Binary: "mail-remote", Interval: time.Minute})
@@ -92,7 +92,7 @@ func TestIsReady_BackoffIncreasesWithAge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Close()
+	_ = f.Close()
 	sixMinAgo := time.Now().Add(-6 * time.Minute)
 	if err := os.Chtimes(f.Name(), sixMinAgo, sixMinAgo); err != nil {
 		t.Fatal(err)

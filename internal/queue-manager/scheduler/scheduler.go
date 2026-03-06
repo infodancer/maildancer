@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ type Config struct {
 	SmarthostAddr string
 	SmarthostUser string
 	Interval      time.Duration
+	MessageTTL    time.Duration // default message TTL; used to compute message age for backoff
 }
 
 // Scheduler scans the queue and invokes mail-remote for ready envelopes.
@@ -97,18 +99,13 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 		ttl, err := parseTTL(envPath)
 		expired := err == nil && !ttl.IsZero() && time.Now().After(ttl)
 
-		if expired || s.isReady(envPath) {
+		if expired || s.isReady(envPath, ttl) {
 			byMsgID[msgid] = append(byMsgID[msgid], envEntry{path: envPath, expired: expired})
 		}
 	}
 
 	for msgid, entries := range byMsgID {
-		envPaths := make([]string, len(entries))
-		for i, e := range entries {
-			envPaths[i] = e.path
-		}
-
-		bodyPath, err := s.resolveBody(envPaths[0], msgid)
+		bodyPath, err := s.resolveBody(entries[0].path, msgid)
 		if err != nil {
 			slog.Warn("could not resolve body", "msgid", msgid, "error", err)
 			// If we can't find the body, delete expired envelopes anyway —
@@ -124,17 +121,24 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 			continue
 		}
 
-		// Invoke mail-remote (final attempt for expired, normal for active).
-		s.invoke(bodyPath, envPaths)
-
-		// Delete expired envelopes regardless of delivery outcome.
+		// Split expired envelopes from active ones. Expired envelopes get
+		// individual --final invocations so the flag applies only to that
+		// single recipient, not the whole batch.
+		var activePaths []string
 		for _, e := range entries {
 			if e.expired {
+				s.invoke(bodyPath, []string{e.path}, true)
 				slog.Info("removing expired envelope after final attempt", "path", e.path)
 				if rmErr := os.Remove(e.path); rmErr != nil && !os.IsNotExist(rmErr) {
 					slog.Warn("could not remove expired envelope", "path", e.path, "error", rmErr)
 				}
+			} else {
+				activePaths = append(activePaths, e.path)
 			}
+		}
+
+		if len(activePaths) > 0 {
+			s.invoke(bodyPath, activePaths, false)
 		}
 	}
 
@@ -144,17 +148,49 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 }
 
 // isReady returns true if the envelope mtime is old enough for the next attempt.
-// Uses a simple exponential backoff: next attempt = mtime + min(2^attempts × 5m, 4h).
-// Because we don't store attempt count, we approximate by checking that at least
-// the minimum retry interval (5 minutes) has elapsed since the last attempt.
-func (s *Scheduler) isReady(envPath string) bool {
+// Uses exponential backoff derived from message age: starts at 5 minutes,
+// doubles every hour, caps at 4 hours. Message age is computed from the TTL
+// and the configured default message TTL. If TTL is unavailable, falls back to
+// the 5-minute minimum interval.
+func (s *Scheduler) isReady(envPath string, ttl time.Time) bool {
 	fi, err := os.Stat(envPath)
 	if err != nil {
 		return false
 	}
-	// Minimum 5 minutes between attempts. The queue-manager scan interval
-	// provides the upper bound; this provides the lower bound.
-	return time.Since(fi.ModTime()) >= 5*time.Minute
+	sinceLastAttempt := time.Since(fi.ModTime())
+
+	if ttl.IsZero() || s.cfg.MessageTTL <= 0 {
+		return sinceLastAttempt >= 5*time.Minute
+	}
+	created := ttl.Add(-s.cfg.MessageTTL)
+	age := time.Since(created)
+	return sinceLastAttempt >= retryInterval(age)
+}
+
+// retryInterval computes the minimum time between delivery attempts based on
+// message age. Uses exponential backoff: starts at 5 minutes, doubles every
+// hour, caps at 4 hours.
+//
+//	age 0:    5m
+//	age 1h:  10m
+//	age 2h:  20m
+//	age 3h:  40m
+//	age 4h:  80m
+//	age 5h+:  4h (capped)
+func retryInterval(age time.Duration) time.Duration {
+	const (
+		base       = 5 * time.Minute
+		maxBackoff = 4 * time.Hour
+		doubling   = time.Hour
+	)
+	if age <= 0 {
+		return base
+	}
+	interval := time.Duration(float64(base) * math.Pow(2, float64(age)/float64(doubling)))
+	if interval > maxBackoff || interval <= 0 {
+		return maxBackoff
+	}
+	return interval
 }
 
 // resolveBody locates the message body file from an envelope path and msgid.
@@ -178,8 +214,9 @@ func (s *Scheduler) resolveBody(envPath, msgid string) (string, error) {
 }
 
 // invoke calls mail-remote with the body and envelope paths.
-func (s *Scheduler) invoke(bodyPath string, envPaths []string) {
-	args := s.buildArgs(bodyPath, envPaths)
+// If final is true, passes --final to signal this is the last delivery attempt.
+func (s *Scheduler) invoke(bodyPath string, envPaths []string, final bool) {
+	args := s.buildArgs(bodyPath, envPaths, final)
 	cmd := exec.Command(s.cfg.Binary, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -193,13 +230,16 @@ func (s *Scheduler) invoke(bodyPath string, envPaths []string) {
 	}
 }
 
-func (s *Scheduler) buildArgs(bodyPath string, envPaths []string) []string {
+func (s *Scheduler) buildArgs(bodyPath string, envPaths []string, final bool) []string {
 	var args []string
 	if s.cfg.SmarthostAddr != "" {
 		args = append(args, "--smarthost", s.cfg.SmarthostAddr)
 	}
 	if s.cfg.SmarthostUser != "" {
 		args = append(args, "--smarthost-user", s.cfg.SmarthostUser)
+	}
+	if final {
+		args = append(args, "--final")
 	}
 	args = append(args, bodyPath)
 	args = append(args, envPaths...)

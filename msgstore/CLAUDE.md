@@ -90,3 +90,12 @@ This repository is part of the infodancer mail stack. The process separation,
 privilege model, uid/gid allocation, and pipe protocol are defined in:
 
 https://github.com/infodancer/infodancer/blob/master/docs/mail-security-model.md
+
+## Versioning
+
+All infodancer repos follow a unified versioning policy defined in
+[infodancer/infodancer CLAUDE.md](https://github.com/infodancer/infodancer/blob/main/CLAUDE.md).
+
+- Only the patch version (`x` in `v0.N.x`) is auto-incremented when tagging.
+- Never bump the minor version (`N`) without explicit human approval.
+- All repos stay at `v0.x.y` (pre-1.0) until production-ready.

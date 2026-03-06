@@ -146,6 +146,8 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		DomainProvider: domainProvider,
 		SpamChecker:    cfg.SpamChecker,
 		SpamConfig:     cfg.SpamConfig,
+		RejectionMode:  cfg.Config.GetRejectionMode(),
+		SpamtrapConfig: cfg.Config.Spamtrap,
 		Collector:      collector,
 		MaxRecipients:  cfg.Config.Limits.MaxRecipients,
 		MaxMessageSize: int64(cfg.Config.Limits.MaxMessageSize),

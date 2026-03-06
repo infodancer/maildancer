@@ -33,7 +33,7 @@ import (
 //	│   └── config.toml
 type FilesystemDomainProvider struct {
 	basePath     string
-	dataPath     string        // separate writable directory for msgstore data
+	dataPath     string // separate writable directory for msgstore data
 	defaults     *DomainConfig
 	baseDefaults *DomainConfig // loaded from {basePath}/config.toml
 	cache        map[string]*Domain
@@ -239,11 +239,12 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		slog.String("store_type", cfg.MsgStore.Type))
 
 	return &Domain{
-		Name:           name,
-		AuthAgent:      finalAuth,
-		DeliveryAgent:  finalDelivery,
-		MessageStore:   store,
-		MaxMessageSize: cfg.MaxMessageSize,
+		Name:               name,
+		AuthAgent:          finalAuth,
+		DeliveryAgent:      finalDelivery,
+		MessageStore:       store,
+		MaxMessageSize:     cfg.MaxMessageSize,
+		RecipientRejection: cfg.RecipientRejection,
 	}, nil
 }
 

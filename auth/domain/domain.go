@@ -39,6 +39,11 @@ type Domain struct {
 	// MaxMessageSize is the maximum message size in bytes for this domain.
 	// 0 means use the global default.
 	MaxMessageSize int64
+
+	// RecipientRejection controls when unknown recipients are rejected.
+	// "rcpt" = reject at RCPT TO (default); "data" = defer rejection to after DATA.
+	// Empty means use the global default.
+	RecipientRejection string
 }
 
 // Close releases resources held by the domain's agents.

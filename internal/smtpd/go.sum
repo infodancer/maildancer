@@ -26,6 +26,8 @@ github.com/infodancer/maildancer/auth v0.1.11 h1:+5GZBTFKnSxhOWoirNQ6xXi0xk7rA5j
 github.com/infodancer/maildancer/auth v0.1.11/go.mod h1:2dXiObhJy38u6kHkuSrGlA+mN4HEHuh2uAgXYdluUFM=
 github.com/infodancer/maildancer/auth v0.1.12 h1:N+pSbuwaC4dpfg1zf/gMhsSyDuvj9Yc0pjhjuOMQwwY=
 github.com/infodancer/maildancer/auth v0.1.12/go.mod h1:Vd8guaF2+FD/BPpBN4Tr+dAMXm++OZ2h38cXpl8OZcA=
+github.com/infodancer/maildancer/auth v0.1.13-0.20260306224503-f73c2235cec2 h1:GJCKYo2rUxAWtU9Jp+Y5w9GQwgmiD7HwSfEKgUPbu6I=
+github.com/infodancer/maildancer/auth v0.1.13-0.20260306224503-f73c2235cec2/go.mod h1:Vd8guaF2+FD/BPpBN4Tr+dAMXm++OZ2h38cXpl8OZcA=
 github.com/infodancer/maildancer/msgstore v0.2.1 h1:++W58+tPMMj7tNQrh4BDze6LJvVoEzJdQYNjvjFlkQ4=
 github.com/infodancer/maildancer/msgstore v0.2.1/go.mod h1:rW0pT8rguFR8OPbFoQyA7gk1X39at2q8YNmFFNnrx24=
 github.com/infodancer/maildancer/msgstore v0.2.4 h1:Rs/57J2iYJYbfu9+WprrjkryBohB2y/pjlEHECVfdlM=

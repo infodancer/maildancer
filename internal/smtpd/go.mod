@@ -5,7 +5,7 @@ go 1.25.7
 require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.24.0
-	github.com/infodancer/maildancer/auth v0.1.12
+	github.com/infodancer/maildancer/auth v0.1.13-0.20260306224503-f73c2235cec2
 	github.com/infodancer/maildancer/msgstore v0.2.4
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2

@@ -56,7 +56,7 @@ func Parse(path string) (*Envelope, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open envelope %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	env := &Envelope{Path: path}
 	scanner := bufio.NewScanner(f)

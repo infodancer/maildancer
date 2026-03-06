@@ -94,8 +94,8 @@ func startTestServer(t *testing.T) (addr string, be *testBackend, stop func()) {
 	go srv.Serve(ln) //nolint:errcheck
 
 	stop = func() {
-		srv.Close()
-		ln.Close()
+		_ = srv.Close()
+		_ = ln.Close()
 	}
 	return ln.Addr().String(), be, stop
 }

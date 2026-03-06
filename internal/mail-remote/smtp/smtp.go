@@ -82,7 +82,7 @@ func DeliverViaSmarthost(_ context.Context, sh Smarthost, bodyPath string, envs 
 		}
 		return results
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if sh.Username != "" {
 		auth := sasl.NewPlainClient("", sh.Username, sh.Password)
@@ -106,7 +106,7 @@ func deliver(c *gosmtp.Client, bodyPath string, env *envelope.Envelope) error {
 	if err != nil {
 		return fmt.Errorf("open body %s: %w", bodyPath, err)
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	if err := c.SendMail(env.Sender, []string{env.Recipient}, body); err != nil {
 		return classifyError(fmt.Errorf("smtp send to %s: %w", env.Recipient, err))

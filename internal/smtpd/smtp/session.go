@@ -83,17 +83,18 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // Session implements the go-smtp Session interface.
 // It also implements AuthSession for AUTH support.
 type Session struct {
-	backend          *Backend
-	conn             *smtp.Conn
-	clientIP         string
-	helo             string
-	from             string
-	mailFromSeen     bool     // true once MAIL FROM is accepted (from may be "" for bounces)
-	recipients       []string // local recipients → mail-deliver
-	remoteRecipients []string // remote recipients → queue (authenticated submission only)
-	authUser         string
-	domain           *domain.Domain // Set during RCPT TO for delivery
-	logger           *slog.Logger
+	backend                  *Backend
+	conn                     *smtp.Conn
+	clientIP                 string
+	helo                     string
+	from                     string
+	mailFromSeen             bool     // true once MAIL FROM is accepted (from may be "" for bounces)
+	recipients               []string // local recipients → mail-deliver
+	remoteRecipients         []string // remote recipients → queue (authenticated submission only)
+	authUser                 string
+	domain                   *domain.Domain // Set during RCPT TO for delivery
+	deferredInvalidRecipient string         // non-empty when data-mode deferred an unknown user
+	logger                   *slog.Logger
 }
 
 // AuthMechanisms returns the available authentication mechanisms.
@@ -238,8 +239,8 @@ func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 // Implements smtp.Session interface.
 func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	// Enforce single recipient per message to avoid partial delivery scenarios.
-	// Remote (queued) recipients count against the same limit.
-	if len(s.recipients)+len(s.remoteRecipients) > 0 {
+	// Remote (queued) recipients and deferred-invalid count against the same limit.
+	if len(s.recipients)+len(s.remoteRecipients) > 0 || s.deferredInvalidRecipient != "" {
 		return &smtp.SMTPError{
 			Code:         452,
 			EnhancedCode: smtp.EnhancedCode{4, 5, 3},
@@ -294,6 +295,26 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 		}
 
 		if !exists {
+			// Determine rejection mode: per-domain overrides global.
+			mode := s.backend.rejectionMode
+			if d.RecipientRejection != "" {
+				mode = config.RejectionMode(d.RecipientRejection)
+			}
+
+			if mode == config.RejectionModeData {
+				// Defer rejection to after DATA to hide address validity
+				// and enable spamtrap auto-learning.
+				s.deferredInvalidRecipient = to
+				s.domain = d
+				s.logger.Debug("RCPT TO (deferred rejection)",
+					slog.String("to", to), slog.String("mode", "data"))
+
+				if s.backend.collector != nil {
+					s.backend.collector.CommandProcessed("RCPT")
+				}
+				return nil
+			}
+
 			s.logger.Debug("user unknown", slog.String("recipient", to))
 			return &smtp.SMTPError{
 				Code:         550,
@@ -361,7 +382,7 @@ func (s *Session) Data(r io.Reader) error {
 			Message:      "Bad sequence of commands: MAIL FROM required",
 		}
 	}
-	if len(s.recipients)+len(s.remoteRecipients) == 0 {
+	if len(s.recipients)+len(s.remoteRecipients) == 0 && s.deferredInvalidRecipient == "" {
 		return &smtp.SMTPError{
 			Code:         503,
 			EnhancedCode: smtp.EnhancedCode{5, 5, 1},
@@ -412,9 +433,10 @@ func (s *Session) Data(r io.Reader) error {
 	counter := &countingReader{r: tee}
 
 	// Spam check (if enabled) - reads through counter, which fills tmpFile
-	var spamResult *spamcheck.CheckResult
+	var checkResult *spamcheck.CheckResult
 	if s.backend.spamChecker != nil && s.backend.spamConfig.IsEnabled() {
-		checkResult, checkErr := s.backend.spamChecker.Check(ctx, counter, spamcheck.CheckOptions{
+		var checkErr error
+		checkResult, checkErr = s.backend.spamChecker.Check(ctx, counter, spamcheck.CheckOptions{
 			From:       s.from,
 			Recipients: s.recipients,
 			IP:         s.clientIP,
@@ -512,8 +534,7 @@ func (s *Session) Data(r io.Reader) error {
 				}
 			}
 
-			// Preserve the result for the delivery envelope.
-			spamResult = checkResult
+			// checkResult is used below for the delivery envelope.
 		}
 	} else {
 		// No spam check - read the entire message into tmp
@@ -527,6 +548,42 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
+	// Deferred rejection: recipient was accepted at RCPT TO in data-mode
+	// but is actually invalid. Auto-learn as spam, then reject.
+	if s.deferredInvalidRecipient != "" {
+		recipientDomain := sessionExtractRecipientDomain([]string{s.deferredInvalidRecipient})
+		spamAlreadyRejected := checkResult != nil && checkResult.ShouldReject(s.backend.spamConfig.RejectThreshold)
+
+		if s.backend.spamtrapLearner != nil && !spamAlreadyRejected {
+			if s.backend.spamtrapRateLimiter.allow(s.clientIP) {
+				if err := s.backend.spamtrapLearner.learnSpam(ctx, s.deferredInvalidRecipient, tmp.reader()); err != nil {
+					s.logger.Warn("spamtrap auto-learn failed",
+						slog.String("recipient", s.deferredInvalidRecipient),
+						slog.String("error", err.Error()))
+				} else {
+					s.logger.Info("spamtrap auto-learn: trained as spam",
+						slog.String("recipient", s.deferredInvalidRecipient),
+						slog.String("client_ip", s.clientIP))
+				}
+			} else {
+				s.logger.Debug("spamtrap auto-learn: rate limited",
+					slog.String("client_ip", s.clientIP))
+			}
+		}
+
+		if s.backend.collector != nil {
+			s.backend.collector.MessageRejected(recipientDomain, "user_unknown")
+		}
+
+		s.logger.Debug("deferred rejection: user unknown",
+			slog.String("recipient", s.deferredInvalidRecipient))
+		return &smtp.SMTPError{
+			Code:         550,
+			EnhancedCode: smtp.EnhancedCode{5, 1, 1},
+			Message:      "User unknown",
+		}
+	}
+
 	// Local delivery (synchronous; failures reject at SMTP time).
 	if len(s.recipients) > 0 {
 		envelope := msgstore.Envelope{
@@ -536,11 +593,11 @@ func (s *Session) Data(r io.Reader) error {
 			ClientIP:       net.ParseIP(s.clientIP),
 			ClientHostname: s.helo,
 		}
-		if spamResult != nil {
+		if checkResult != nil {
 			envelope.SpamResult = &msgstore.SpamResult{
-				Score:   spamResult.Score,
-				Action:  string(spamResult.Action),
-				Checker: spamResult.CheckerName,
+				Score:   checkResult.Score,
+				Action:  string(checkResult.Action),
+				Checker: checkResult.CheckerName,
 			}
 		}
 
@@ -607,6 +664,7 @@ func (s *Session) Reset() {
 	s.recipients = nil
 	s.remoteRecipients = nil
 	s.domain = nil
+	s.deferredInvalidRecipient = ""
 	s.logger.Debug("session reset")
 }
 

@@ -18,20 +18,23 @@ import (
 // Backend implements the go-smtp Backend interface.
 // It creates new sessions for each connection.
 type Backend struct {
-	hostname       string
-	delivery       msgstore.DeliveryAgent
-	queueCfg       queue.Config
-	authAgent      auth.AuthenticationAgent
-	authRouter     *domain.AuthRouter
-	oauthAgent     oauth.Agent
-	domainProvider domain.DomainProvider
-	spamChecker    spamcheck.Checker
-	spamConfig     config.SpamCheckConfig
-	collector      metrics.Collector
-	maxRecipients  int
-	maxMessageSize int64
-	tempDir        string
-	logger         *slog.Logger
+	hostname            string
+	delivery            msgstore.DeliveryAgent
+	queueCfg            queue.Config
+	authAgent           auth.AuthenticationAgent
+	authRouter          *domain.AuthRouter
+	oauthAgent          oauth.Agent
+	domainProvider      domain.DomainProvider
+	spamChecker         spamcheck.Checker
+	spamConfig          config.SpamCheckConfig
+	rejectionMode       config.RejectionMode
+	spamtrapLearner     *spamtrapLearner
+	spamtrapRateLimiter *ipRateLimiter
+	collector           metrics.Collector
+	maxRecipients       int
+	maxMessageSize      int64
+	tempDir             string
+	logger              *slog.Logger
 }
 
 // BackendConfig holds configuration for creating a Backend.
@@ -45,6 +48,8 @@ type BackendConfig struct {
 	DomainProvider domain.DomainProvider
 	SpamChecker    spamcheck.Checker
 	SpamConfig     config.SpamCheckConfig
+	RejectionMode  config.RejectionMode
+	SpamtrapConfig config.SpamtrapConfig
 	Collector      metrics.Collector
 	MaxRecipients  int
 	MaxMessageSize int64
@@ -62,7 +67,7 @@ func NewBackend(cfg BackendConfig) *Backend {
 		logger = slog.Default()
 	}
 
-	return &Backend{
+	b := &Backend{
 		hostname:       cfg.Hostname,
 		delivery:       cfg.Delivery,
 		queueCfg:       cfg.QueueConfig,
@@ -72,12 +77,23 @@ func NewBackend(cfg BackendConfig) *Backend {
 		domainProvider: cfg.DomainProvider,
 		spamChecker:    cfg.SpamChecker,
 		spamConfig:     cfg.SpamConfig,
+		rejectionMode:  cfg.RejectionMode,
 		collector:      cfg.Collector,
 		maxRecipients:  cfg.MaxRecipients,
 		maxMessageSize: cfg.MaxMessageSize,
 		tempDir:        cfg.TempDir,
 		logger:         logger,
 	}
+
+	if cfg.SpamtrapConfig.Enabled && cfg.SpamtrapConfig.ControllerURL != "" {
+		b.spamtrapLearner = newSpamtrapLearner(cfg.SpamtrapConfig.ControllerURL, cfg.SpamtrapConfig.Password)
+		b.spamtrapRateLimiter = newIPRateLimiter(cfg.SpamtrapConfig.GetMaxLearnsPerIPPerHour())
+		logger.Info("spamtrap auto-learning enabled",
+			"controller_url", cfg.SpamtrapConfig.ControllerURL,
+			"max_learns_per_ip_per_hour", cfg.SpamtrapConfig.GetMaxLearnsPerIPPerHour())
+	}
+
+	return b
 }
 
 // NewSession is called for each new connection.

@@ -37,22 +37,58 @@ type ServerConfig struct {
 	TLS      TLSConfig      `toml:"tls"`
 }
 
+// RejectionMode controls when unknown recipients are rejected.
+type RejectionMode string
+
+const (
+	// RejectionModeRcpt rejects unknown recipients at RCPT TO time (default).
+	RejectionModeRcpt RejectionMode = "rcpt"
+	// RejectionModeData defers rejection until after DATA, hiding address validity.
+	RejectionModeData RejectionMode = "data"
+)
+
 // Config holds the complete SMTP server configuration.
 type Config struct {
-	Hostname        string           `toml:"hostname"`
-	LogLevel        string           `toml:"log_level"`
-	DomainsPath     string           `toml:"domains_path"`
-	DomainsDataPath string           `toml:"domains_data_path"`
-	Listeners       []ListenerConfig `toml:"listeners"`
-	TLS             TLSConfig        `toml:"tls"`
-	Limits          LimitsConfig     `toml:"limits"`
-	Timeouts        TimeoutsConfig   `toml:"timeouts"`
-	Metrics         MetricsConfig    `toml:"metrics"`
-	Delivery        DeliveryConfig   `toml:"delivery"`
-	Queue           QueueConfig      `toml:"queue"`
-	Encryption      EncryptionConfig `toml:"encryption"`
-	Auth            AuthConfig       `toml:"auth"`
-	SpamCheck       SpamCheckConfig  `toml:"spamcheck"`
+	Hostname           string           `toml:"hostname"`
+	LogLevel           string           `toml:"log_level"`
+	DomainsPath        string           `toml:"domains_path"`
+	DomainsDataPath    string           `toml:"domains_data_path"`
+	RecipientRejection RejectionMode    `toml:"recipient_rejection"`
+	Listeners          []ListenerConfig `toml:"listeners"`
+	TLS                TLSConfig        `toml:"tls"`
+	Limits             LimitsConfig     `toml:"limits"`
+	Timeouts           TimeoutsConfig   `toml:"timeouts"`
+	Metrics            MetricsConfig    `toml:"metrics"`
+	Delivery           DeliveryConfig   `toml:"delivery"`
+	Queue              QueueConfig      `toml:"queue"`
+	Encryption         EncryptionConfig `toml:"encryption"`
+	Auth               AuthConfig       `toml:"auth"`
+	SpamCheck          SpamCheckConfig  `toml:"spamcheck"`
+	Spamtrap           SpamtrapConfig   `toml:"spamtrap"`
+}
+
+// SpamtrapConfig holds configuration for spamtrap auto-learning.
+type SpamtrapConfig struct {
+	// Enabled indicates whether spamtrap auto-learning is active.
+	Enabled bool `toml:"enabled"`
+
+	// ControllerURL is the rspamd controller endpoint for learn calls.
+	ControllerURL string `toml:"controller_url"`
+
+	// Password is the optional rspamd controller password.
+	Password string `toml:"password"`
+
+	// MaxLearnsPerIPPerHour caps auto-learns per source IP per hour.
+	// Defaults to 10 if not set or zero.
+	MaxLearnsPerIPPerHour int `toml:"max_learns_per_ip_per_hour"`
+}
+
+// GetMaxLearnsPerIPPerHour returns the rate limit, defaulting to 10.
+func (c *SpamtrapConfig) GetMaxLearnsPerIPPerHour() int {
+	if c.MaxLearnsPerIPPerHour <= 0 {
+		return 10
+	}
+	return c.MaxLearnsPerIPPerHour
 }
 
 // QueueConfig holds configuration for the outbound mail queue.
@@ -324,6 +360,16 @@ func (c *OAuthConfig) GetJWKSRefreshInterval() time.Duration {
 	return d
 }
 
+// GetRejectionMode returns the configured rejection mode, defaulting to "rcpt".
+func (c *Config) GetRejectionMode() RejectionMode {
+	switch c.RecipientRejection {
+	case RejectionModeRcpt, RejectionModeData:
+		return c.RecipientRejection
+	default:
+		return RejectionModeRcpt
+	}
+}
+
 // Default returns a Config with sensible default values.
 func Default() Config {
 	return Config{
@@ -402,6 +448,21 @@ func (c *Config) Validate() error {
 		}
 		if c.Metrics.Path == "" {
 			return errors.New("metrics path is required when metrics are enabled")
+		}
+	}
+
+	// Validate recipient rejection mode
+	switch c.RecipientRejection {
+	case "", RejectionModeRcpt, RejectionModeData:
+		// valid
+	default:
+		return fmt.Errorf("invalid recipient_rejection %q (valid: rcpt, data)", c.RecipientRejection)
+	}
+
+	// Validate spamtrap config
+	if c.Spamtrap.Enabled {
+		if c.Spamtrap.ControllerURL == "" {
+			return errors.New("spamtrap.controller_url is required when spamtrap is enabled")
 		}
 	}
 

@@ -61,7 +61,7 @@ func TestDeliverViaMX_Success(t *testing.T) {
 		"abc123@example.com",
 	)
 
-	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "gmail.com", bodyPath, []*envelope.Envelope{env})
+	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "gmail.com", bodyPath, []*envelope.Envelope{env}, 0)
 
 	if err := results[env.Path]; err != nil {
 		t.Fatalf("expected success, got: %v", err)
@@ -98,7 +98,7 @@ func TestDeliverViaMX_MultipleEnvelopes(t *testing.T) {
 		"bounces+bob=gmail.com@mail.example.com", "bob@gmail.com", "dead1234@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "gmail.com", bodyPath,
-		[]*envelope.Envelope{env1, env2})
+		[]*envelope.Envelope{env1, env2}, 0)
 
 	for _, env := range []*envelope.Envelope{env1, env2} {
 		if err := results[env.Path]; err != nil {
@@ -127,7 +127,7 @@ func TestDeliverViaMX_NullMX(t *testing.T) {
 		"bounces+alice=noemail.com@mail.example.com", "alice@noemail.com", "abc123@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "noemail.com", bodyPath,
-		[]*envelope.Envelope{env})
+		[]*envelope.Envelope{env}, 0)
 
 	err := results[env.Path]
 	if err == nil {
@@ -153,7 +153,7 @@ func TestDeliverViaMX_NoRecords(t *testing.T) {
 		"bounces+alice=bad.com@mail.example.com", "alice@bad.com", "abc123@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "bad.com", bodyPath,
-		[]*envelope.Envelope{env})
+		[]*envelope.Envelope{env}, 0)
 
 	err := results[env.Path]
 	if err == nil {
@@ -198,7 +198,7 @@ func TestDeliverViaMX_FallbackToSecondMX(t *testing.T) {
 		"bounces+alice=gmail.com@mail.example.com", "alice@gmail.com", "abc123@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "gmail.com", bodyPath,
-		[]*envelope.Envelope{env})
+		[]*envelope.Envelope{env}, 0)
 
 	if err := results[env.Path]; err != nil {
 		t.Fatalf("expected success via fallback MX, got: %v", err)
@@ -237,7 +237,7 @@ func TestDeliverViaMX_PermanentRcptFailure(t *testing.T) {
 		"bounces+nobody=example.com@mail.example.com", "nobody@example.com", "abc123@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
-		[]*envelope.Envelope{env})
+		[]*envelope.Envelope{env}, 0)
 
 	err := results[env.Path]
 	if err == nil {

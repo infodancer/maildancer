@@ -19,7 +19,7 @@ import (
 // No SMTP AUTH is used (standard for MX delivery).
 //
 // Returns a map of envelope path → error, like DeliverViaSmarthost.
-func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bodyPath string, envs []*envelope.Envelope) map[string]error {
+func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bodyPath string, envs []*envelope.Envelope, maxTxn int) map[string]error {
 	results := make(map[string]error, len(envs))
 
 	hosts, err := mx.Lookup(resolver, domain)
@@ -55,7 +55,7 @@ func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bod
 		return results
 	}
 
-	deliverAll(c, bodyPath, envs, results)
+	deliverAll(c, bodyPath, envs, results, maxTxn)
 	return results
 }
 

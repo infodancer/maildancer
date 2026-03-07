@@ -96,10 +96,13 @@ var dialFunc = func(addr string) (*gosmtp.Client, error) {
 // and delivers each envelope in turn. Each envelope is a separate MAIL FROM
 // transaction (required because VERP produces a unique sender per recipient).
 //
+// maxTxn limits the number of MAIL FROM transactions per connection.
+// Envelopes beyond the limit receive a temporary error for retry on the next scan.
+//
 // Returns a map of envelope path → error. A nil error means success. The
 // caller should delete the envelope file on success and update its mtime on
 // temporary failure.
-func DeliverViaSmarthost(_ context.Context, sh Smarthost, bodyPath string, envs []*envelope.Envelope) map[string]error {
+func DeliverViaSmarthost(_ context.Context, sh Smarthost, bodyPath string, envs []*envelope.Envelope, maxTxn int) map[string]error {
 	results := make(map[string]error, len(envs))
 
 	c, err := dialFunc(sh.Addr)
@@ -136,14 +139,23 @@ func DeliverViaSmarthost(_ context.Context, sh Smarthost, bodyPath string, envs 
 		return results
 	}
 
-	deliverAll(c, bodyPath, envs, results)
+	deliverAll(c, bodyPath, envs, results, maxTxn)
 	return results
 }
 
 // deliverAll sends each envelope over the connection, resetting between
-// transactions and aborting early if the connection dies.
-func deliverAll(c *gosmtp.Client, bodyPath string, envs []*envelope.Envelope, results map[string]error) {
+// transactions and aborting early if the connection dies or the transaction
+// limit is reached. maxTxn <= 0 means no limit.
+func deliverAll(c *gosmtp.Client, bodyPath string, envs []*envelope.Envelope, results map[string]error, maxTxn int) {
 	for i, env := range envs {
+		if maxTxn > 0 && i >= maxTxn {
+			limitErr := fmt.Errorf("transaction limit (%d) reached; deferring", maxTxn)
+			for _, remaining := range envs[i:] {
+				results[remaining.Path] = limitErr
+			}
+			return
+		}
+
 		err := deliver(c, bodyPath, env)
 		results[env.Path] = err
 

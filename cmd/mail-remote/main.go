@@ -8,10 +8,14 @@
 //
 // Flags:
 //
-//	--smarthost host:port  Relay all mail via this SMTP smarthost (STARTTLS).
-//	--smarthost-user user  SMTP AUTH username. Password from MAIL_REMOTE_PASSWORD env var.
+//	--config path         Path to shared TOML config file (reads [mail-remote] section).
+//	--smarthost host:port Relay all mail via this SMTP smarthost (STARTTLS).
+//	--smarthost-user user SMTP AUTH username. Password from MAIL_REMOTE_PASSWORD env var.
 //	--hostname fqdn       EHLO hostname for direct MX delivery (required without --smarthost).
 //	--final               Signal that this is the final delivery attempt (try all transports).
+//
+// CLI flags override TOML config values. Environment variables override TOML but
+// are overridden by CLI flags. Precedence: flags > env > TOML > defaults.
 //
 // Exit codes:
 //
@@ -32,6 +36,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/infodancer/maildancer/internal/mail-remote/config"
 	"github.com/infodancer/maildancer/internal/mail-remote/envelope"
 	"github.com/infodancer/maildancer/internal/mail-remote/mx"
 	"github.com/infodancer/maildancer/internal/mail-remote/smtp"
@@ -50,6 +55,7 @@ func main() {
 }
 
 func run() int {
+	configPath := flag.String("config", "", "path to shared TOML config file")
 	smarthostAddr := flag.String("smarthost", "", "SMTP smarthost address (host:port)")
 	smarthostUser := flag.String("smarthost-user", "", "SMTP AUTH username for smarthost")
 	hostname := flag.String("hostname", "", "EHLO hostname for direct MX delivery")
@@ -60,6 +66,29 @@ func run() int {
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: mail-remote [flags] <body-file> <envelope-file> [envelope-file ...]")
 		return exUsage
+	}
+
+	// Load config: TOML defaults → env overrides → CLI flag overrides.
+	cfg := config.Default()
+	if *configPath != "" {
+		var err error
+		cfg, err = config.Load(*configPath)
+		if err != nil {
+			slog.Error("failed to load config", "path", *configPath, "error", err)
+			return exUsage
+		}
+	}
+	cfg = config.ApplyEnv(cfg)
+
+	// CLI flags override config.
+	if *smarthostAddr != "" {
+		cfg.Smarthost.Addr = *smarthostAddr
+	}
+	if *smarthostUser != "" {
+		cfg.Smarthost.User = *smarthostUser
+	}
+	if *hostname != "" {
+		cfg.Hostname = *hostname
 	}
 
 	bodyPath := args[0]
@@ -85,12 +114,12 @@ func run() int {
 	}
 
 	var results map[string]error
-	if *smarthostAddr != "" {
-		sh := smtp.SmarthostFromEnv(*smarthostAddr, *smarthostUser)
-		results = smtp.DeliverViaSmarthost(context.Background(), sh, bodyPath, envs)
+	if cfg.Smarthost.Addr != "" {
+		sh := smtp.SmarthostFromEnv(cfg.Smarthost.Addr, cfg.Smarthost.User)
+		results = smtp.DeliverViaSmarthost(context.Background(), sh, bodyPath, envs, cfg.Smarthost.MaxTransactionsPerConn)
 	} else {
-		if *hostname == "" {
-			fmt.Fprintln(os.Stderr, "error: --hostname is required for direct MX delivery")
+		if cfg.Hostname == "" {
+			fmt.Fprintln(os.Stderr, "error: --hostname (or config hostname) is required for direct MX delivery")
 			return exUsage
 		}
 		domain, err := envs[0].RecipientDomain()
@@ -98,7 +127,7 @@ func run() int {
 			slog.Error("cannot determine recipient domain", "error", err)
 			return exUsage
 		}
-		results = smtp.DeliverViaMX(context.Background(), mx.NetResolver{}, *hostname, domain, bodyPath, envs)
+		results = smtp.DeliverViaMX(context.Background(), mx.NetResolver{}, cfg.Hostname, domain, bodyPath, envs, cfg.RemoteMX.MaxTransactionsPerConn)
 	}
 
 	tempFail, permFail := false, false

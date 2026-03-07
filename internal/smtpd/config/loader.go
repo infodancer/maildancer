@@ -72,6 +72,9 @@ func Load(path string) (Config, error) {
 	// Merge top-level spamcheck config (shared across services)
 	cfg = mergeSpamCheckConfig(cfg, fileConfig.SpamCheck)
 
+	// Merge shared Redis config
+	cfg = mergeRedisConfig(cfg, fileConfig.Redis)
+
 	return cfg, nil
 }
 
@@ -279,6 +282,17 @@ func mergeConfig(dst, src Config) Config {
 	// Merge spamcheck config (if defined in [smtpd.spamcheck])
 	dst = mergeSpamCheckConfig(dst, src.SpamCheck)
 
+	return dst
+}
+
+// mergeRedisConfig merges shared Redis settings into the config.
+func mergeRedisConfig(dst Config, src RedisConfig) Config {
+	if src.URL != "" {
+		dst.Redis.URL = src.URL
+	}
+	if src.Password != "" {
+		dst.Redis.Password = src.Password
+	}
 	return dst
 }
 

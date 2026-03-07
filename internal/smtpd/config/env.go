@@ -39,6 +39,14 @@ func ApplyEnv(cfg Config) Config {
 		cfg.Delivery.Options["maildir_subdir"] = v
 	}
 
+	// Apply shared Redis overrides
+	if v := os.Getenv("REDIS_URL"); v != "" {
+		cfg.Redis.URL = v
+	}
+	if v := os.Getenv("REDIS_PASSWORD"); v != "" {
+		cfg.Redis.Password = v
+	}
+
 	// Apply rspamd overrides to the first rspamd checker found
 	if v := os.Getenv("SMTPD_RSPAMD_URL"); v != "" {
 		applyRspamdURL(&cfg, v)

@@ -26,8 +26,20 @@ const (
 // This allows smtpd, pop3d, and msgstore to share a single config file.
 type FileConfig struct {
 	Server    ServerConfig    `toml:"server"`
+	Redis     RedisConfig     `toml:"redis"`
 	Smtpd     Config          `toml:"smtpd"`
 	SpamCheck SpamCheckConfig `toml:"spamcheck"`
+}
+
+// RedisConfig holds shared Redis connection settings.
+// Any mail stack component can read this section to connect to the shared Redis instance.
+type RedisConfig struct {
+	// URL is the Redis connection URL (e.g. "redis://redis:6379/1").
+	// Supports redis:// and rediss:// (TLS) schemes.
+	URL string `toml:"url"`
+
+	// Password is the Redis AUTH password. Also settable via REDIS_PASSWORD env var.
+	Password string `toml:"password"`
 }
 
 // ServerConfig holds shared settings used by all mail services.
@@ -65,6 +77,7 @@ type Config struct {
 	Auth               AuthConfig       `toml:"auth"`
 	SpamCheck          SpamCheckConfig  `toml:"spamcheck"`
 	Spamtrap           SpamtrapConfig   `toml:"spamtrap"`
+	Redis              RedisConfig      `toml:"-"` // populated from [redis] top-level section
 }
 
 // SpamtrapConfig holds configuration for spamtrap auto-learning.

@@ -11,6 +11,14 @@ cert_file = "/etc/ssl/certs/mail.pem"
 key_file = "/etc/ssl/private/mail.key"
 min_version = "1.2"
 
+# Shared Redis Configuration
+# Used by all mail stack components for coordination (rate limiting,
+# delivery throttling, IMAP notifications). Password also settable
+# via REDIS_PASSWORD env var.
+# [redis]
+# url = "redis://redis:6379/1"
+# password = ""
+
 # SMTP Server Configuration
 [smtpd]
 log_level = "info"

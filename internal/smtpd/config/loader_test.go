@@ -489,6 +489,63 @@ mode = "smtp"
 	}
 }
 
+func TestLoadRedisConfig(t *testing.T) {
+	content := `
+[redis]
+url = "redis://redis:6379/1"
+password = "secret"
+
+[smtpd]
+hostname = "mail.example.com"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Redis.URL != "redis://redis:6379/1" {
+		t.Errorf("redis.url = %q, want 'redis://redis:6379/1'", cfg.Redis.URL)
+	}
+
+	if cfg.Redis.Password != "secret" {
+		t.Errorf("redis.password = %q, want 'secret'", cfg.Redis.Password)
+	}
+}
+
+func TestLoadRedisEnvOverride(t *testing.T) {
+	content := `
+[redis]
+url = "redis://redis:6379/1"
+password = "file-password"
+
+[smtpd]
+hostname = "mail.example.com"
+`
+
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	t.Setenv("REDIS_URL", "redis://override:6380/2")
+	t.Setenv("REDIS_PASSWORD", "env-password")
+
+	cfg = ApplyEnv(cfg)
+
+	if cfg.Redis.URL != "redis://override:6380/2" {
+		t.Errorf("redis.url = %q, want 'redis://override:6380/2'", cfg.Redis.URL)
+	}
+
+	if cfg.Redis.Password != "env-password" {
+		t.Errorf("redis.password = %q, want 'env-password'", cfg.Redis.Password)
+	}
+}
+
 func createTempConfig(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()

@@ -150,6 +150,19 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		}
 	}
 
+	// Create Redis notifier for IMAP IDLE new-mail notifications.
+	var notifier *Notifier
+	if cfg.Config.Redis.URL != "" {
+		var err error
+		notifier, err = NewNotifier(cfg.Config.Redis.URL, cfg.Config.Redis.Password, logger)
+		if err != nil {
+			s.Close() //nolint:errcheck
+			return nil, err
+		}
+		s.closers = append(s.closers, notifier)
+		logger.Info("redis notifier enabled", "url", cfg.Config.Redis.URL)
+	}
+
 	backend := NewBackend(BackendConfig{
 		Hostname:       cfg.Config.Hostname,
 		Delivery:       delivery,
@@ -161,6 +174,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		SpamConfig:     cfg.SpamConfig,
 		RejectionMode:  cfg.Config.GetRejectionMode(),
 		SpamtrapConfig: cfg.Config.Spamtrap,
+		Notifier:       notifier,
 		Collector:      collector,
 		MaxRecipients:  cfg.Config.Limits.MaxRecipients,
 		MaxMessageSize: int64(cfg.Config.Limits.MaxMessageSize),

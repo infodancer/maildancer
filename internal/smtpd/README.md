@@ -38,61 +38,61 @@ This design:
 ## Features
 
 ### Core Protocol
-- [ ] RFC 5321 compliant SMTP server
-- [ ] EHLO/HELO with capability advertisement
-- [ ] MAIL FROM / RCPT TO / DATA command handling
-- [ ] Proper response codes and enhanced status codes (RFC 2034/3463)
-- [ ] Connection timeouts and resource limits
-- [ ] Graceful shutdown with in-flight message completion
+- [x] RFC 5321 compliant SMTP server
+- [x] EHLO/HELO with capability advertisement
+- [x] MAIL FROM / RCPT TO / DATA command handling
+- [x] Proper response codes and enhanced status codes (RFC 2034/3463)
+- [x] Connection timeouts and resource limits
+- [x] Graceful shutdown with in-flight message completion
 
 ### Security & Encryption
-- [ ] STARTTLS support (RFC 3207)
-- [ ] Configurable TLS (versions, cipher suites, certificates)
-- [ ] AUTH extension (RFC 4954)
-  - [ ] PLAIN mechanism
-  - [ ] LOGIN mechanism
-  - [ ] CRAM-MD5 mechanism
+- [x] STARTTLS support (RFC 3207)
+- [x] Configurable TLS (versions, cipher suites, certificates)
+- [x] AUTH extension (RFC 4954)
+  - [x] PLAIN mechanism
+  - [x] OAUTHBEARER mechanism (JWT via JWKS)
 
 ### SMTP Extensions
-- [ ] SIZE - Message size declaration (RFC 1870)
-- [ ] 8BITMIME - 8-bit MIME transport (RFC 6152)
-- [ ] PIPELINING - Command pipelining (RFC 2920)
+- [x] SIZE - Message size declaration and enforcement (RFC 1870)
+- [x] 8BITMIME - 8-bit MIME transport (RFC 6152)
+- [x] PIPELINING - Command pipelining (RFC 2920)
+- [x] CHUNKING/BDAT - Binary data transfer (RFC 3030)
+- [x] ENHANCEDSTATUSCODES (RFC 2034)
 
 ### Anti-Spam & Filtering
-- [ ] SPF verification (RFC 7208)
-- [ ] DKIM verification (RFC 6376)
-- [ ] DMARC policy enforcement (RFC 7489)
-- [ ] RBL/DNSBL lookups
+- [x] SPF verification (via rspamd)
+- [x] DKIM verification (via rspamd)
+- [x] DMARC policy enforcement (via rspamd)
+- [x] RBL/DNSBL lookups (via rspamd)
+- [x] Greylisting (via rspamd)
 - [ ] Milter protocol support (Sendmail mail filter API)
 - [ ] SpamAssassin integration via spamc
-- [ ] Rate limiting (per IP, per sender, per recipient domain)
-- [ ] Greylisting support
 
 ### Operational
-- [ ] Structured logging (slog)
-- [ ] Metrics export (Prometheus-compatible)
-- [ ] Configuration via TOML and environment variables
-- [ ] Hot configuration reload (SIGHUP)
+- [x] Structured logging (slog)
+- [x] Metrics export (Prometheus-compatible)
+- [x] Configuration via TOML and environment variables
 
 ## RFC Compliance
 
 | RFC | Title | Status |
 |-----|-------|--------|
-| [RFC 5321](https://datatracker.ietf.org/doc/html/rfc5321) | Simple Mail Transfer Protocol | Planned |
-| [RFC 5322](https://datatracker.ietf.org/doc/html/rfc5322) | Internet Message Format | Planned |
-| [RFC 1123](https://datatracker.ietf.org/doc/html/rfc1123) | Requirements for Internet Hosts | Planned |
-| [RFC 4954](https://datatracker.ietf.org/doc/html/rfc4954) | SMTP Service Extension for Authentication | Planned |
-| [RFC 3207](https://datatracker.ietf.org/doc/html/rfc3207) | SMTP Service Extension for Secure SMTP over TLS | Planned |
-| [RFC 1870](https://datatracker.ietf.org/doc/html/rfc1870) | SMTP Service Extension for Message Size Declaration | Planned |
-| [RFC 6152](https://datatracker.ietf.org/doc/html/rfc6152) | SMTP Service Extension for 8-bit MIME Transport | Planned |
-| [RFC 2920](https://datatracker.ietf.org/doc/html/rfc2920) | SMTP Service Extension for Command Pipelining | Planned |
-| [RFC 2034](https://datatracker.ietf.org/doc/html/rfc2034) | SMTP Service Extension for Returning Enhanced Error Codes | Planned |
-| [RFC 3463](https://datatracker.ietf.org/doc/html/rfc3463) | Enhanced Mail System Status Codes | Planned |
-| [RFC 7208](https://datatracker.ietf.org/doc/html/rfc7208) | Sender Policy Framework (SPF) | Planned |
-| [RFC 6376](https://datatracker.ietf.org/doc/html/rfc6376) | DomainKeys Identified Mail (DKIM) Signatures | Planned |
-| [RFC 7489](https://datatracker.ietf.org/doc/html/rfc7489) | Domain-based Message Authentication (DMARC) | Planned |
-| [RFC 6409](https://datatracker.ietf.org/doc/html/rfc6409) | Message Submission for Mail | Planned |
-| [RFC 8314](https://datatracker.ietf.org/doc/html/rfc8314) | Cleartext Considered Obsolete: Use of TLS for Email | Planned |
+| [RFC 5321](https://datatracker.ietf.org/doc/html/rfc5321) | Simple Mail Transfer Protocol | Implemented |
+| [RFC 5322](https://datatracker.ietf.org/doc/html/rfc5322) | Internet Message Format | Implemented |
+| [RFC 1123](https://datatracker.ietf.org/doc/html/rfc1123) | Requirements for Internet Hosts | Implemented |
+| [RFC 4954](https://datatracker.ietf.org/doc/html/rfc4954) | SMTP Service Extension for Authentication | Implemented |
+| [RFC 3207](https://datatracker.ietf.org/doc/html/rfc3207) | SMTP Service Extension for Secure SMTP over TLS | Implemented |
+| [RFC 1870](https://datatracker.ietf.org/doc/html/rfc1870) | SMTP Service Extension for Message Size Declaration | Implemented |
+| [RFC 6152](https://datatracker.ietf.org/doc/html/rfc6152) | SMTP Service Extension for 8-bit MIME Transport | Implemented |
+| [RFC 2920](https://datatracker.ietf.org/doc/html/rfc2920) | SMTP Service Extension for Command Pipelining | Implemented |
+| [RFC 3030](https://datatracker.ietf.org/doc/html/rfc3030) | SMTP Service Extensions for Transmission of Large and Binary MIME Messages | Implemented |
+| [RFC 2034](https://datatracker.ietf.org/doc/html/rfc2034) | SMTP Service Extension for Returning Enhanced Error Codes | Implemented |
+| [RFC 3463](https://datatracker.ietf.org/doc/html/rfc3463) | Enhanced Mail System Status Codes | Implemented |
+| [RFC 7208](https://datatracker.ietf.org/doc/html/rfc7208) | Sender Policy Framework (SPF) | Via rspamd |
+| [RFC 6376](https://datatracker.ietf.org/doc/html/rfc6376) | DomainKeys Identified Mail (DKIM) Signatures | Via rspamd |
+| [RFC 7489](https://datatracker.ietf.org/doc/html/rfc7489) | Domain-based Message Authentication (DMARC) | Via rspamd |
+| [RFC 6409](https://datatracker.ietf.org/doc/html/rfc6409) | Message Submission for Mail | Implemented |
+| [RFC 8314](https://datatracker.ietf.org/doc/html/rfc8314) | Cleartext Considered Obsolete: Use of TLS for Email | Implemented |
 
 ## Architecture
 
@@ -328,7 +328,7 @@ See [CONVENTIONS.md](CONVENTIONS.md) for Go coding standards.
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.25+
 - Task runner (`go install github.com/go-task/task/v3/cmd/task@latest`)
 
 ### Commands

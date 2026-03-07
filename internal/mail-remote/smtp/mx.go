@@ -40,9 +40,22 @@ func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bod
 	}
 	defer func() { _ = c.Close() }()
 
-	for _, env := range envs {
-		results[env.Path] = deliver(c, bodyPath, env)
+	bodySize, err := fileSize(bodyPath)
+	if err != nil {
+		for _, env := range envs {
+			results[env.Path] = fmt.Errorf("stat body %s: %w", bodyPath, err)
+		}
+		return results
 	}
+
+	if err := checkSize(c, bodySize); err != nil {
+		for _, env := range envs {
+			results[env.Path] = err
+		}
+		return results
+	}
+
+	deliverAll(c, bodyPath, envs, results)
 	return results
 }
 

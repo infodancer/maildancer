@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
 	"os"
 
 	"github.com/emersion/go-sasl"
@@ -38,6 +41,30 @@ func classifyError(err error) error {
 		return &PermanentError{Err: err}
 	}
 	return err
+}
+
+// isConnectionError reports whether err indicates the underlying TCP
+// connection is dead (I/O error, reset, timeout) rather than a protocol-
+// level rejection. A dead connection cannot be reused for further envelopes.
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var smtpErr *gosmtp.SMTPError
+	if errors.As(err, &smtpErr) {
+		return false // protocol-level rejection; connection is still alive
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	return false
 }
 
 // Smarthost holds configuration for relaying via a fixed SMTP smarthost.
@@ -94,13 +121,61 @@ func DeliverViaSmarthost(_ context.Context, sh Smarthost, bodyPath string, envs 
 		}
 	}
 
-	for _, env := range envs {
-		results[env.Path] = deliver(c, bodyPath, env)
+	bodySize, err := fileSize(bodyPath)
+	if err != nil {
+		for _, env := range envs {
+			results[env.Path] = fmt.Errorf("stat body %s: %w", bodyPath, err)
+		}
+		return results
 	}
+
+	if err := checkSize(c, bodySize); err != nil {
+		for _, env := range envs {
+			results[env.Path] = err
+		}
+		return results
+	}
+
+	deliverAll(c, bodyPath, envs, results)
 	return results
 }
 
+// deliverAll sends each envelope over the connection, resetting between
+// transactions and aborting early if the connection dies.
+func deliverAll(c *gosmtp.Client, bodyPath string, envs []*envelope.Envelope, results map[string]error) {
+	for i, env := range envs {
+		err := deliver(c, bodyPath, env)
+		results[env.Path] = err
+
+		if err != nil && isConnectionError(err) {
+			connErr := fmt.Errorf("connection lost: %w", err)
+			for _, remaining := range envs[i+1:] {
+				results[remaining.Path] = connErr
+			}
+			return
+		}
+
+		// RSET between transactions to clean up server state. Skip after
+		// the last envelope (we'll QUIT instead). We RSET after both
+		// success and protocol errors (e.g. 550) to ensure the next
+		// MAIL FROM starts clean. Connection errors are handled above.
+		if i < len(envs)-1 {
+			if resetErr := c.Reset(); resetErr != nil {
+				slog.Debug("RSET failed between transactions", "error", resetErr)
+				if isConnectionError(resetErr) {
+					connErr := fmt.Errorf("connection lost during RSET: %w", resetErr)
+					for _, remaining := range envs[i+1:] {
+						results[remaining.Path] = connErr
+					}
+					return
+				}
+			}
+		}
+	}
+}
+
 // deliver sends one envelope over an already-authenticated SMTP connection.
+// Uses explicit MAIL/RCPT/DATA to capture the remote queue ID.
 func deliver(c *gosmtp.Client, bodyPath string, env *envelope.Envelope) error {
 	body, err := os.Open(bodyPath)
 	if err != nil {
@@ -108,8 +183,52 @@ func deliver(c *gosmtp.Client, bodyPath string, env *envelope.Envelope) error {
 	}
 	defer func() { _ = body.Close() }()
 
-	if err := c.SendMail(env.Sender, []string{env.Recipient}, body); err != nil {
-		return classifyError(fmt.Errorf("smtp send to %s: %w", env.Recipient, err))
+	if err := c.Mail(env.Sender, nil); err != nil {
+		return classifyError(fmt.Errorf("MAIL FROM <%s>: %w", env.Sender, err))
+	}
+
+	if err := c.Rcpt(env.Recipient, nil); err != nil {
+		return classifyError(fmt.Errorf("RCPT TO <%s>: %w", env.Recipient, err))
+	}
+
+	dataCmd, err := c.Data()
+	if err != nil {
+		return classifyError(fmt.Errorf("DATA: %w", err))
+	}
+
+	if _, err := io.Copy(dataCmd, body); err != nil {
+		return fmt.Errorf("write body: %w", err)
+	}
+
+	resp, err := dataCmd.CloseWithResponse()
+	if err != nil {
+		return classifyError(fmt.Errorf("DATA close: %w", err))
+	}
+
+	slog.Info("delivered", "recipient", env.Recipient, "remote_status", resp.StatusText)
+	return nil
+}
+
+// fileSize returns the size of a file in bytes.
+func fileSize(path string) (int64, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
+}
+
+// checkSize verifies the body fits within the server's advertised SIZE limit.
+// Returns a PermanentError if the message is too large.
+func checkSize(c *gosmtp.Client, bodyBytes int64) error {
+	maxSize, ok := c.MaxMessageSize()
+	if !ok || maxSize == 0 {
+		return nil
+	}
+	if bodyBytes > int64(maxSize) {
+		return &PermanentError{
+			Err: fmt.Errorf("message size %d exceeds server limit %d", bodyBytes, maxSize),
+		}
 	}
 	return nil
 }

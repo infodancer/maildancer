@@ -267,7 +267,7 @@ type SpamCheckConfig struct {
 
 // SpamCheckerConfig holds configuration for a single spam checker.
 type SpamCheckerConfig struct {
-	// Type is the checker type: "rspamd", "spamassassin", etc.
+	// Type is the checker type (currently only "rspamd" is supported).
 	Type string `toml:"type"`
 
 	// Enabled indicates whether this checker is enabled (default true).
@@ -520,10 +520,6 @@ func (c *Config) Validate() error {
 			case "rspamd":
 				if checker.URL == "" {
 					return fmt.Errorf("spamcheck.checkers[%d].url is required for rspamd", i)
-				}
-			case "spamassassin":
-				if checker.URL == "" {
-					return fmt.Errorf("spamcheck.checkers[%d].url is required for spamassassin", i)
 				}
 			}
 		}

@@ -65,8 +65,6 @@ This design:
 - [x] DMARC policy enforcement (via rspamd)
 - [x] RBL/DNSBL lookups (via rspamd)
 - [x] Greylisting (via rspamd)
-- [ ] Milter protocol support (Sendmail mail filter API)
-- [ ] SpamAssassin integration via spamc
 
 ### Operational
 - [x] Structured logging (slog)
@@ -102,7 +100,7 @@ This design:
 │                                                                  │
 │  ┌──────────┐    ┌─────────────┐    ┌──────────────────────┐    │
 │  │ Listener │───▶│   Session   │───▶│    Filter Chain      │    │
-│  │  (TLS)   │    │   Handler   │    │ (SPF/DKIM/RBL/Milter)│    │
+│  │  (TLS)   │    │   Handler   │    │ (SPF/DKIM/RBL/rspamd)│    │
 │  └──────────┘    └─────────────┘    └──────────────────────┘    │
 │                         │                      │                 │
 │                         ▼                      ▼                 │
@@ -121,7 +119,7 @@ This design:
 
 **AuthProvider** - Validates user credentials during SMTP AUTH. Can integrate with various backends (database, LDAP, PAM, etc.).
 
-**Filter** - Pluggable message inspection. Built-in filters for SPF, DKIM, DMARC, RBL. External integration via Milter protocol and spamc.
+**Filter** - Pluggable message inspection. SPF, DKIM, DMARC, RBL, and greylisting via rspamd.
 
 ## Deployment
 

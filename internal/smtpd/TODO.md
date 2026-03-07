@@ -54,8 +54,6 @@ Not implemented: SEND, SOML, SAML, TURN
 ### Spam Checker Integration
 - [x] Generic spam checker interface (pluggable backends)
 - [x] rspamd integration via HTTP API
-- [ ] SpamAssassin integration via spamc
-
 ### Via rspamd (when rspamd is configured)
 The following are handled by rspamd when enabled:
 - [x] SPF verification (RFC 7208)
@@ -66,10 +64,6 @@ The following are handled by rspamd when enabled:
 - [x] Greylisting
 - [x] Sender reputation tracking
 - [x] ClamAV/antivirus integration (via rspamd antivirus module)
-
-### Native Features (not yet implemented)
-- [ ] Milter support (Sendmail milter protocol)
-- [ ] Custom filter hooks
 
 ### Rate Limiting
 - [ ] Per-connection rate limiting

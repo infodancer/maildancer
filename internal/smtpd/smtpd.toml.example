@@ -63,11 +63,6 @@ path = "/metrics"
 # password = ""                  # Optional controller password
 # timeout = "10s"
 #
-# # Example: add a second checker (when implemented)
-# # [[spamcheck.checkers]]
-# # type = "spamassassin"
-# # url = "localhost:783"
-# # timeout = "30s"
 
 # Authentication Configuration
 # Supports username/password (PLAIN) and OAuth 2.0 bearer tokens (OAUTHBEARER)

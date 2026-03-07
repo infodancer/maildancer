@@ -131,6 +131,52 @@ func (s *Session) Commit(ctx context.Context) error {
 	return nil
 }
 
+// Rescan re-reads the currently selected folder from the store and returns
+// only messages whose UIDs are not in the current cached list. The internal
+// cache is updated to the full new list so subsequent calls reflect reality.
+// Returns an empty slice (not nil) when there are no new messages.
+func (s *Session) Rescan(ctx context.Context) ([]msgstore.MessageInfo, error) {
+	if s.mailbox == "" {
+		return nil, mserrors.ErrMailboxNotOpen
+	}
+
+	var allMsgs []msgstore.MessageInfo
+	var err error
+	folder := s.selectedFolder
+	if folder == "" || strings.EqualFold(folder, "INBOX") {
+		allMsgs, err = s.store.List(ctx, s.mailbox)
+	} else {
+		if s.folderStore == nil {
+			return nil, fmt.Errorf("folder operations not supported")
+		}
+		allMsgs, err = s.folderStore.ListInFolder(ctx, s.mailbox, folder)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("rescan: %w", err)
+	}
+
+	known := make(map[string]struct{}, len(s.msgs))
+	for _, m := range s.msgs {
+		known[m.UID] = struct{}{}
+	}
+
+	newMsgs := make([]msgstore.MessageInfo, 0)
+	for _, m := range allMsgs {
+		if _, ok := known[m.UID]; !ok {
+			newMsgs = append(newMsgs, m)
+		}
+	}
+
+	s.msgs = allMsgs
+	return newMsgs, nil
+}
+
+// SelectedFolder returns the name of the currently selected folder.
+// Returns "" if no folder has been explicitly selected (POP3 root / INBOX default).
+func (s *Session) SelectedFolder() string {
+	return s.selectedFolder
+}
+
 // --- IMAP-path methods ---
 
 // Select selects a named folder and caches its message list.

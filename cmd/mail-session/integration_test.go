@@ -376,6 +376,93 @@ func TestIntegration_SetFlags_Expunge(t *testing.T) {
 	}
 }
 
+func TestIntegration_Rescan_NoChange(t *testing.T) {
+	base, mailbox, _ := setupMaildir(t)
+	lines := runSession(t, base, []string{
+		"MAILBOX " + mailbox,
+		"SELECT INBOX",
+		"RESCAN",
+		"QUIT",
+	})
+
+	// Lines: +OK (MAILBOX), +OK 1 + entry (SELECT), +OK 0 (RESCAN with no new msgs), +OK (QUIT)
+	foundRescan := false
+	for _, l := range lines {
+		if l == "+OK 0" {
+			foundRescan = true
+			break
+		}
+	}
+	if !foundRescan {
+		t.Errorf("expected +OK 0 from RESCAN (no new messages), lines: %v", lines)
+	}
+}
+
+func TestIntegration_Rescan_BeforeMailbox(t *testing.T) {
+	base := t.TempDir()
+	lines := runSession(t, base, []string{
+		"RESCAN",
+		"QUIT",
+	})
+
+	if len(lines) < 1 || !strings.HasPrefix(lines[0], "-ERR") {
+		t.Errorf("expected -ERR before MAILBOX, got: %v", lines)
+	}
+}
+
+func TestIntegration_ConfigFile(t *testing.T) {
+	base, mailbox, _ := setupMaildir(t)
+
+	// Write a TOML config file with a rescan interval.
+	configPath := filepath.Join(t.TempDir(), "config.toml")
+	configContent := `[mail-session]
+rescan_interval = "45s"
+`
+	if err := os.WriteFile(configPath, []byte(configContent), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Build the binary.
+	bin := filepath.Join(t.TempDir(), "mail-session")
+	build := exec.Command("go", "build", "-o", bin, "github.com/infodancer/maildancer/internal/mail-session/cmd/mail-session")
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	input := strings.Join([]string{
+		"MAILBOX " + mailbox,
+		"STAT",
+		"QUIT",
+	}, "\r\n") + "\r\n"
+
+	cmd := exec.Command(bin, "--basepath", base, "--type", "maildir", "--config", configPath)
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			t.Logf("exit code %d, stderr: %s", exitErr.ExitCode(), exitErr.Stderr)
+		}
+	}
+
+	var lines []string
+	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	for sc.Scan() {
+		lines = append(lines, strings.TrimRight(sc.Text(), "\r"))
+	}
+
+	// Should work normally — config file is optional and doesn't affect correctness.
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 lines, got %d: %v", len(lines), lines)
+	}
+	if lines[0] != "+OK" {
+		t.Errorf("MAILBOX = %q, want +OK", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], "+OK 1 ") {
+		t.Errorf("STAT = %q, want +OK 1 <size>", lines[1])
+	}
+}
+
 // Ensure the integration test file compiles even without the build tag context.
 var _ = fmt.Sprintf
 var _ = io.EOF

@@ -26,6 +26,7 @@ const (
 	CmdAppend       = "APPEND"       // APPEND <folder> <size> <flags-csv-or-NONE> <date-rfc3339>
 	CmdCopy         = "COPY"         // COPY <uid> <dest-folder> — copy message, return dest UID
 	CmdMove         = "MOVE"         // MOVE <uid> <src-folder> <dest-folder> — atomic move, return dest UID
+	CmdRescan       = "RESCAN"       // RESCAN — re-read current folder, return new messages only
 )
 
 // Command holds a parsed command from the client.

@@ -66,6 +66,30 @@ func TestWriteData(t *testing.T) {
 	}
 }
 
+func TestWriteNewMail(t *testing.T) {
+	var buf bytes.Buffer
+	w := protocol.NewWriter(&buf)
+	lines := []string{"uid3 2048 \\Recent", "uid4 512 "}
+	if err := w.WriteNewMail(lines); err != nil {
+		t.Fatalf("WriteNewMail error: %v", err)
+	}
+	want := "+NEWMAIL 2\r\nuid3 2048 \\Recent\r\nuid4 512 \r\n"
+	if got := buf.String(); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestWriteNewMail_Empty(t *testing.T) {
+	var buf bytes.Buffer
+	w := protocol.NewWriter(&buf)
+	if err := w.WriteNewMail([]string{}); err != nil {
+		t.Fatalf("WriteNewMail error: %v", err)
+	}
+	if got := buf.String(); got != "+NEWMAIL 0\r\n" {
+		t.Errorf("got %q, want %q", got, "+NEWMAIL 0\r\n")
+	}
+}
+
 func TestWriteErr(t *testing.T) {
 	var buf bytes.Buffer
 	w := protocol.NewWriter(&buf)

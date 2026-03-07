@@ -37,17 +37,21 @@ DELETE <uid>               → +OK
 UNDELETE <uid>             → +OK
 COMMIT                     → apply deletes, exit 0
 QUIT                       → exit without committing
-FOLDERS                    → +OK <count>\r\n<name>\r\n... (future: IMAP)
-SELECT <folder>            → +OK <count> messages (future: IMAP)
-SETFLAG <uid> <flag>       → +OK (future: IMAP)
-CLEARFLAG <uid> <flag>     → +OK (future: IMAP)
-APPEND <folder> <flags> <size>\r\n<bytes>  → +OK (future: IMAP)
+SELECT <folder>            → +OK <count>\r\n<uid> <size> <flags>\r\n...
+RESCAN                     → +OK <new_count>\r\n<uid> <size> <flags>\r\n... (new msgs only)
+FOLDERS                    → +OK <count>\r\n<name>\r\n...
+SETFLAGS <uid> [<flags>]   → +OK
+EXPUNGE                    → +OK <count>\r\n<uid>\r\n...
+APPEND <folder> <size> <flags-or-NONE> <date-rfc3339>\r\n<bytes>  → +OK <uid>
+COPY <uid> <dest-folder>   → +OK <new-uid>
+MOVE <uid> <src> <dest>    → +OK <new-uid>
 
 # Responses
 +OK                        → success, no data
 +OK <data>                 → success with single-line data
 +OK <count>                → followed by <count> CRLF-terminated lines
 +DATA <size>               → binary blob of <size> bytes follows immediately
++NEWMAIL <count>           → unsolicited: periodic timer found new messages
 -ERR <reason>              → error
 ```
 

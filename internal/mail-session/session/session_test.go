@@ -557,6 +557,130 @@ func TestMoveMessage_InboxToFolder(t *testing.T) {
 	}
 }
 
+// ── Rescan tests ─────────────────────────────────────────────────────────────
+
+func TestRescan_NoMailbox(t *testing.T) {
+	store := newMockStore(map[string]string{}, []string{})
+	s := session.New(store)
+	_, err := s.Rescan(context.Background())
+	if err == nil {
+		t.Fatal("expected error for rescan without open mailbox")
+	}
+}
+
+func TestRescan_NoNewMessages(t *testing.T) {
+	store := newMockFullStore(
+		map[string]string{"uid1": "hello"},
+		[]string{"uid1"},
+	)
+	s := openSession(t, store)
+	if _, err := s.Select(context.Background(), "INBOX"); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	newMsgs, err := s.Rescan(context.Background())
+	if err != nil {
+		t.Fatalf("Rescan: %v", err)
+	}
+	if len(newMsgs) != 0 {
+		t.Errorf("expected 0 new messages, got %d", len(newMsgs))
+	}
+}
+
+func TestRescan_DetectsNewMessages(t *testing.T) {
+	store := newMockFullStore(
+		map[string]string{"uid1": "hello"},
+		[]string{"uid1"},
+	)
+	s := openSession(t, store)
+	if _, err := s.Select(context.Background(), "INBOX"); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+
+	// Simulate a new message arriving in the store.
+	store.messages["uid2"] = "world"
+	store.listOrder = []string{"uid1", "uid2"}
+
+	newMsgs, err := s.Rescan(context.Background())
+	if err != nil {
+		t.Fatalf("Rescan: %v", err)
+	}
+	if len(newMsgs) != 1 {
+		t.Fatalf("expected 1 new message, got %d", len(newMsgs))
+	}
+	if newMsgs[0].UID != "uid2" {
+		t.Errorf("new message UID = %q, want uid2", newMsgs[0].UID)
+	}
+
+	// Second rescan with no further changes should return 0.
+	newMsgs2, err := s.Rescan(context.Background())
+	if err != nil {
+		t.Fatalf("Rescan 2: %v", err)
+	}
+	if len(newMsgs2) != 0 {
+		t.Errorf("expected 0 new messages on second rescan, got %d", len(newMsgs2))
+	}
+}
+
+func TestRescan_CustomFolder(t *testing.T) {
+	store := newMockFullStore(map[string]string{}, []string{})
+	store.folderMsgs["Sent"] = []msgstore.MessageInfo{
+		{UID: "s1", Size: 10, Flags: []string{}},
+	}
+	s := openSession(t, store)
+	if _, err := s.Select(context.Background(), "Sent"); err != nil {
+		t.Fatalf("Select Sent: %v", err)
+	}
+
+	// Add a new message to the Sent folder.
+	store.folderMsgs["Sent"] = append(store.folderMsgs["Sent"],
+		msgstore.MessageInfo{UID: "s2", Size: 20, Flags: []string{}},
+	)
+
+	newMsgs, err := s.Rescan(context.Background())
+	if err != nil {
+		t.Fatalf("Rescan: %v", err)
+	}
+	if len(newMsgs) != 1 || newMsgs[0].UID != "s2" {
+		t.Errorf("newMsgs = %v, want [{s2 ...}]", newMsgs)
+	}
+}
+
+func TestRescan_AfterOpen_INBOX(t *testing.T) {
+	// Rescan should work on INBOX even without an explicit SELECT,
+	// as long as the mailbox is open (POP3 path).
+	store := newMockFullStore(
+		map[string]string{"uid1": "hello"},
+		[]string{"uid1"},
+	)
+	s := openSession(t, store)
+
+	store.messages["uid2"] = "world"
+	store.listOrder = []string{"uid1", "uid2"}
+
+	newMsgs, err := s.Rescan(context.Background())
+	if err != nil {
+		t.Fatalf("Rescan: %v", err)
+	}
+	if len(newMsgs) != 1 || newMsgs[0].UID != "uid2" {
+		t.Errorf("newMsgs = %v, want [{uid2 ...}]", newMsgs)
+	}
+}
+
+func TestSelectedFolder(t *testing.T) {
+	store := newMockFullStore(map[string]string{}, []string{})
+	store.folderMsgs["Sent"] = []msgstore.MessageInfo{}
+	s := openSession(t, store)
+	if got := s.SelectedFolder(); got != "" {
+		t.Errorf("SelectedFolder before Select = %q, want empty", got)
+	}
+	if _, err := s.Select(context.Background(), "Sent"); err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if got := s.SelectedFolder(); got != "Sent" {
+		t.Errorf("SelectedFolder after Select = %q, want Sent", got)
+	}
+}
+
 func TestMoveMessage_SameFolder_Error(t *testing.T) {
 	store := newMockFullStore(map[string]string{}, []string{})
 	s := openSession(t, store)

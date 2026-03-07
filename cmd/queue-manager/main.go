@@ -10,6 +10,7 @@
 //
 //	--queue      path    Root of the mail queue directory (required).
 //	--binary     path    Path to the mail-remote binary (default: mail-remote in PATH).
+//	--config     path    Shared TOML config file (passed to mail-remote as --config).
 //	--smarthost  h:port  Pass --smarthost to mail-remote for all deliveries.
 //	--smarthost-user u   Pass --smarthost-user to mail-remote.
 //	--interval    dur     How often to scan the queue (default: 1m).
@@ -37,6 +38,7 @@ func main() {
 func run() error {
 	queueDir := flag.String("queue", "", "root of the mail queue directory (required)")
 	binary := flag.String("binary", "mail-remote", "path to the mail-remote binary")
+	configPath := flag.String("config", "", "shared TOML config file (passed to mail-remote as --config)")
 	smarthostAddr := flag.String("smarthost", "", "SMTP smarthost address (host:port)")
 	smarthostUser := flag.String("smarthost-user", "", "SMTP AUTH username for smarthost")
 	interval := flag.Duration("interval", time.Minute, "queue scan interval")
@@ -51,6 +53,7 @@ func run() error {
 	cfg := scheduler.Config{
 		QueueDir:      *queueDir,
 		Binary:        *binary,
+		ConfigPath:    *configPath,
 		SmarthostAddr: *smarthostAddr,
 		SmarthostUser: *smarthostUser,
 		Interval:      *interval,

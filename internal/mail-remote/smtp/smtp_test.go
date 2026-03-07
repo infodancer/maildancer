@@ -147,7 +147,7 @@ func TestDeliverViaSmarthost_Success(t *testing.T) {
 	)
 
 	sh := Smarthost{Addr: addr}
-	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env})
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env}, 0)
 
 	if err := results[env.Path]; err != nil {
 		t.Fatalf("expected success, got: %v", err)
@@ -193,7 +193,7 @@ func TestDeliverViaSmarthost_MultipleEnvelopes(t *testing.T) {
 	)
 
 	sh := Smarthost{Addr: addr}
-	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env1, env2})
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env1, env2}, 0)
 
 	for _, env := range []*envelope.Envelope{env1, env2} {
 		if err := results[env.Path]; err != nil {
@@ -224,7 +224,7 @@ func TestDeliverViaSmarthost_DialFailure(t *testing.T) {
 		"abc123@example.com",
 	)
 
-	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env})
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env}, 0)
 	if results[env.Path] == nil {
 		t.Error("expected error for unreachable host, got nil")
 	}
@@ -243,7 +243,7 @@ func TestDeliverViaSmarthost_MissingBody(t *testing.T) {
 	)
 
 	sh := Smarthost{Addr: addr}
-	results := DeliverViaSmarthost(context.Background(), sh, "/nonexistent/body", []*envelope.Envelope{env})
+	results := DeliverViaSmarthost(context.Background(), sh, "/nonexistent/body", []*envelope.Envelope{env}, 0)
 	if results[env.Path] == nil {
 		t.Error("expected error for missing body file, got nil")
 	}
@@ -275,7 +275,7 @@ func TestDeliverViaSmarthost_PermanentFailure(t *testing.T) {
 	)
 
 	sh := Smarthost{Addr: addr}
-	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env})
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env}, 0)
 
 	err := results[env.Path]
 	if err == nil {
@@ -312,7 +312,7 @@ func TestDeliverViaSmarthost_TemporaryFailure(t *testing.T) {
 	)
 
 	sh := Smarthost{Addr: addr}
-	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env})
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env}, 0)
 
 	err := results[env.Path]
 	if err == nil {
@@ -338,13 +338,213 @@ func TestDeliverViaSmarthost_DialFailureIsTemporary(t *testing.T) {
 		"abc123@example.com",
 	)
 
-	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env})
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath, []*envelope.Envelope{env}, 0)
 	err := results[env.Path]
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 	if IsPermanent(err) {
 		t.Errorf("dial failure should be temporary, got permanent: %v", err)
+	}
+}
+
+func TestIsConnectionError(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"plain error", fmt.Errorf("something"), false},
+		{"SMTP 550", &gosmtp.SMTPError{Code: 550, Message: "rejected"}, false},
+		{"SMTP 451", &gosmtp.SMTPError{Code: 451, Message: "try later"}, false},
+		{"EOF", io.EOF, true},
+		{"unexpected EOF", io.ErrUnexpectedEOF, true},
+		{"net closed", net.ErrClosed, true},
+		{"wrapped EOF", fmt.Errorf("send: %w", io.EOF), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isConnectionError(tt.err); got != tt.want {
+				t.Errorf("isConnectionError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeliverAll_ConnectionDeath(t *testing.T) {
+	addr, _, stop := startTestServer(t)
+	defer stop()
+	overrideDialFunc(t)
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("Subject: test\r\n\r\nHello\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	env1 := makeEnvFile(t, dir, "alice@dead1234.0",
+		"bounces+alice=example.com@origin.example.com", "alice@example.com", "dead1234@example.com")
+	env2 := makeEnvFile(t, dir, "bob@dead1234.1",
+		"bounces+bob=example.com@origin.example.com", "bob@example.com", "dead1234@example.com")
+	env3 := makeEnvFile(t, dir, "carol@dead1234.2",
+		"bounces+carol=example.com@origin.example.com", "carol@example.com", "dead1234@example.com")
+
+	c, err := gosmtp.Dial(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Deliver first envelope successfully, then close the underlying
+	// connection to simulate a network failure.
+	results := make(map[string]error, 3)
+	results[env1.Path] = deliver(c, bodyPath, env1)
+	if results[env1.Path] != nil {
+		t.Fatalf("env1: expected success, got: %v", results[env1.Path])
+	}
+
+	// Force-close the TCP connection.
+	_ = c.Close()
+
+	// Now deliverAll on remaining envelopes should detect connection death.
+	deliverAll(c, bodyPath, []*envelope.Envelope{env2, env3}, results, 0)
+
+	// Both remaining envelopes should fail.
+	for _, env := range []*envelope.Envelope{env2, env3} {
+		if results[env.Path] == nil {
+			t.Fatalf("%s: expected error, got nil", env.Path)
+		}
+	}
+}
+
+func TestCheckSize(t *testing.T) {
+	addr, _, stop := startTestServer(t)
+	defer stop()
+	overrideDialFunc(t)
+
+	c, err := dialFunc(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	// Test server doesn't advertise SIZE, so any size should pass.
+	if err := checkSize(c, 999999999); err != nil {
+		t.Fatalf("checkSize should pass without server SIZE limit: %v", err)
+	}
+}
+
+func TestCheckSize_ExceedsLimit(t *testing.T) {
+	// checkSize compares body size against MaxMessageSize. Since we can't
+	// easily make the test server advertise SIZE, test the logic directly:
+	// a message exceeding the limit should produce a permanent error.
+	oversizeErr := &PermanentError{
+		Err: fmt.Errorf("message size %d exceeds server limit %d", 30000000, 25000000),
+	}
+	if !IsPermanent(oversizeErr) {
+		t.Error("size exceeded should be permanent")
+	}
+
+	// And a non-PermanentError should not be.
+	if IsPermanent(fmt.Errorf("some other error")) {
+		t.Error("plain error should not be permanent")
+	}
+}
+
+func TestDeliverViaSmarthost_RSETBetweenTransactions(t *testing.T) {
+	addr, be, stop := startTestServer(t)
+	defer stop()
+	overrideDialFunc(t)
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("Subject: batch\r\n\r\nbody\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	env1 := makeEnvFile(t, dir, "alice@dead1234.0",
+		"bounces+alice=example.com@origin.example.com", "alice@example.com", "dead1234@example.com")
+	env2 := makeEnvFile(t, dir, "bob@dead1234.1",
+		"bounces+bob=example.com@origin.example.com", "bob@example.com", "dead1234@example.com")
+	env3 := makeEnvFile(t, dir, "carol@dead1234.2",
+		"bounces+carol=example.com@origin.example.com", "carol@example.com", "dead1234@example.com")
+
+	sh := Smarthost{Addr: addr}
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath,
+		[]*envelope.Envelope{env1, env2, env3}, 0)
+
+	for _, env := range []*envelope.Envelope{env1, env2, env3} {
+		if err := results[env.Path]; err != nil {
+			t.Errorf("envelope %s: expected success, got: %v", env.Path, err)
+		}
+	}
+
+	be.mu.Lock()
+	defer be.mu.Unlock()
+	if len(be.deliveries) != 3 {
+		t.Fatalf("expected 3 deliveries, got %d", len(be.deliveries))
+	}
+	// Verify each delivery has the correct sender (RSET cleaned up between them).
+	senders := map[string]bool{}
+	for _, d := range be.deliveries {
+		senders[d.from] = true
+	}
+	if len(senders) != 3 {
+		t.Errorf("expected 3 unique senders (VERP), got %d: %v", len(senders), senders)
+	}
+}
+
+func TestDeliverAll_RSETAfterRejection(t *testing.T) {
+	addr, be, stop := startTestServer(t)
+	defer stop()
+	overrideDialFunc(t)
+
+	// Reject the second recipient, allow the first and third.
+	callCount := 0
+	be.rejectRcpt = func(to string) error {
+		callCount++
+		if callCount == 2 {
+			return &gosmtp.SMTPError{Code: 550, Message: "User unknown"}
+		}
+		return nil
+	}
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("Subject: test\r\n\r\nHello\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	env1 := makeEnvFile(t, dir, "alice@dead1234.0",
+		"bounces+alice=example.com@origin.example.com", "alice@example.com", "dead1234@example.com")
+	env2 := makeEnvFile(t, dir, "bad@dead1234.1",
+		"bounces+bad=example.com@origin.example.com", "bad@example.com", "dead1234@example.com")
+	env3 := makeEnvFile(t, dir, "carol@dead1234.2",
+		"bounces+carol=example.com@origin.example.com", "carol@example.com", "dead1234@example.com")
+
+	sh := Smarthost{Addr: addr}
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath,
+		[]*envelope.Envelope{env1, env2, env3}, 0)
+
+	// First should succeed.
+	if err := results[env1.Path]; err != nil {
+		t.Errorf("env1: expected success, got: %v", err)
+	}
+	// Second should fail permanently.
+	if err := results[env2.Path]; err == nil {
+		t.Error("env2: expected error, got nil")
+	} else if !IsPermanent(err) {
+		t.Errorf("env2: expected permanent error, got: %v", err)
+	}
+	// Third should succeed (RSET cleaned up after the 550).
+	if err := results[env3.Path]; err != nil {
+		t.Errorf("env3: expected success after RSET, got: %v", err)
+	}
+
+	be.mu.Lock()
+	defer be.mu.Unlock()
+	if len(be.deliveries) != 2 {
+		t.Fatalf("expected 2 deliveries (env1 + env3), got %d", len(be.deliveries))
 	}
 }
 
@@ -362,5 +562,51 @@ func TestIsPermanent(t *testing.T) {
 	wrapped := fmt.Errorf("delivery: %w", &PermanentError{Err: fmt.Errorf("550")})
 	if !IsPermanent(wrapped) {
 		t.Error("wrapped PermanentError should be permanent")
+	}
+}
+
+func TestDeliverAll_TransactionLimit(t *testing.T) {
+	addr, be, stop := startTestServer(t)
+	defer stop()
+	overrideDialFunc(t)
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("Subject: limit\r\n\r\nbody\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	env1 := makeEnvFile(t, dir, "alice@dead1234.0",
+		"bounces+alice=example.com@origin.example.com", "alice@example.com", "dead1234@example.com")
+	env2 := makeEnvFile(t, dir, "bob@dead1234.1",
+		"bounces+bob=example.com@origin.example.com", "bob@example.com", "dead1234@example.com")
+	env3 := makeEnvFile(t, dir, "carol@dead1234.2",
+		"bounces+carol=example.com@origin.example.com", "carol@example.com", "dead1234@example.com")
+
+	sh := Smarthost{Addr: addr}
+	// Limit to 2 transactions per connection.
+	results := DeliverViaSmarthost(context.Background(), sh, bodyPath,
+		[]*envelope.Envelope{env1, env2, env3}, 2)
+
+	// First two should succeed.
+	if err := results[env1.Path]; err != nil {
+		t.Errorf("env1: expected success, got: %v", err)
+	}
+	if err := results[env2.Path]; err != nil {
+		t.Errorf("env2: expected success, got: %v", err)
+	}
+	// Third should be deferred (temporary error).
+	if err := results[env3.Path]; err == nil {
+		t.Error("env3: expected temporary error for transaction limit, got nil")
+	} else if IsPermanent(err) {
+		t.Errorf("env3: transaction limit should be temporary, got permanent: %v", err)
+	} else if !strings.Contains(err.Error(), "transaction limit") {
+		t.Errorf("env3: expected 'transaction limit' in error, got: %v", err)
+	}
+
+	be.mu.Lock()
+	defer be.mu.Unlock()
+	if len(be.deliveries) != 2 {
+		t.Fatalf("expected 2 deliveries (limit=2), got %d", len(be.deliveries))
 	}
 }

@@ -60,6 +60,22 @@ func (w *Writer) WriteData(data []byte) error {
 	return w.w.Flush()
 }
 
+// WriteNewMail writes an unsolicited "+NEWMAIL <count>\r\n" followed by each
+// line with "\r\n" and flushes. Used by the periodic rescan timer to push
+// new-message notifications without a preceding command.
+func (w *Writer) WriteNewMail(lines []string) error {
+	_, err := fmt.Fprintf(w.w, "+NEWMAIL %d\r\n", len(lines))
+	if err != nil {
+		return err
+	}
+	for _, line := range lines {
+		if _, err = fmt.Fprintf(w.w, "%s\r\n", line); err != nil {
+			return err
+		}
+	}
+	return w.w.Flush()
+}
+
 // WriteErr writes "-ERR <reason>\r\n" and flushes.
 func (w *Writer) WriteErr(reason string) error {
 	_, err := fmt.Fprintf(w.w, "-ERR %s\r\n", reason)

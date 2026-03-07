@@ -1,8 +1,11 @@
 module github.com/infodancer/maildancer/internal/mail-session
 
-go 1.25.7
+go 1.26.1
 
-require github.com/infodancer/maildancer/msgstore v0.2.2-0.20260303202932-60ef82df8079
+require (
+	github.com/BurntSushi/toml v1.6.0
+	github.com/infodancer/maildancer/msgstore v0.2.2-0.20260303202932-60ef82df8079
+)
 
 require (
 	git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9 // indirect

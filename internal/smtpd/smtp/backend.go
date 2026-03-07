@@ -30,6 +30,7 @@ type Backend struct {
 	rejectionMode       config.RejectionMode
 	spamtrapLearner     *spamtrapLearner
 	spamtrapRateLimiter *ipRateLimiter
+	notifier            *Notifier
 	collector           metrics.Collector
 	maxRecipients       int
 	maxMessageSize      int64
@@ -50,6 +51,7 @@ type BackendConfig struct {
 	SpamConfig     config.SpamCheckConfig
 	RejectionMode  config.RejectionMode
 	SpamtrapConfig config.SpamtrapConfig
+	Notifier       *Notifier
 	Collector      metrics.Collector
 	MaxRecipients  int
 	MaxMessageSize int64
@@ -78,6 +80,7 @@ func NewBackend(cfg BackendConfig) *Backend {
 		spamChecker:    cfg.SpamChecker,
 		spamConfig:     cfg.SpamConfig,
 		rejectionMode:  cfg.RejectionMode,
+		notifier:       cfg.Notifier,
 		collector:      cfg.Collector,
 		maxRecipients:  cfg.MaxRecipients,
 		maxMessageSize: cfg.MaxMessageSize,

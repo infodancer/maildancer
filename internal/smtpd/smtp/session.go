@@ -616,6 +616,15 @@ func (s *Session) Data(r io.Reader) error {
 			}
 		}
 
+		// Notify Redis pub/sub so IMAP IDLE clients see new mail.
+		folder := "INBOX"
+		if checkResult != nil && checkResult.Action == spamcheck.ActionFlag {
+			folder = "Junk"
+		}
+		for _, rcpt := range s.recipients {
+			s.backend.notifier.NotifyNewMail(ctx, rcpt, folder)
+		}
+
 		if s.backend.collector != nil {
 			recipientDomain := sessionExtractRecipientDomain(s.recipients)
 			s.backend.collector.MessageReceived(recipientDomain, counter.n)

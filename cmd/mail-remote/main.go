@@ -10,7 +10,8 @@
 //
 //	--smarthost host:port  Relay all mail via this SMTP smarthost (STARTTLS).
 //	--smarthost-user user  SMTP AUTH username. Password from MAIL_REMOTE_PASSWORD env var.
-//	--final                Signal that this is the final delivery attempt (try all transports).
+//	--hostname fqdn       EHLO hostname for direct MX delivery (required without --smarthost).
+//	--final               Signal that this is the final delivery attempt (try all transports).
 //
 // Exit codes:
 //
@@ -19,8 +20,8 @@
 //	75: One or more envelopes failed with a temporary error (EX_TEMPFAIL; retry later).
 //	69: One or more envelopes failed with a permanent error (EX_UNAVAILABLE; no retry).
 //
-// Without --smarthost, mail-remote performs DNS-based delivery (SRV → new-protocol;
-// MX → SMTP; A → SMTP). DNS delivery is not yet implemented.
+// Without --smarthost, mail-remote performs DNS-based delivery (MX → SMTP;
+// A/AAAA → SMTP). Future: SRV → new-protocol (SDMP).
 package main
 
 import (
@@ -32,6 +33,7 @@ import (
 	"time"
 
 	"github.com/infodancer/maildancer/internal/mail-remote/envelope"
+	"github.com/infodancer/maildancer/internal/mail-remote/mx"
 	"github.com/infodancer/maildancer/internal/mail-remote/smtp"
 )
 
@@ -50,6 +52,7 @@ func main() {
 func run() int {
 	smarthostAddr := flag.String("smarthost", "", "SMTP smarthost address (host:port)")
 	smarthostUser := flag.String("smarthost-user", "", "SMTP AUTH username for smarthost")
+	hostname := flag.String("hostname", "", "EHLO hostname for direct MX delivery")
 	final := flag.Bool("final", false, "final delivery attempt (try all transports)")
 	flag.Parse()
 
@@ -77,19 +80,26 @@ func run() int {
 		envs = append(envs, env)
 	}
 
-	if *smarthostAddr == "" {
-		// TODO: implement DNS-based delivery (SRV → new-protocol, MX → SMTP).
-		// When --final is set, try all available transports before giving up.
-		fmt.Fprintln(os.Stderr, "error: DNS-based delivery not yet implemented; --smarthost is required")
-		return exUsage
-	}
-
 	if *final {
 		slog.Info("final delivery attempt", "envelopes", len(envs))
 	}
 
-	sh := smtp.SmarthostFromEnv(*smarthostAddr, *smarthostUser)
-	results := smtp.DeliverViaSmarthost(context.Background(), sh, bodyPath, envs)
+	var results map[string]error
+	if *smarthostAddr != "" {
+		sh := smtp.SmarthostFromEnv(*smarthostAddr, *smarthostUser)
+		results = smtp.DeliverViaSmarthost(context.Background(), sh, bodyPath, envs)
+	} else {
+		if *hostname == "" {
+			fmt.Fprintln(os.Stderr, "error: --hostname is required for direct MX delivery")
+			return exUsage
+		}
+		domain, err := envs[0].RecipientDomain()
+		if err != nil {
+			slog.Error("cannot determine recipient domain", "error", err)
+			return exUsage
+		}
+		results = smtp.DeliverViaMX(context.Background(), mx.NetResolver{}, *hostname, domain, bodyPath, envs)
+	}
 
 	tempFail, permFail := false, false
 	for path, err := range results {

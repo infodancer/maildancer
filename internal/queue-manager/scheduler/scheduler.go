@@ -17,8 +17,9 @@ import (
 type Config struct {
 	QueueDir      string
 	Binary        string
-	SmarthostAddr string
-	SmarthostUser string
+	ConfigPath    string // shared TOML config file; passed as --config to mail-remote
+	SmarthostAddr string // legacy; use ConfigPath instead when possible
+	SmarthostUser string // legacy; use ConfigPath instead when possible
 	Interval      time.Duration
 	MessageTTL    time.Duration // default message TTL; used to compute message age for backoff
 }
@@ -263,6 +264,9 @@ func (s *Scheduler) invoke(bodyPath string, envPaths []string, final bool) {
 
 func (s *Scheduler) buildArgs(bodyPath string, envPaths []string, final bool) []string {
 	var args []string
+	if s.cfg.ConfigPath != "" {
+		args = append(args, "--config", s.cfg.ConfigPath)
+	}
 	if s.cfg.SmarthostAddr != "" {
 		args = append(args, "--smarthost", s.cfg.SmarthostAddr)
 	}

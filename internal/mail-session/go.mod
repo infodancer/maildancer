@@ -3,8 +3,8 @@ module github.com/infodancer/maildancer/internal/mail-session
 go 1.26.1
 
 require (
-	github.com/BurntSushi/toml v1.6.0
 	github.com/infodancer/maildancer/msgstore v0.2.2-0.20260303202932-60ef82df8079
+	github.com/pelletier/go-toml/v2 v2.2.4
 )
 
 require (

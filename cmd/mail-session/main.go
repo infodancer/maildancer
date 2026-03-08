@@ -15,13 +15,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	mserrors "github.com/infodancer/maildancer/internal/mail-session/errors"
 	"github.com/infodancer/maildancer/internal/mail-session/protocol"
 	"github.com/infodancer/maildancer/internal/mail-session/rspamd"
 	"github.com/infodancer/maildancer/internal/mail-session/session"
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // fileConfig is the TOML structure for [mail-session] in the shared config file.
@@ -104,8 +104,11 @@ func main() {
 	// Load config file if provided; CLI flags override.
 	if *configPath != "" {
 		var fc fileConfig
-		if _, err := toml.DecodeFile(*configPath, &fc); err != nil {
+		data, err := os.ReadFile(*configPath)
+		if err != nil {
 			slog.Warn("failed to read config file", "path", *configPath, "error", err)
+		} else if err := toml.Unmarshal(data, &fc); err != nil {
+			slog.Warn("failed to parse config file", "path", *configPath, "error", err)
 		} else {
 			applyFileConfig(&fc, rescanIntervalStr)
 		}

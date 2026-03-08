@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package sessionmanager.v1;
+
+option go_package = "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1";
+
+// SessionService handles authentication and session lifecycle.
+// Protocol handlers call Login() after authenticating the user, and Logout()
+// when the protocol session ends. The returned session token is passed as
+// gRPC metadata ("session-token") on all proxied RPCs.
+service SessionService {
+  // Login authenticates a user and establishes a mail-session.
+  // If the user already has an active mail-session, it is reused
+  // (reference-counted).
+  rpc Login(LoginRequest) returns (LoginResponse);
+
+  // Logout ends a protocol handler's use of a session.
+  // When the last reference is released, an idle timer starts;
+  // if no new Login arrives before it fires, the mail-session
+  // process is terminated.
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+}
+
+message LoginRequest {
+  // Fully-qualified username (localpart@domain).
+  string username = 1;
+
+  // Password (plaintext over the unix socket / mTLS channel).
+  string password = 2;
+}
+
+message LoginResponse {
+  // Opaque session token. Include as "session-token" gRPC metadata
+  // on all subsequent proxied RPCs.
+  string session_token = 1;
+
+  // The authenticated mailbox identifier (user@domain).
+  string mailbox = 2;
+}
+
+message LogoutRequest {
+  string session_token = 1;
+}
+
+message LogoutResponse {}

@@ -1,0 +1,81 @@
+// Package config defines the session manager configuration.
+package config
+
+import (
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/pelletier/go-toml/v2"
+)
+
+// Config holds all session manager settings.
+type Config struct {
+	// Socket is the unix domain socket path the session manager listens on.
+	Socket string `toml:"socket"`
+
+	// DomainsPath is the directory containing per-domain subdirectories
+	// (each with config.toml, passwd, etc.).
+	DomainsPath string `toml:"domains_path"`
+
+	// DomainsDataPath is an optional separate directory for per-domain data.
+	// Defaults to DomainsPath if empty.
+	DomainsDataPath string `toml:"domains_data_path"`
+
+	// MailSessionCmd is the absolute path to the mail-session binary.
+	MailSessionCmd string `toml:"mail_session_cmd"`
+
+	// IdleTimeout is how long a mail-session process lingers after its last
+	// connection disconnects. Default: 5m.
+	IdleTimeout time.Duration `toml:"-"`
+
+	// IdleTimeoutStr is the TOML-friendly string form of IdleTimeout.
+	IdleTimeoutStr string `toml:"idle_timeout"`
+
+	// Auth configures the authentication backend.
+	Auth AuthConfig `toml:"auth"`
+}
+
+// AuthConfig controls how the session manager authenticates users.
+type AuthConfig struct {
+	// AgentType is the auth backend type (e.g. "passwd").
+	AgentType string `toml:"agent_type"`
+
+	// CredentialBackend is the default credential backend path.
+	// Per-domain config can override this.
+	CredentialBackend string `toml:"credential_backend"`
+
+	// KeyBackend is the default key backend path.
+	KeyBackend string `toml:"key_backend"`
+}
+
+// Load reads the config from a TOML file.
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+
+	// Wrap in a top-level section.
+	var wrapper struct {
+		SessionManager Config `toml:"session-manager"`
+	}
+	if err := toml.Unmarshal(data, &wrapper); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	cfg := &wrapper.SessionManager
+
+	// Parse idle timeout.
+	if cfg.IdleTimeoutStr != "" {
+		d, err := time.ParseDuration(cfg.IdleTimeoutStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid idle_timeout %q: %w", cfg.IdleTimeoutStr, err)
+		}
+		cfg.IdleTimeout = d
+	}
+	if cfg.IdleTimeout == 0 {
+		cfg.IdleTimeout = 5 * time.Minute
+	}
+
+	return cfg, nil
+}

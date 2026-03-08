@@ -1,0 +1,421 @@
+// Package manager handles mail-session process lifecycle: spawning, session
+// reuse (ref-counting), idle reaping, and credential lookup.
+package manager
+
+import (
+	"bufio"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/infodancer/maildancer/auth"
+	"github.com/infodancer/maildancer/auth/domain"
+	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	"github.com/infodancer/maildancer/internal/session-manager/config"
+	"github.com/infodancer/maildancer/internal/session-manager/credentials"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+)
+
+// sessionEntry tracks a single per-user mail-session process.
+type sessionEntry struct {
+	username  string
+	mailbox   string
+	conn      *grpc.ClientConn
+	mailboxCl pb.MailboxServiceClient
+	folderCl  pb.FolderServiceClient
+	watchCl   pb.WatchServiceClient
+	cmd       *exec.Cmd
+	socketDir string
+	refCount  int
+	idleTimer *time.Timer
+}
+
+// Manager handles mail-session lifecycle.
+type Manager struct {
+	cfg        *config.Config
+	authRouter *domain.AuthRouter
+
+	mu sync.Mutex
+	// byToken maps session tokens to session entries.
+	byToken map[string]*sessionEntry
+	// byUser maps username to session entry for reuse.
+	byUser map[string]*sessionEntry
+}
+
+// New creates a new Manager.
+func New(cfg *config.Config, authRouter *domain.AuthRouter) *Manager {
+	return &Manager{
+		cfg:        cfg,
+		authRouter: authRouter,
+		byToken:    make(map[string]*sessionEntry),
+		byUser:     make(map[string]*sessionEntry),
+	}
+}
+
+// Login authenticates a user, spawns (or reuses) a mail-session, and returns
+// a session token.
+func (m *Manager) Login(ctx context.Context, username, password string) (token, mailbox string, err error) {
+	result, err := m.authRouter.AuthenticateWithDomain(ctx, username, password)
+	if err != nil {
+		return "", "", fmt.Errorf("authentication failed: %w", err)
+	}
+
+	mailbox = result.Session.User.Mailbox
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Reuse existing session if available.
+	if entry, ok := m.byUser[username]; ok {
+		if entry.idleTimer != nil {
+			entry.idleTimer.Stop()
+			entry.idleTimer = nil
+		}
+		entry.refCount++
+		token = m.generateTokenLocked(entry)
+		slog.Debug("session reused",
+			"username", username,
+			"ref_count", entry.refCount)
+		return token, mailbox, nil
+	}
+
+	// Spawn new mail-session.
+	entry, err := m.spawnSession(username, mailbox)
+	if err != nil {
+		return "", "", err
+	}
+
+	m.byUser[username] = entry
+	token = m.generateTokenLocked(entry)
+
+	slog.Info("session created",
+		"username", username,
+		"pid", entry.cmd.Process.Pid)
+
+	return token, mailbox, nil
+}
+
+// Logout decrements the ref count for a session token. When the last
+// reference is released, an idle timer starts.
+func (m *Manager) Logout(_ context.Context, token string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry, ok := m.byToken[token]
+	if !ok {
+		return fmt.Errorf("unknown session token")
+	}
+	delete(m.byToken, token)
+
+	entry.refCount--
+	if entry.refCount <= 0 {
+		entry.idleTimer = time.AfterFunc(m.cfg.IdleTimeout, func() {
+			m.reapSession(entry)
+		})
+		slog.Debug("session idle timer started",
+			"username", entry.username,
+			"timeout", m.cfg.IdleTimeout)
+	}
+
+	return nil
+}
+
+// SessionForToken returns the gRPC service clients for a session token.
+// Returns an error if the token is not valid.
+func (m *Manager) SessionForToken(token string) (pb.MailboxServiceClient, pb.FolderServiceClient, pb.WatchServiceClient, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry, ok := m.byToken[token]
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("unknown session token")
+	}
+	return entry.mailboxCl, entry.folderCl, entry.watchCl, nil
+}
+
+// DeliverySession spawns a oneshot mail-session for delivery to the given
+// recipient and returns a DeliveryServiceClient. The caller must call the
+// returned cleanup function when done.
+func (m *Manager) DeliverySession(ctx context.Context, recipient string) (pb.DeliveryServiceClient, func(), error) {
+	localpart, domainName, ok := strings.Cut(recipient, "@")
+	if !ok {
+		return nil, nil, fmt.Errorf("invalid recipient %q: missing @domain", recipient)
+	}
+
+	creds, err := credentials.Lookup(m.cfg.DomainsPath, localpart, domainName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("credential lookup for %q: %w", recipient, err)
+	}
+
+	socketDir, err := os.MkdirTemp("", "session-mgr-deliver-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create socket dir: %w", err)
+	}
+	socketPath := filepath.Join(socketDir, "session.sock")
+
+	args := []string{
+		"--mode=oneshot",
+		"--socket=" + socketPath,
+		"--mailbox=" + recipient,
+		"--type=" + creds.StoreType,
+		"--basepath=" + creds.BasePath,
+		"--domains-path=" + m.cfg.DomainsPath,
+	}
+	if m.cfg.DomainsDataPath != "" {
+		args = append(args, "--domains-data-path="+m.cfg.DomainsDataPath)
+	}
+
+	cmd := exec.CommandContext(ctx, m.cfg.MailSessionCmd, args...)
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid: creds.UID,
+			Gid: creds.GID,
+		},
+	}
+
+	if err := m.startAndWaitReady(cmd); err != nil {
+		_ = os.RemoveAll(socketDir)
+		return nil, nil, fmt.Errorf("start oneshot mail-session: %w", err)
+	}
+
+	conn, err := grpc.NewClient(
+		"unix://"+socketPath,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = os.RemoveAll(socketDir)
+		return nil, nil, fmt.Errorf("dial oneshot grpc: %w", err)
+	}
+
+	deliveryCl := pb.NewDeliveryServiceClient(conn)
+
+	cleanup := func() {
+		_ = conn.Close()
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		_ = cmd.Wait()
+		_ = os.RemoveAll(socketDir)
+	}
+
+	return deliveryCl, cleanup, nil
+}
+
+// Close terminates all active sessions.
+func (m *Manager) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, entry := range m.byUser {
+		if entry.idleTimer != nil {
+			entry.idleTimer.Stop()
+		}
+		m.killEntry(entry)
+	}
+	m.byToken = make(map[string]*sessionEntry)
+	m.byUser = make(map[string]*sessionEntry)
+}
+
+// spawnSession starts a new mail-session daemon process for the given user.
+// Must be called with m.mu held.
+func (m *Manager) spawnSession(username, mailbox string) (*sessionEntry, error) {
+	localpart, domainName, ok := strings.Cut(username, "@")
+	if !ok {
+		return nil, fmt.Errorf("invalid username %q: missing @domain", username)
+	}
+
+	creds, err := credentials.Lookup(m.cfg.DomainsPath, localpart, domainName)
+	if err != nil {
+		return nil, fmt.Errorf("credential lookup: %w", err)
+	}
+
+	socketDir, err := os.MkdirTemp("", "session-mgr-*")
+	if err != nil {
+		return nil, fmt.Errorf("create socket dir: %w", err)
+	}
+	socketPath := filepath.Join(socketDir, "session.sock")
+
+	args := []string{
+		"--mode=daemon",
+		"--socket=" + socketPath,
+		"--mailbox=" + mailbox,
+		"--type=" + creds.StoreType,
+		"--basepath=" + creds.BasePath,
+	}
+
+	cmd := exec.Command(m.cfg.MailSessionCmd, args...)
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid: creds.UID,
+			Gid: creds.GID,
+		},
+	}
+
+	if err := m.startAndWaitReady(cmd); err != nil {
+		_ = os.RemoveAll(socketDir)
+		return nil, fmt.Errorf("start mail-session: %w", err)
+	}
+
+	conn, err := grpc.NewClient(
+		"unix://"+socketPath,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = os.RemoveAll(socketDir)
+		return nil, fmt.Errorf("dial grpc: %w", err)
+	}
+
+	return &sessionEntry{
+		username:  username,
+		mailbox:   mailbox,
+		conn:      conn,
+		mailboxCl: pb.NewMailboxServiceClient(conn),
+		folderCl:  pb.NewFolderServiceClient(conn),
+		watchCl:   pb.NewWatchServiceClient(conn),
+		cmd:       cmd,
+		socketDir: socketDir,
+		refCount:  1,
+	}, nil
+}
+
+// startAndWaitReady starts the command and waits for "READY" on stdout.
+func (m *Manager) startAndWaitReady(cmd *exec.Cmd) error {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start: %w", err)
+	}
+
+	readyCh := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if strings.TrimSpace(scanner.Text()) == "READY" {
+				readyCh <- nil
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			readyCh <- fmt.Errorf("reading stdout: %w", err)
+		} else {
+			readyCh <- fmt.Errorf("mail-session exited without READY signal")
+		}
+	}()
+
+	select {
+	case err := <-readyCh:
+		if err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return err
+		}
+		return nil
+	case <-time.After(10 * time.Second):
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("timed out waiting for READY signal")
+	}
+}
+
+// generateTokenLocked creates a random session token and registers it.
+// Must be called with m.mu held.
+func (m *Manager) generateTokenLocked(entry *sessionEntry) string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand should never fail; if it does, panic is appropriate.
+		panic("crypto/rand failed: " + err.Error())
+	}
+	token := hex.EncodeToString(b)
+	m.byToken[token] = entry
+	return token
+}
+
+// reapSession terminates a mail-session that has been idle.
+func (m *Manager) reapSession(entry *sessionEntry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Double-check: if refCount went back up, don't reap.
+	if entry.refCount > 0 {
+		return
+	}
+
+	slog.Info("reaping idle session",
+		"username", entry.username,
+		"pid", entry.cmd.Process.Pid)
+
+	delete(m.byUser, entry.username)
+
+	// Remove all tokens pointing to this entry.
+	for tok, e := range m.byToken {
+		if e == entry {
+			delete(m.byToken, tok)
+		}
+	}
+
+	m.killEntry(entry)
+}
+
+// killEntry terminates the mail-session process and cleans up resources.
+func (m *Manager) killEntry(entry *sessionEntry) {
+	if entry.conn != nil {
+		_ = entry.conn.Close()
+	}
+	if entry.cmd != nil && entry.cmd.Process != nil {
+		_ = entry.cmd.Process.Signal(syscall.SIGTERM)
+		_ = entry.cmd.Wait()
+	}
+	if entry.socketDir != "" {
+		_ = os.RemoveAll(entry.socketDir)
+	}
+}
+
+// AuthRouter returns the auth router for use outside the manager.
+func (m *Manager) AuthRouter() *domain.AuthRouter {
+	return m.authRouter
+}
+
+// SetupAuth creates the domain provider and auth router from config.
+func SetupAuth(cfg *config.Config) (*domain.AuthRouter, error) {
+	if cfg.DomainsPath == "" {
+		return nil, fmt.Errorf("domains_path is required")
+	}
+
+	domainProvider := domain.NewFilesystemDomainProvider(cfg.DomainsPath, nil)
+	if cfg.DomainsDataPath != "" {
+		domainProvider = domainProvider.WithDataPath(cfg.DomainsDataPath)
+	}
+
+	agentType := cfg.Auth.AgentType
+	if agentType == "" {
+		agentType = "passwd"
+	}
+
+	authAgent, err := auth.OpenAuthAgent(auth.AuthAgentConfig{
+		Type:              agentType,
+		CredentialBackend: cfg.Auth.CredentialBackend,
+		KeyBackend:        cfg.Auth.KeyBackend,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open auth agent: %w", err)
+	}
+
+	return domain.NewAuthRouter(domainProvider, authAgent), nil
+}

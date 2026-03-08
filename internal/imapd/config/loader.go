@@ -210,6 +210,10 @@ func mergeConfig(dst, src Config) Config {
 		dst.MailSessionCmd = src.MailSessionCmd
 	}
 
+	if src.MailSessionMode != "" {
+		dst.MailSessionMode = src.MailSessionMode
+	}
+
 	if src.Rspamd.Controller != "" {
 		dst.Rspamd.Controller = src.Rspamd.Controller
 	}

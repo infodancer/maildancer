@@ -55,7 +55,8 @@ type Config struct {
 	DomainsDataPath string           `toml:"domains_data_path"`
 	Auth            AuthConfig       `toml:"auth"`
 	Store           StoreConfig      `toml:"store"`
-	MailSessionCmd  string           `toml:"mail_session"` // path to mail-session binary; empty = in-process
+	MailSessionCmd  string           `toml:"mail_session"`      // path to mail-session binary; empty = in-process
+	MailSessionMode string           `toml:"mail_session_mode"` // "pipe" (default) or "grpc"
 	Rspamd          RspamdConfig     `toml:"rspamd"`
 }
 

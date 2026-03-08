@@ -20,6 +20,7 @@ import (
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/logging"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
+	"github.com/infodancer/maildancer/internal/mail-session/client"
 	"github.com/infodancer/maildancer/msgstore"
 	storeerrors "github.com/infodancer/maildancer/msgstore/errors"
 )
@@ -89,7 +90,18 @@ func (s *Session) Login(username, password string) error {
 	s.userDomain = extractDomain(username)
 	s.mailbox = result.Session.User.Mailbox
 
-	if s.cfg.MailSessionCmd != "" {
+	if s.cfg.MailSessionCmd != "" && s.cfg.MailSessionMode == "grpc" {
+		gs, spawnErr := s.spawnGrpcMailSession(username)
+		if spawnErr != nil {
+			s.logger.Error("failed to spawn grpc mail-session", "username", username, "error", spawnErr)
+			return &imap.Error{
+				Type: imap.StatusResponseTypeNo,
+				Text: "Internal server error",
+			}
+		}
+		s.store = gs
+		s.folderStore = gs
+	} else if s.cfg.MailSessionCmd != "" {
 		subprocStore, spawnErr := s.spawnMailSession(username)
 		if spawnErr != nil {
 			s.logger.Error("failed to spawn mail-session", "username", username, "error", spawnErr)
@@ -226,6 +238,117 @@ func (s *Session) spawnMailSession(username string) (*SubprocessStore, error) {
 	store, err := NewSubprocessStore(cmd, s.mailbox)
 	_ = keyPipeR.Close() // child owns fd 3; release parent's copy
 	return store, err
+}
+
+// spawnGrpcMailSession starts mail-session in daemon mode with a gRPC socket,
+// waits for the READY signal, dials gRPC, and returns a grpcStore that manages
+// the subprocess lifecycle.
+func (s *Session) spawnGrpcMailSession(username string) (*grpcStore, error) {
+	localpart, domainName, ok := strings.Cut(username, "@")
+	if !ok {
+		return nil, fmt.Errorf("invalid username %q: missing @domain", username)
+	}
+
+	uid, gid, basePath, storeType, maxMsgSize, err := s.lookupMailSessionParams(localpart, domainName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create temp directory for the unix domain socket.
+	socketDir, err := os.MkdirTemp("", "imapd-session-*")
+	if err != nil {
+		return nil, fmt.Errorf("create socket dir: %w", err)
+	}
+	socketPath := filepath.Join(socketDir, "session.sock")
+
+	args := []string{
+		"--mode", "daemon",
+		"--socket", socketPath,
+		"--type", storeType,
+		"--basepath", basePath,
+		"--user", username,
+	}
+	if maxMsgSize > 0 {
+		args = append(args, "--max-message-size", fmt.Sprintf("%d", maxMsgSize))
+	}
+	if s.cfg.Rspamd.Controller != "" {
+		args = append(args, "--rspamd", s.cfg.Rspamd.Controller)
+		junk := s.cfg.Rspamd.JunkFolder
+		if junk == "" {
+			junk = "Junk"
+		}
+		args = append(args, "--junk-folder", junk)
+	}
+	cmd := exec.Command(s.cfg.MailSessionCmd, args...)
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid: uid,
+			Gid: gid,
+		},
+	}
+
+	// Key pipe (fd 3) — same as pipe mode.
+	keyPipeR, keyPipeW, err := os.Pipe()
+	if err != nil {
+		_ = os.RemoveAll(socketDir)
+		return nil, fmt.Errorf("key pipe: %w", err)
+	}
+	cmd.ExtraFiles = []*os.File{keyPipeR}
+
+	go func() {
+		defer func() { _ = keyPipeW.Close() }()
+		_ = json.NewEncoder(keyPipeW).Encode(struct {
+			Version int    `json:"version"`
+			Key     []byte `json:"key"`
+		}{Version: 1, Key: make([]byte, 32)})
+	}()
+
+	// Capture stdout to read the READY signal.
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = keyPipeR.Close()
+		_ = os.RemoveAll(socketDir)
+		return nil, fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		_ = keyPipeR.Close()
+		_ = os.RemoveAll(socketDir)
+		return nil, fmt.Errorf("start mail-session: %w", err)
+	}
+	_ = keyPipeR.Close()
+
+	// Wait for READY signal on stdout.
+	buf := make([]byte, 64)
+	n, err := stdout.Read(buf)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = os.RemoveAll(socketDir)
+		return nil, fmt.Errorf("waiting for READY: %w", err)
+	}
+	if !strings.Contains(string(buf[:n]), "READY") {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = os.RemoveAll(socketDir)
+		return nil, fmt.Errorf("unexpected startup output: %q", string(buf[:n]))
+	}
+
+	// Dial the gRPC socket.
+	c, err := client.Dial(socketPath)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		_ = os.RemoveAll(socketDir)
+		return nil, fmt.Errorf("dial grpc: %w", err)
+	}
+
+	return &grpcStore{
+		Client:    c,
+		cmd:       cmd,
+		socketDir: socketDir,
+	}, nil
 }
 
 // lookupMailSessionParams reads the per-domain config and passwd file to obtain

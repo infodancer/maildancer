@@ -453,6 +453,7 @@ hostname = "mail.example.com"
 domains_path = "/etc/domains"
 domains_data_path = "/opt/domains"
 mail_session = "/usr/bin/mail-session"
+mail_session_mode = "grpc"
 
 [imapd.rspamd]
 controller = "http://rspamd:11334"
@@ -473,6 +474,9 @@ mode = "imap"
 	}
 	if cfg.MailSessionCmd != "/usr/bin/mail-session" {
 		t.Errorf("mail_session = %q, want %q", cfg.MailSessionCmd, "/usr/bin/mail-session")
+	}
+	if cfg.MailSessionMode != "grpc" {
+		t.Errorf("mail_session_mode = %q, want %q", cfg.MailSessionMode, "grpc")
 	}
 	if cfg.Rspamd.Controller != "http://rspamd:11334" {
 		t.Errorf("rspamd.controller = %q, want %q", cfg.Rspamd.Controller, "http://rspamd:11334")

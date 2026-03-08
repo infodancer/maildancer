@@ -80,20 +80,12 @@ func (a *GrpcDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envel
 	// Single recipient per delivery (enforced by smtpd session).
 	recipient := envelope.Recipients[0]
 
-	// Extract mailbox name from recipient address (local part + domain).
-	mailbox := recipient
-	if idx := strings.LastIndex(mailbox, "@"); idx >= 0 {
-		// Use just the local part for the mailbox name.
-		// mail-session resolves the domain from --domains-path.
-		mailbox = mailbox[:idx]
-	}
-
 	// Create a temp directory for the socket.
 	tmpDir, err := os.MkdirTemp("", "mail-session-*")
 	if err != nil {
 		return fmt.Errorf("grpc delivery: create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	socketPath := filepath.Join(tmpDir, "session.sock")
 
@@ -178,7 +170,7 @@ func (a *GrpcDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envel
 		_ = cmd.Wait()
 		return fmt.Errorf("grpc delivery: dial: %w", err)
 	}
-	defer dc.Close()
+	defer func() { _ = dc.Close() }()
 
 	// Build delivery metadata.
 	meta := client.DeliveryMetadata{

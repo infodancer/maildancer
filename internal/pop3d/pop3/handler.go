@@ -15,9 +15,11 @@ import (
 )
 
 // Handler creates a POP3 protocol handler with the given configuration.
-func Handler(hostname string, auth DomainAuthenticator, msgStore msgstore.MessageStore, tlsConfig *tls.Config, collector metrics.Collector) server.ConnectionHandler {
+// When smClient is non-nil, authentication and mailbox operations are delegated
+// to the session-manager instead of the domain auth router and local store.
+func Handler(hostname string, auth DomainAuthenticator, msgStore msgstore.MessageStore, smClient *SessionManagerClient, tlsConfig *tls.Config, collector metrics.Collector) server.ConnectionHandler {
 	// Register authentication commands with the auth router and message store
-	RegisterAuthCommands(auth, msgStore)
+	RegisterAuthCommands(auth, msgStore, smClient)
 	// Register transaction commands
 	RegisterTransactionCommands()
 

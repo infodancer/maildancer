@@ -112,6 +112,22 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	// Create auth router (centralizes domain-aware auth routing).
 	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
 
+	// Create session-manager client if configured. When enabled, it takes over
+	// authentication and mailbox operations from the domain auth router.
+	var smClient *SessionManagerClient
+	if cfg.Config.SessionManager.IsEnabled() {
+		var err error
+		smClient, err = NewSessionManagerClient(cfg.Config.SessionManager, logger)
+		if err != nil {
+			s.Close() //nolint:errcheck
+			return nil, fmt.Errorf("session-manager: %w", err)
+		}
+		s.closers = append(s.closers, smClient)
+		logger.Info("session-manager enabled",
+			"socket", cfg.Config.SessionManager.Socket,
+			"address", cfg.Config.SessionManager.Address)
+	}
+
 	// Create server.
 	srv, err := server.New(server.Config{
 		Cfg:       &cfg.Config,
@@ -124,7 +140,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 
 	// Set POP3 protocol handler.
-	handler := Handler(cfg.Config.Hostname, authRouter, msgStore, cfg.TLSConfig, collector)
+	handler := Handler(cfg.Config.Hostname, authRouter, msgStore, smClient, cfg.TLSConfig, collector)
 	srv.SetHandler(handler)
 
 	s.server = srv

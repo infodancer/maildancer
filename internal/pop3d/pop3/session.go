@@ -3,6 +3,7 @@ package pop3
 import (
 	"context"
 	"crypto/tls"
+	"io"
 
 	"github.com/emersion/go-sasl"
 	"github.com/infodancer/maildancer/auth"
@@ -233,7 +234,13 @@ func (s *Session) Capabilities() []string {
 
 // Cleanup performs cleanup when the session ends.
 // Zeros sensitive key material if authenticated.
+// If the store implements io.Closer (e.g. session-manager store), it is closed
+// to release the remote session.
 func (s *Session) Cleanup() {
+	if c, ok := s.store.(io.Closer); ok {
+		_ = c.Close()
+		s.store = nil
+	}
 	if s.authSession != nil {
 		s.authSession.Clear()
 		s.authSession = nil

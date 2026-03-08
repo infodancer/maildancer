@@ -21,8 +21,34 @@ const (
 // FileConfig is the top-level wrapper for the shared configuration file.
 // This allows smtpd, pop3d, and msgstore to share a single config file.
 type FileConfig struct {
-	Server ServerConfig `toml:"server"`
-	Pop3d  Config       `toml:"pop3d"`
+	Server         ServerConfig         `toml:"server"`
+	SessionManager SessionManagerConfig `toml:"session-manager"`
+	Pop3d          Config               `toml:"pop3d"`
+}
+
+// SessionManagerConfig holds connection settings for the session-manager service.
+// This is a top-level [session-manager] section shared by all daemons.
+type SessionManagerConfig struct {
+	// Socket is the unix domain socket path for session-manager.
+	Socket string `toml:"socket"`
+
+	// Address is the TCP address for network mode (e.g. "session-manager:9443").
+	// Requires CACert, ClientCert, and ClientKey for mTLS.
+	Address string `toml:"address"`
+
+	// CACert is the CA certificate path for verifying the server.
+	CACert string `toml:"ca_cert"`
+
+	// ClientCert is the client certificate path for mTLS authentication.
+	ClientCert string `toml:"client_cert"`
+
+	// ClientKey is the client private key path for mTLS authentication.
+	ClientKey string `toml:"client_key"`
+}
+
+// IsEnabled returns true if a session-manager connection is configured.
+func (c *SessionManagerConfig) IsEnabled() bool {
+	return c.Socket != "" || c.Address != ""
 }
 
 // ServerConfig holds shared settings used by all mail services.
@@ -35,18 +61,19 @@ type ServerConfig struct {
 
 // Config holds the POP3-specific server configuration.
 type Config struct {
-	Hostname        string           `toml:"hostname"`
-	LogLevel        string           `toml:"log_level"`
-	Listeners       []ListenerConfig `toml:"listeners"`
-	TLS             TLSConfig        `toml:"tls"`
-	Timeouts        TimeoutsConfig   `toml:"timeouts"`
-	Limits          LimitsConfig     `toml:"limits"`
-	Metrics         MetricsConfig    `toml:"metrics"`
-	Maildir         string           `toml:"maildir"`
-	DomainsPath     string           `toml:"domains_path"`
-	DomainsDataPath string           `toml:"domains_data_path"`
-	MailSessionPath string           `toml:"mail_session"` // path to the mail-session binary
-	Auth            AuthConfig       `toml:"auth"`
+	Hostname        string               `toml:"hostname"`
+	LogLevel        string               `toml:"log_level"`
+	Listeners       []ListenerConfig     `toml:"listeners"`
+	TLS             TLSConfig            `toml:"tls"`
+	Timeouts        TimeoutsConfig       `toml:"timeouts"`
+	Limits          LimitsConfig         `toml:"limits"`
+	Metrics         MetricsConfig        `toml:"metrics"`
+	Maildir         string               `toml:"maildir"`
+	DomainsPath     string               `toml:"domains_path"`
+	DomainsDataPath string               `toml:"domains_data_path"`
+	MailSessionPath string               `toml:"mail_session"` // path to the mail-session binary
+	Auth            AuthConfig           `toml:"auth"`
+	SessionManager  SessionManagerConfig `toml:"-"` // populated from [session-manager] top-level section
 }
 
 // AuthConfig holds configuration for the authentication agent.

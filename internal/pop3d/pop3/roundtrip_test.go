@@ -34,8 +34,8 @@ import (
 	"time"
 
 	authdomain "github.com/infodancer/maildancer/auth/domain"
-	_ "github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/auth/passwd"
+	_ "github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
@@ -143,7 +143,7 @@ path_template = "{localpart}"
 		t.Fatalf("open test store: %v", err)
 	}
 
-	handler := pop3.Handler("mail.test.local", authRouter, nil, serverTLS, &metrics.NoopCollector{})
+	handler := pop3.Handler("mail.test.local", authRouter, nil, nil, serverTLS, &metrics.NoopCollector{})
 
 	// Bind on a random localhost port.
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)

@@ -426,7 +426,7 @@ func TestCommandRegistry(t *testing.T) {
 
 	// Register test commands
 	mockAuth := newSimpleAuth(nil)
-	RegisterAuthCommands(mockAuth, nil)
+	RegisterAuthCommands(mockAuth, nil, nil)
 
 	tests := []struct {
 		name      string

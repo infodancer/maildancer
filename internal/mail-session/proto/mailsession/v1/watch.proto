@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package mailsession.v1;
+
+option go_package = "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1";
+
+import "mailsession/v1/mailbox.proto";
+
+// WatchService provides server-streaming notifications for IMAP IDLE support.
+// Replaces the pipe protocol's unsolicited +NEWMAIL messages.
+service WatchService {
+  // Watch opens a server-streaming connection that pushes events when the
+  // folder's contents change. The stream stays open until the client
+  // disconnects or the server shuts down.
+  rpc Watch(WatchRequest) returns (stream WatchEvent);
+}
+
+message WatchRequest {
+  // Folder to watch for changes.
+  string folder = 1;
+}
+
+// WatchEvent is pushed from server to client when folder contents change.
+message WatchEvent {
+  oneof event {
+    // New messages appeared in the folder.
+    NewMessagesEvent new_messages = 1;
+
+    // Messages were expunged from the folder.
+    ExpungedEvent expunged = 2;
+
+    // Message flags changed.
+    FlagsChangedEvent flags_changed = 3;
+  }
+}
+
+// NewMessagesEvent reports new messages in a watched folder.
+message NewMessagesEvent {
+  // Reuses MessageInfo from mailbox.proto.
+  repeated MessageInfo messages = 1;
+}
+
+// ExpungedEvent reports UIDs that were permanently removed.
+message ExpungedEvent {
+  repeated string uids = 1;
+}
+
+// FlagsChangedEvent reports a message whose flags were updated.
+message FlagsChangedEvent {
+  string uid = 1;
+  repeated string flags = 2;
+}

@@ -151,8 +151,8 @@ func (s *Session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) 
 	}, nil
 }
 
-// mover is satisfied by SubprocessStore when mail-session supports MOVE.
-// The method signature matches SubprocessStore.MoveMessage exactly.
+// mover is satisfied by grpcStore (via embedded client.Client.MoveMessage).
+// The method signature matches client.Client.MoveMessage exactly.
 type mover interface {
 	MoveMessage(ctx context.Context, mailbox, srcFolder, uid, destFolder string) (string, error)
 }
@@ -161,10 +161,10 @@ type mover interface {
 // capability requires implementing this interface; go-imap/v2 advertises the
 // capability automatically when the session satisfies SessionMove.
 //
-// If the underlying store is a SubprocessStore (i.e. mail-session is in use),
-// the MOVE is handled atomically there — including rspamd Junk-folder learning.
-// Otherwise we fall back to Copy + mark-\Deleted + Expunge, with direct
-// rspamd learning when a spamLearner is configured.
+// If the underlying store satisfies the mover interface (grpcStore via
+// mail-session), the MOVE is handled atomically — including rspamd Junk-folder
+// learning. Otherwise we fall back to Copy + mark-\Deleted + Expunge, with
+// direct rspamd learning when a spamLearner is configured.
 func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string) error {
 	if s.folderStore == nil {
 		return &imap.Error{Type: imap.StatusResponseTypeNo, Text: "Move not supported"}

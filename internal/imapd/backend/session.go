@@ -90,19 +90,8 @@ func (s *Session) Login(username, password string) error {
 	s.userDomain = extractDomain(username)
 	s.mailbox = result.Session.User.Mailbox
 
-	if s.cfg.MailSessionCmd != "" && s.cfg.MailSessionMode == "grpc" {
+	if s.cfg.MailSessionCmd != "" {
 		gs, spawnErr := s.spawnGrpcMailSession(username)
-		if spawnErr != nil {
-			s.logger.Error("failed to spawn grpc mail-session", "username", username, "error", spawnErr)
-			return &imap.Error{
-				Type: imap.StatusResponseTypeNo,
-				Text: "Internal server error",
-			}
-		}
-		s.store = gs
-		s.folderStore = gs
-	} else if s.cfg.MailSessionCmd != "" {
-		subprocStore, spawnErr := s.spawnMailSession(username)
 		if spawnErr != nil {
 			s.logger.Error("failed to spawn mail-session", "username", username, "error", spawnErr)
 			return &imap.Error{
@@ -110,8 +99,8 @@ func (s *Session) Login(username, password string) error {
 				Text: "Internal server error",
 			}
 		}
-		s.store = subprocStore
-		s.folderStore = subprocStore
+		s.store = gs
+		s.folderStore = gs
 	} else if result.Domain != nil && result.Domain.MessageStore != nil {
 		s.store = result.Domain.MessageStore
 		s.folderStore, _ = result.Domain.MessageStore.(msgstore.FolderStore)
@@ -171,73 +160,6 @@ func (s *Session) Close() error {
 	}
 	s.collector.ConnectionClosed()
 	return nil
-}
-
-// spawnMailSession looks up the domain config for username, then starts a
-// mail-session subprocess with the appropriate uid/gid/basepath and returns a
-// SubprocessStore wired to its stdin/stdout.
-func (s *Session) spawnMailSession(username string) (*SubprocessStore, error) {
-	localpart, domainName, ok := strings.Cut(username, "@")
-	if !ok {
-		return nil, fmt.Errorf("invalid username %q: missing @domain", username)
-	}
-
-	uid, gid, basePath, storeType, maxMsgSize, err := s.lookupMailSessionParams(localpart, domainName)
-	if err != nil {
-		return nil, err
-	}
-
-	args := []string{"--type", storeType, "--basepath", basePath, "--user", username}
-	if maxMsgSize > 0 {
-		args = append(args, "--max-message-size", fmt.Sprintf("%d", maxMsgSize))
-	}
-	if s.cfg.Rspamd.Controller != "" {
-		args = append(args, "--rspamd", s.cfg.Rspamd.Controller)
-		junk := s.cfg.Rspamd.JunkFolder
-		if junk == "" {
-			junk = "Junk"
-		}
-		args = append(args, "--junk-folder", junk)
-	}
-	cmd := exec.Command(s.cfg.MailSessionCmd, args...)
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{
-			Uid: uid,
-			Gid: gid,
-		},
-	}
-
-	// ── Encryption seam: key pipe (fd 3 in mail-session) ─────────────────────
-	// mail-session reads exactly 32 bytes from fd 3 before entering its command
-	// loop. NewSubprocessStore starts the process and immediately sends MAILBOX,
-	// so the key write runs in a goroutine to avoid a deadlock: mail-session
-	// blocks reading fd 3 while NewSubprocessStore waits for the MAILBOX reply.
-	// Stub: zeroed bytes are written; real key derivation (auth.DeriveKeyPair)
-	// is deferred to a future PR.
-	// See: infodancer/infodancer/docs/encryption-design.md
-	// ─────────────────────────────────────────────────────────────────────────
-	keyPipeR, keyPipeW, err := os.Pipe()
-	if err != nil {
-		return nil, fmt.Errorf("key pipe: %w", err)
-	}
-	cmd.ExtraFiles = []*os.File{keyPipeR} // fd 3: read-only session key
-
-	go func() {
-		defer keyPipeW.Close()
-		// Stub: write a zeroed key envelope so mail-session can proceed.
-		// The envelope format is versioned JSON so future fields (algorithm,
-		// key_id, keyring) can be added without a breaking protocol change.
-		// Real key derivation (auth.DeriveKeyPair) is deferred.
-		_ = json.NewEncoder(keyPipeW).Encode(struct {
-			Version int    `json:"version"`
-			Key     []byte `json:"key"`
-		}{Version: 1, Key: make([]byte, 32)})
-	}()
-
-	store, err := NewSubprocessStore(cmd, s.mailbox)
-	_ = keyPipeR.Close() // child owns fd 3; release parent's copy
-	return store, err
 }
 
 // spawnGrpcMailSession starts mail-session in daemon mode with a gRPC socket,

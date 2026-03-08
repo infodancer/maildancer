@@ -11,7 +11,6 @@ import (
 )
 
 // rescanner is satisfied by stores that support incremental rescan (IDLE).
-// Both SubprocessStore (pipe) and grpcStore (gRPC) implement this.
 type rescanner interface {
 	Rescan() ([]msgstore.MessageInfo, error)
 }

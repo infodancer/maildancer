@@ -111,11 +111,27 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		logger.Info("message store opened", "type", cfg.Config.Store.Type)
 	}
 
+	// Create session-manager client if configured.
+	var smClient *SessionManagerClient
+	if cfg.Config.SessionManager.IsEnabled() {
+		var err error
+		smClient, err = NewSessionManagerClient(cfg.Config.SessionManager, logger)
+		if err != nil {
+			s.Close() //nolint:errcheck
+			return nil, err
+		}
+		s.closers = append(s.closers, smClient)
+		logger.Info("session-manager client enabled",
+			"socket", cfg.Config.SessionManager.Socket,
+			"address", cfg.Config.SessionManager.Address,
+		)
+	}
+
 	// Create IMAP server.
 	opts := &imapserver.Options{
 		NewSession: func(conn *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
 			collector.ConnectionOpened()
-			session := NewSession(conn, &cfg.Config, authRouter, store, collector, logger)
+			session := NewSession(conn, &cfg.Config, authRouter, store, smClient, collector, logger)
 			return session, &imapserver.GreetingData{}, nil
 		},
 		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapMove: {}},

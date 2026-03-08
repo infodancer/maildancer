@@ -32,6 +32,7 @@ type Session struct {
 	authRouter  *domain.AuthRouter
 	store       msgstore.MessageStore
 	folderStore msgstore.FolderStore
+	smClient    *SessionManagerClient // nil when using legacy auth path
 
 	username   string
 	mailbox    string // user's mailbox identifier from auth
@@ -51,7 +52,7 @@ type Session struct {
 }
 
 // NewSession creates a new IMAP session for the given connection.
-func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.AuthRouter, store msgstore.MessageStore, collector metrics.Collector, logger *slog.Logger) *Session {
+func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.AuthRouter, store msgstore.MessageStore, smClient *SessionManagerClient, collector metrics.Collector, logger *slog.Logger) *Session {
 	var folderStore msgstore.FolderStore
 	if store != nil {
 		folderStore, _ = store.(msgstore.FolderStore)
@@ -67,6 +68,7 @@ func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.Au
 		authRouter:  authRouter,
 		store:       store,
 		folderStore: folderStore,
+		smClient:    smClient,
 		learner:     learner,
 		collector:   collector,
 		logger:      logging.WithConnection(logger, conn.NetConn().RemoteAddr().String()),
@@ -75,6 +77,43 @@ func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.Au
 
 // Login authenticates the user.
 func (s *Session) Login(username, password string) error {
+	if s.smClient != nil {
+		return s.loginSessionManager(username, password)
+	}
+	return s.loginLegacy(username, password)
+}
+
+// loginSessionManager authenticates via the centralized session-manager service.
+func (s *Session) loginSessionManager(username, password string) error {
+	ctx := context.Background()
+	token, mailbox, err := s.smClient.Login(ctx, username, password)
+	if err != nil {
+		s.logger.Info("login failed", "username", username, "error", err)
+		s.collector.AuthAttempt(extractDomain(username), false)
+		return &imap.Error{
+			Type: imap.StatusResponseTypeNo,
+			Code: imap.ResponseCodeAuthenticationFailed,
+			Text: "Authentication failed",
+		}
+	}
+	s.username = username
+	s.userDomain = extractDomain(username)
+	s.mailbox = mailbox
+
+	smStore := newSessionManagerStore(s.smClient, token)
+	s.store = smStore
+	s.folderStore = smStore
+
+	// Ensure default folders exist (idempotent).
+	s.ensureDefaultFolders()
+
+	s.collector.AuthAttempt(s.userDomain, true)
+	s.logger.Info("login success", "username", username, "via", "session-manager")
+	return nil
+}
+
+// loginLegacy authenticates via the domain.AuthRouter (legacy path).
+func (s *Session) loginLegacy(username, password string) error {
 	ctx := context.Background()
 	result, err := s.authRouter.AuthenticateWithDomain(ctx, username, password)
 	if err != nil {

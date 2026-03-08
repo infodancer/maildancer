@@ -19,3 +19,21 @@ linters:
               desc: "backend must use msgstore.FolderStore interface, not the maildir backend directly"
             - pkg: "github.com/emersion/go-maildir"
               desc: "backend must use msgstore.FolderStore interface, not go-maildir directly"
+        session-manager-boundary:
+          files:
+            - "**/smclient*.go"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/msgstore"
+              desc: "smclient must not import msgstore — use raw gRPC types only"
+            - pkg: "github.com/infodancer/maildancer/auth"
+              desc: "smclient must not import auth — session-manager handles auth"
+            - pkg: "github.com/infodancer/maildancer/auth/domain"
+              desc: "smclient must not import auth/domain — session-manager handles domain routing"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-session/client"
+              desc: "smclient must not import mail-session/client — use session-manager gRPC directly"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "smclient must not import mail-deliver"
+        no-mail-deliver:
+          deny:
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "mail-deliver is deprecated — use session-manager for delivery"

@@ -18,11 +18,26 @@ const (
 	ModeImaps ListenerMode = "imaps"
 )
 
+// SessionManagerConfig holds configuration for connecting to the session-manager service.
+type SessionManagerConfig struct {
+	Socket     string `toml:"socket"`
+	Address    string `toml:"address"`
+	CACert     string `toml:"ca_cert"`
+	ClientCert string `toml:"client_cert"`
+	ClientKey  string `toml:"client_key"`
+}
+
+// IsEnabled returns true if session-manager is configured.
+func (c *SessionManagerConfig) IsEnabled() bool {
+	return c.Socket != "" || c.Address != ""
+}
+
 // FileConfig is the top-level wrapper for the shared configuration file.
 // This allows smtpd, pop3d, imapd, and msgstore to share a single config file.
 type FileConfig struct {
-	Server ServerConfig `toml:"server"`
-	Imapd  Config       `toml:"imapd"`
+	Server         ServerConfig         `toml:"server"`
+	Imapd          Config               `toml:"imapd"`
+	SessionManager SessionManagerConfig `toml:"session-manager"`
 }
 
 // ServerConfig holds shared settings used by all mail services.
@@ -44,19 +59,20 @@ type RspamdConfig struct {
 
 // Config holds the IMAP-specific server configuration.
 type Config struct {
-	Hostname        string           `toml:"hostname"`
-	LogLevel        string           `toml:"log_level"`
-	Listeners       []ListenerConfig `toml:"listeners"`
-	TLS             TLSConfig        `toml:"tls"`
-	Timeouts        TimeoutsConfig   `toml:"timeouts"`
-	Limits          LimitsConfig     `toml:"limits"`
-	Metrics         MetricsConfig    `toml:"metrics"`
-	DomainsPath     string           `toml:"domains_path"`
-	DomainsDataPath string           `toml:"domains_data_path"`
-	Auth            AuthConfig       `toml:"auth"`
-	Store           StoreConfig      `toml:"store"`
-	MailSessionCmd  string           `toml:"mail_session"` // path to mail-session binary; empty = in-process
-	Rspamd          RspamdConfig     `toml:"rspamd"`
+	Hostname        string               `toml:"hostname"`
+	LogLevel        string               `toml:"log_level"`
+	Listeners       []ListenerConfig     `toml:"listeners"`
+	TLS             TLSConfig            `toml:"tls"`
+	Timeouts        TimeoutsConfig       `toml:"timeouts"`
+	Limits          LimitsConfig         `toml:"limits"`
+	Metrics         MetricsConfig        `toml:"metrics"`
+	DomainsPath     string               `toml:"domains_path"`
+	DomainsDataPath string               `toml:"domains_data_path"`
+	Auth            AuthConfig           `toml:"auth"`
+	Store           StoreConfig          `toml:"store"`
+	MailSessionCmd  string               `toml:"mail_session"` // path to mail-session binary; empty = in-process
+	Rspamd          RspamdConfig         `toml:"rspamd"`
+	SessionManager  SessionManagerConfig `toml:"-"` // populated by loader from top-level [session-manager]
 }
 
 // AuthConfig holds configuration for the authentication agent.

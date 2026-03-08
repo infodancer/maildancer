@@ -64,6 +64,9 @@ func Load(path string) (Config, error) {
 	// Then merge imapd-specific config (takes precedence)
 	cfg = mergeConfig(cfg, fileConfig.Imapd)
 
+	// Merge top-level session-manager config
+	cfg = mergeSessionManagerConfig(cfg, fileConfig.SessionManager)
+
 	return cfg, nil
 }
 
@@ -136,6 +139,26 @@ func mergeServerConfig(dst Config, src ServerConfig) Config {
 		dst.TLS.MinVersion = src.TLS.MinVersion
 	}
 
+	return dst
+}
+
+// mergeSessionManagerConfig merges the top-level [session-manager] section into the config.
+func mergeSessionManagerConfig(dst Config, src SessionManagerConfig) Config {
+	if src.Socket != "" {
+		dst.SessionManager.Socket = src.Socket
+	}
+	if src.Address != "" {
+		dst.SessionManager.Address = src.Address
+	}
+	if src.CACert != "" {
+		dst.SessionManager.CACert = src.CACert
+	}
+	if src.ClientCert != "" {
+		dst.SessionManager.ClientCert = src.ClientCert
+	}
+	if src.ClientKey != "" {
+		dst.SessionManager.ClientKey = src.ClientKey
+	}
 	return dst
 }
 

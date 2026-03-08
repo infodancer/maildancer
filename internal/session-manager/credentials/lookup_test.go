@@ -34,7 +34,7 @@ credential_backend = "passwd"
 		t.Fatal(err)
 	}
 
-	info, err := Lookup(domainsDir, "alice", "example.com")
+	info, err := Lookup(domainsDir, "", "alice", "example.com")
 	if err != nil {
 		t.Fatalf("Lookup() error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestLookup_MissingUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := Lookup(domainsDir, "nonexistent", "example.com")
+	_, err := Lookup(domainsDir, "", "nonexistent", "example.com")
 	if err == nil {
 		t.Fatal("expected error for nonexistent user")
 	}
@@ -86,7 +86,7 @@ func TestLookup_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	info, err := Lookup(domainsDir, "bob", "example.com")
+	info, err := Lookup(domainsDir, "", "bob", "example.com")
 	if err != nil {
 		t.Fatalf("Lookup() error: %v", err)
 	}

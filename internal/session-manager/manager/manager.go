@@ -189,7 +189,7 @@ func (m *Manager) DeliverySession(ctx context.Context, recipient string) (pb.Del
 		return nil, nil, fmt.Errorf("invalid recipient %q: missing @domain", recipient)
 	}
 
-	creds, err := credentials.Lookup(m.cfg.DomainsPath, localpart, domainName)
+	creds, err := credentials.Lookup(m.cfg.DomainsPath, m.cfg.DomainsDataPath, localpart, domainName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("credential lookup for %q: %w", recipient, err)
 	}
@@ -279,7 +279,7 @@ func (m *Manager) spawnSession(username, mailbox string) (*sessionEntry, error) 
 		return nil, fmt.Errorf("invalid username %q: missing @domain", username)
 	}
 
-	creds, err := credentials.Lookup(m.cfg.DomainsPath, localpart, domainName)
+	creds, err := credentials.Lookup(m.cfg.DomainsPath, m.cfg.DomainsDataPath, localpart, domainName)
 	if err != nil {
 		return nil, fmt.Errorf("credential lookup: %w", err)
 	}

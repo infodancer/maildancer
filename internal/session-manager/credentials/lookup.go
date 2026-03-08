@@ -22,7 +22,11 @@ type Info struct {
 
 // Lookup resolves credentials for username (localpart@domain) using the
 // per-domain config and passwd files under domainsPath.
-func Lookup(domainsPath, localpart, domainName string) (*Info, error) {
+//
+// domainsDataPath, if non-empty, is used to resolve relative MsgStore.BasePath
+// values — matching the behaviour of FilesystemDomainProvider.WithDataPath.
+// Credential backend paths are always resolved relative to domainsPath.
+func Lookup(domainsPath, domainsDataPath, localpart, domainName string) (*Info, error) {
 	domainDir := filepath.Join(domainsPath, domainName)
 
 	cfg, err := domain.LoadDomainConfig(filepath.Join(domainDir, "config.toml"))
@@ -47,12 +51,18 @@ func Lookup(domainsPath, localpart, domainName string) (*Info, error) {
 	}
 
 	// Resolve mail-session basePath (default: "users").
+	// Relative paths are resolved against the data dir when set, matching
+	// FilesystemDomainProvider.WithDataPath behaviour.
 	base := cfg.MsgStore.BasePath
 	if base == "" {
 		base = "users"
 	}
 	if !filepath.IsAbs(base) {
-		base = filepath.Join(domainDir, base)
+		storageBase := domainDir
+		if domainsDataPath != "" {
+			storageBase = filepath.Join(domainsDataPath, domainName)
+		}
+		base = filepath.Join(storageBase, base)
 	}
 
 	storeType := cfg.MsgStore.Type

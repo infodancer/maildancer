@@ -458,14 +458,29 @@ func SetupAuth(cfg *config.Config) (*domain.AuthRouter, error) {
 		return nil, fmt.Errorf("domains_path is required")
 	}
 
-	domainProvider := domain.NewFilesystemDomainProvider(cfg.DomainsPath, nil)
-	if cfg.DomainsDataPath != "" {
-		domainProvider = domainProvider.WithDataPath(cfg.DomainsDataPath)
-	}
-
 	agentType := cfg.Auth.AgentType
 	if agentType == "" {
 		agentType = "passwd"
+	}
+
+	// Domain defaults: domains without [auth] or [msgstore] sections inherit
+	// these values. Matches the defaults used by credentials.Lookup.
+	defaults := domain.DomainConfig{
+		Auth: domain.DomainAuthConfig{
+			Type:              agentType,
+			CredentialBackend: cfg.Auth.CredentialBackend,
+			KeyBackend:        cfg.Auth.KeyBackend,
+		},
+		MsgStore: domain.DomainMsgStoreConfig{
+			Type:     "maildir",
+			BasePath: "users",
+		},
+	}
+
+	domainProvider := domain.NewFilesystemDomainProvider(cfg.DomainsPath, nil).
+		WithDefaults(defaults)
+	if cfg.DomainsDataPath != "" {
+		domainProvider = domainProvider.WithDataPath(cfg.DomainsDataPath)
 	}
 
 	authAgent, err := auth.OpenAuthAgent(auth.AuthAgentConfig{

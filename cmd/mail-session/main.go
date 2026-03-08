@@ -15,13 +15,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	mserrors "github.com/infodancer/maildancer/internal/mail-session/errors"
+	"github.com/infodancer/maildancer/internal/mail-session/deliver"
+	"github.com/infodancer/maildancer/internal/mail-session/grpcserver"
 	"github.com/infodancer/maildancer/internal/mail-session/protocol"
 	"github.com/infodancer/maildancer/internal/mail-session/rspamd"
 	"github.com/infodancer/maildancer/internal/mail-session/session"
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir"
+	"github.com/pelletier/go-toml/v2"
 )
 
 // fileConfig is the TOML structure for [mail-session] in the shared config file.
@@ -99,13 +101,24 @@ func main() {
 	maxMessageSize := flag.Int64("max-message-size", 50*1024*1024, "maximum message size in bytes for rspamd learning (0 = use default)")
 	rescanIntervalStr := flag.String("rescan-interval", "30s", "periodic rescan interval (0 or 0s = disabled)")
 	configPath := flag.String("config", "", "path to TOML config file (optional; [mail-session] section)")
+
+	// gRPC mode flags.
+	mode := flag.String("mode", "pipe", "operating mode: pipe (default), daemon (long-lived gRPC), oneshot (single delivery gRPC)")
+	socketPath := flag.String("socket", "", "unix domain socket path (required for daemon/oneshot modes)")
+	idleTimeoutStr := flag.String("idle-timeout", "", "idle timeout before auto-shutdown (default: 30m for daemon, 60s for oneshot)")
+	domainsPath := flag.String("domains-path", "", "path to domain config directory (required for delivery)")
+	domainsDataPath := flag.String("domains-data-path", "", "path to domain data directory (defaults to domains-path)")
+	mailbox := flag.String("mailbox", "", "user@domain identity (required for daemon/oneshot gRPC modes)")
 	flag.Parse()
 
 	// Load config file if provided; CLI flags override.
 	if *configPath != "" {
 		var fc fileConfig
-		if _, err := toml.DecodeFile(*configPath, &fc); err != nil {
+		data, err := os.ReadFile(*configPath)
+		if err != nil {
 			slog.Warn("failed to read config file", "path", *configPath, "error", err)
+		} else if err := toml.Unmarshal(data, &fc); err != nil {
+			slog.Warn("failed to parse config file", "path", *configPath, "error", err)
 		} else {
 			applyFileConfig(&fc, rescanIntervalStr)
 		}
@@ -135,6 +148,29 @@ func main() {
 	sessionStore := maybeWrapWithDecryptingStore(store)
 	// ─────────────────────────────────────────────────────────────────────────
 
+	sess := session.New(sessionStore)
+
+	// ── Mode dispatch ────────────────────────────────────────────────────────
+	switch *mode {
+	case "daemon", "oneshot":
+		if *mailbox == "" {
+			slog.Error("--mailbox is required for " + *mode + " mode")
+			os.Exit(2)
+		}
+		if err := sess.Open(context.Background(), *mailbox); err != nil {
+			slog.Error("open mailbox", "mailbox", *mailbox, "error", err)
+			os.Exit(1)
+		}
+		runGRPC(sess, *mode, *socketPath, *idleTimeoutStr, *domainsPath, *domainsDataPath, rescanInterval)
+		return
+	case "pipe":
+		// Fall through to pipe protocol below.
+	default:
+		slog.Error("unknown --mode", "mode", *mode)
+		os.Exit(2)
+	}
+
+	// ── Pipe mode (backward-compatible default) ──────────────────────────────
 	var rspamdClient *rspamd.Client
 	if *rspamdURL != "" {
 		rspamdClient = rspamd.New(*rspamdURL)
@@ -142,18 +178,13 @@ func main() {
 
 	r := protocol.NewReader(os.Stdin)
 	w := protocol.NewWriter(os.Stdout)
-	sess := session.New(sessionStore)
 	ctx := context.Background()
 
 	var mailboxOpen bool
 
-	// Read commands in a goroutine so the main loop can select{} on both
-	// commands and the periodic rescan timer. APPEND body bytes are also read
-	// by this goroutine to avoid concurrent access to the bufio.Reader.
 	cmdCh := make(chan commandResult, 1)
 	go readCommands(r, cmdCh)
 
-	// Set up periodic rescan timer (nil channel if disabled).
 	var ticker *time.Ticker
 	if rescanInterval > 0 {
 		ticker = time.NewTicker(rescanInterval)
@@ -191,6 +222,61 @@ func main() {
 				_ = w.WriteNewMail(lines)
 			}
 		}
+	}
+}
+
+// runGRPC starts mail-session in daemon or oneshot gRPC mode.
+func runGRPC(sess *session.Session, mode, socketPath, idleTimeoutStr, domainsPath, domainsDataPath string, rescanInterval time.Duration) {
+	if socketPath == "" {
+		slog.Error("--socket is required for " + mode + " mode")
+		os.Exit(2)
+	}
+
+	// Determine idle timeout defaults.
+	var idleTimeout time.Duration
+	if idleTimeoutStr != "" {
+		d, err := time.ParseDuration(idleTimeoutStr)
+		if err != nil {
+			slog.Error("invalid --idle-timeout", "value", idleTimeoutStr, "error", err)
+			os.Exit(2)
+		}
+		idleTimeout = d
+	} else if mode == "daemon" {
+		idleTimeout = 30 * time.Minute
+	} else {
+		idleTimeout = 60 * time.Second
+	}
+
+	// Set up delivery pipeline if domains-path is configured.
+	var dlvr *deliver.Deliverer
+	if domainsPath != "" {
+		var err error
+		dlvr, err = deliver.New(deliver.Config{
+			DomainsPath:     domainsPath,
+			DomainsDataPath: domainsDataPath,
+		})
+		if err != nil {
+			slog.Error("delivery pipeline init", "error", err)
+			os.Exit(1)
+		}
+		defer func() { _ = dlvr.Close() }()
+	}
+
+	srv := grpcserver.NewServer(grpcserver.Config{
+		Session:        sess,
+		Deliverer:      dlvr,
+		IdleTimeout:    idleTimeout,
+		RescanInterval: rescanInterval,
+	})
+
+	slog.Info("starting gRPC server",
+		"mode", mode,
+		"socket", socketPath,
+		"idle_timeout", idleTimeout)
+
+	if err := srv.Serve(socketPath); err != nil {
+		slog.Error("gRPC server", "error", err)
+		os.Exit(1)
 	}
 }
 

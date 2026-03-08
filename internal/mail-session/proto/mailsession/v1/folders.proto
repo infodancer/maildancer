@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package mailsession.v1;
+
+option go_package = "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1";
+
+// FolderService handles folder management within a user's mailbox.
+// Mirrors scmp's FolderService for protocol alignment.
+service FolderService {
+  // ListFolders returns all folders for the current mailbox.
+  rpc ListFolders(ListFoldersRequest) returns (ListFoldersResponse);
+
+  // CreateFolder creates a new folder.
+  rpc CreateFolder(CreateFolderRequest) returns (CreateFolderResponse);
+
+  // DeleteFolder removes a folder and all its messages.
+  rpc DeleteFolder(DeleteFolderRequest) returns (DeleteFolderResponse);
+
+  // RenameFolder renames an existing folder.
+  rpc RenameFolder(RenameFolderRequest) returns (RenameFolderResponse);
+}
+
+message ListFoldersRequest {}
+
+message ListFoldersResponse {
+  repeated string folders = 1;
+}
+
+message CreateFolderRequest {
+  string name = 1;
+}
+
+message CreateFolderResponse {}
+
+message DeleteFolderRequest {
+  string name = 1;
+}
+
+message DeleteFolderResponse {}
+
+message RenameFolderRequest {
+  string old_name = 1;
+  string new_name = 2;
+}
+
+message RenameFolderResponse {}

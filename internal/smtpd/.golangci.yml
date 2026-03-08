@@ -22,11 +22,33 @@ linters:
 
     depguard:
       rules:
-        # Session-manager delivery code speaks the mail-session proto directly.
-        # It must not depend on msgstore types (Envelope, DeliveryAgent, etc.).
-        session-manager-no-msgstore:
+        # Session-manager delivery code is a thin gRPC client that speaks the
+        # mail-session proto directly. It must not pull in store, auth, spam,
+        # queue, or metrics — those are either the session-manager's job or
+        # the caller's job.
+        session-manager-boundary:
           files:
             - "**/smdeliver*.go"
           deny:
             - pkg: "github.com/infodancer/maildancer/msgstore"
               desc: "session-manager code must use mail-session proto types, not msgstore"
+            - pkg: "github.com/infodancer/maildancer/auth"
+              desc: "authentication is the session-manager's responsibility"
+            - pkg: "github.com/infodancer/maildancer/internal/smtpd/queue"
+              desc: "outbound queue is a separate concern from delivery"
+            - pkg: "github.com/infodancer/maildancer/internal/smtpd/rspamd"
+              desc: "spam checking happens before delivery dispatch"
+            - pkg: "github.com/infodancer/maildancer/internal/smtpd/spamcheck"
+              desc: "spam checking happens before delivery dispatch"
+            - pkg: "github.com/infodancer/maildancer/internal/smtpd/metrics"
+              desc: "metrics are the caller's responsibility, not the transport agent's"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "mail-deliver is archived; use session-manager"
+
+        # mail-deliver is being archived. No new imports anywhere.
+        no-mail-deliver:
+          files:
+            - "$all"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "mail-deliver is archived; delivery goes through session-manager or mail-session"

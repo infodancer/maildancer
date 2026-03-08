@@ -16,11 +16,41 @@ https://github.com/infodancer/infodancer/blob/master/docs/mail-security-model.md
 ## Architecture
 
 ```
-/cmd/mail-session/   # Entrypoint: reads config, opens mailbox, runs protocol loop
-/internal/protocol/  # Session pipe protocol parser and command dispatch
-/internal/session/   # Session state: selected mailbox, deletion marks, flags
-/errors/             # Centralized error definitions
+/cmd/mail-session/       # Entrypoint: mode dispatch (pipe/daemon/oneshot)
+/internal/session/       # Session state: selected mailbox, deletion marks, flags
+/internal/protocol/      # Session pipe protocol parser (legacy, --mode=pipe)
+/internal/grpcserver/    # gRPC service implementations (--mode=daemon/oneshot)
+/internal/deliver/       # Delivery pipeline (forwarding, spam, sieve, maildir)
+/internal/rspamd/        # Rspamd learning client (move to/from Junk)
+/proto/mailsession/v1/   # Protobuf service definitions
+/client/                 # Public gRPC client library (drop-in for SubprocessStore)
+/errors/                 # Centralized error definitions
 ```
+
+### Operating Modes
+
+- **`--mode=pipe`** (default): Legacy stdin/stdout pipe protocol for backward compatibility
+- **`--mode=daemon`**: Long-lived gRPC server on unix socket (IMAP/POP3 sessions)
+- **`--mode=oneshot`**: Single-delivery gRPC server (SMTP delivery, exits after idle)
+
+### gRPC Services
+
+Four services on a unix domain socket, aligned with scmp's service split:
+
+- **MailboxService**: List, Stat, Fetch (streaming), Append (streaming), Copy, Move,
+  SetFlags, Expunge, Rescan, UIDValidity, Delete/Undelete/Commit (POP3)
+- **FolderService**: ListFolders, CreateFolder, DeleteFolder, RenameFolder
+- **DeliveryService**: Client-streaming Deliver (replaces mail-deliver binary)
+- **WatchService**: Server-streaming Watch for IMAP IDLE notifications
+
+All RPCs are stateless (folder in every request). The server mutex-serializes
+access to session.Session (not thread-safe).
+
+### Client Library
+
+`client/` is a public Go package that callers import:
+- `Client` implements `msgstore.MessageStore` and `msgstore.FolderStore`
+- `DeliveryClient` provides structured delivery with redirect support
 
 ### Session Pipe Protocol v1
 
@@ -63,7 +93,8 @@ It never calls `setuid`/`setgid` itself — the dispatcher handles privilege dro
 ## Development Commands
 
 ```bash
-task build          # Build the binary
+task proto          # Generate Go code from proto definitions
+task build          # Build the binary (depends on proto)
 task test           # Run tests with race detector
 task vet            # go vet
 task fmt            # Check formatting

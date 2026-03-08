@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
@@ -21,7 +22,8 @@ func (s *sessionServer) Login(ctx context.Context, req *smpb.LoginRequest) (*smp
 
 	token, mailbox, err := s.mgr.Login(ctx, req.Username, req.Password)
 	if err != nil {
-		return nil, status.Errorf(codes.Unauthenticated, "%v", err)
+		slog.Warn("login failed", "username", req.Username, "error", err)
+		return nil, status.Error(codes.Unauthenticated, "authentication failed")
 	}
 
 	return &smpb.LoginResponse{

@@ -24,6 +24,12 @@ profile.cov
 go.work
 go.work.sum
 
+# Build output
+session-manager
+
+# Task runner cache
+.task/
+
 # env file
 .env
 

@@ -91,6 +91,9 @@ func writePEM(path, blockType string, data []byte, perm os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return pem.Encode(f, &pem.Block{Type: blockType, Bytes: data})
+	encErr := pem.Encode(f, &pem.Block{Type: blockType, Bytes: data})
+	if closeErr := f.Close(); closeErr != nil && encErr == nil {
+		return closeErr
+	}
+	return encErr
 }

@@ -16,6 +16,11 @@ type deliveryProxy struct {
 // Deliver proxies a delivery request by spawning a oneshot mail-session for
 // the recipient. The recipient is extracted from the first DeliverRequest
 // metadata chunk.
+//
+// Unlike the other proxied RPCs, Deliver does not require a session token.
+// Authentication is implicit: unix socket mode uses 0600 perms restricting
+// access to the session-manager user; mTLS mode requires a valid client cert.
+// Only smtpd calls this RPC.
 func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 	// Read the first chunk to get the metadata with the recipient.
 	first, err := stream.Recv()

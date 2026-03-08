@@ -18,6 +18,8 @@ import (
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
+	healthgrpc "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -55,6 +57,10 @@ func New(mgr *manager.Manager, cfg *config.Config) (*Server, error) {
 	pb.RegisterDeliveryServiceServer(gsrv, &deliveryProxy{mgr: mgr})
 	pb.RegisterWatchServiceServer(gsrv, &watchProxy{mgr: mgr})
 
+	healthSrv := health.NewServer()
+	healthgrpc.RegisterHealthServer(gsrv, healthSrv)
+	healthSrv.SetServingStatus("", healthgrpc.HealthCheckResponse_SERVING)
+
 	return s, nil
 }
 
@@ -73,7 +79,7 @@ func (s *Server) ServeUnix(socketPath string) error {
 	}
 
 	slog.Info("listening (unix)", "socket", socketPath)
-	fmt.Fprintln(os.Stdout, "READY")
+	_, _ = fmt.Fprintln(os.Stdout, "READY")
 
 	return s.gsrv.Serve(ln)
 }
@@ -86,7 +92,7 @@ func (s *Server) ServeTCP(address string) error {
 	}
 
 	slog.Info("listening (tcp+mTLS)", "address", address)
-	fmt.Fprintln(os.Stdout, "READY")
+	_, _ = fmt.Fprintln(os.Stdout, "READY")
 
 	return s.gsrv.Serve(ln)
 }

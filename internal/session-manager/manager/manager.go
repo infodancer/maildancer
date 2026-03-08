@@ -50,6 +50,10 @@ type Manager struct {
 	byToken map[string]*sessionEntry
 	// byUser maps username to session entry for reuse.
 	byUser map[string]*sessionEntry
+
+	// Test hooks (unexported, nil in production).
+	authFn  func(ctx context.Context, username, password string) (mailbox string, err error)
+	spawnFn func(username, mailbox string) (*sessionEntry, error)
 }
 
 // New creates a new Manager.
@@ -65,17 +69,21 @@ func New(cfg *config.Config, authRouter *domain.AuthRouter) *Manager {
 // Login authenticates a user, spawns (or reuses) a mail-session, and returns
 // a session token.
 func (m *Manager) Login(ctx context.Context, username, password string) (token, mailbox string, err error) {
-	result, err := m.authRouter.AuthenticateWithDomain(ctx, username, password)
+	if m.authFn != nil {
+		mailbox, err = m.authFn(ctx, username, password)
+	} else {
+		var result *domain.AuthResult
+		result, err = m.authRouter.AuthenticateWithDomain(ctx, username, password)
+		if err == nil {
+			mailbox = result.Session.User.Mailbox
+		}
+	}
 	if err != nil {
 		return "", "", fmt.Errorf("authentication failed: %w", err)
 	}
 
-	mailbox = result.Session.User.Mailbox
-
+	// Fast path: reuse existing session under short lock.
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Reuse existing session if available.
 	if entry, ok := m.byUser[username]; ok {
 		if entry.idleTimer != nil {
 			entry.idleTimer.Stop()
@@ -83,24 +91,53 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token, 
 		}
 		entry.refCount++
 		token = m.generateTokenLocked(entry)
+		m.mu.Unlock()
 		slog.Debug("session reused",
 			"username", username,
 			"ref_count", entry.refCount)
 		return token, mailbox, nil
 	}
+	m.mu.Unlock()
 
-	// Spawn new mail-session.
-	entry, err := m.spawnSession(username, mailbox)
+	// Slow path: spawn outside the lock to avoid blocking other operations.
+	var entry *sessionEntry
+	if m.spawnFn != nil {
+		entry, err = m.spawnFn(username, mailbox)
+	} else {
+		entry, err = m.spawnSession(username, mailbox)
+	}
 	if err != nil {
 		return "", "", err
+	}
+
+	// Re-acquire lock and check for race (another goroutine may have
+	// spawned a session for the same user while we were spawning).
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existing, ok := m.byUser[username]; ok {
+		// Another goroutine won the race. Discard ours, reuse theirs.
+		m.killEntry(entry)
+		if existing.idleTimer != nil {
+			existing.idleTimer.Stop()
+			existing.idleTimer = nil
+		}
+		existing.refCount++
+		token = m.generateTokenLocked(existing)
+		slog.Debug("session reused (race resolved)",
+			"username", username,
+			"ref_count", existing.refCount)
+		return token, mailbox, nil
 	}
 
 	m.byUser[username] = entry
 	token = m.generateTokenLocked(entry)
 
-	slog.Info("session created",
-		"username", username,
-		"pid", entry.cmd.Process.Pid)
+	var pid int
+	if entry.cmd != nil && entry.cmd.Process != nil {
+		pid = entry.cmd.Process.Pid
+	}
+	slog.Info("session created", "username", username, "pid", pid)
 
 	return token, mailbox, nil
 }
@@ -161,6 +198,14 @@ func (m *Manager) DeliverySession(ctx context.Context, recipient string) (pb.Del
 	if err != nil {
 		return nil, nil, fmt.Errorf("create socket dir: %w", err)
 	}
+
+	// The child process runs as a different uid/gid via SysProcAttr; it needs
+	// write access to the socket directory to create the unix socket.
+	if err := os.Chown(socketDir, int(creds.UID), int(creds.GID)); err != nil {
+		_ = os.RemoveAll(socketDir)
+		return nil, nil, fmt.Errorf("chown socket dir: %w", err)
+	}
+
 	socketPath := filepath.Join(socketDir, "session.sock")
 
 	args := []string{
@@ -228,7 +273,6 @@ func (m *Manager) Close() {
 }
 
 // spawnSession starts a new mail-session daemon process for the given user.
-// Must be called with m.mu held.
 func (m *Manager) spawnSession(username, mailbox string) (*sessionEntry, error) {
 	localpart, domainName, ok := strings.Cut(username, "@")
 	if !ok {
@@ -244,6 +288,14 @@ func (m *Manager) spawnSession(username, mailbox string) (*sessionEntry, error) 
 	if err != nil {
 		return nil, fmt.Errorf("create socket dir: %w", err)
 	}
+
+	// The child process runs as a different uid/gid via SysProcAttr; it needs
+	// write access to the socket directory to create the unix socket.
+	if err := os.Chown(socketDir, int(creds.UID), int(creds.GID)); err != nil {
+		_ = os.RemoveAll(socketDir)
+		return nil, fmt.Errorf("chown socket dir: %w", err)
+	}
+
 	socketPath := filepath.Join(socketDir, "session.sock")
 
 	args := []string{
@@ -252,6 +304,12 @@ func (m *Manager) spawnSession(username, mailbox string) (*sessionEntry, error) 
 		"--mailbox=" + mailbox,
 		"--type=" + creds.StoreType,
 		"--basepath=" + creds.BasePath,
+	}
+	if m.cfg.DomainsPath != "" {
+		args = append(args, "--domains-path="+m.cfg.DomainsPath)
+	}
+	if m.cfg.DomainsDataPath != "" {
+		args = append(args, "--domains-data-path="+m.cfg.DomainsDataPath)
 	}
 
 	cmd := exec.Command(m.cfg.MailSessionCmd, args...)
@@ -357,9 +415,11 @@ func (m *Manager) reapSession(entry *sessionEntry) {
 		return
 	}
 
-	slog.Info("reaping idle session",
-		"username", entry.username,
-		"pid", entry.cmd.Process.Pid)
+	var pid int
+	if entry.cmd != nil && entry.cmd.Process != nil {
+		pid = entry.cmd.Process.Pid
+	}
+	slog.Info("reaping idle session", "username", entry.username, "pid", pid)
 
 	delete(m.byUser, entry.username)
 

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -17,18 +18,13 @@ idle_timeout = "10m"
 [session-manager.auth]
 agent_type = "passwd"
 `
-	f, err := os.CreateTemp("", "config-*.toml")
-	if err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
 
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-
-	cfg, err := Load(f.Name())
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
@@ -57,18 +53,13 @@ socket = "/tmp/test.sock"
 domains_path = "/etc/mail/domains"
 mail_session_cmd = "/usr/local/bin/mail-session"
 `
-	f, err := os.CreateTemp("", "config-*.toml")
-	if err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
 
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-
-	cfg, err := Load(f.Name())
+	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
@@ -84,18 +75,13 @@ func TestLoad_InvalidIdleTimeout(t *testing.T) {
 socket = "/tmp/test.sock"
 idle_timeout = "not-a-duration"
 `
-	f, err := os.CreateTemp("", "config-*.toml")
-	if err != nil {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
-	defer os.Remove(f.Name())
 
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-
-	_, err = Load(f.Name())
+	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for invalid idle_timeout")
 	}

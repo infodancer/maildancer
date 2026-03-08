@@ -116,7 +116,9 @@ func handleCertCA(args []string) {
 	fs := flag.NewFlagSet("cert ca", flag.ExitOnError)
 	caCert := fs.String("ca-cert", "ca.crt", "output path for CA certificate")
 	caKey := fs.String("ca-key", "ca.key", "output path for CA private key")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
 
 	if err := certutil.GenerateCA(*caCert, *caKey, 0); err != nil {
 		slog.Error("generate CA", "error", err)
@@ -135,7 +137,9 @@ func handleCertIssue(args []string) {
 	certOut := fs.String("cert", "", "output path for certificate (default: <name>.crt)")
 	keyOut := fs.String("key", "", "output path for private key (default: <name>.key)")
 	server := fs.Bool("server", false, "issue a server certificate (default: client)")
-	fs.Parse(args)
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
 
 	if *name == "" {
 		fmt.Fprintln(os.Stderr, "--name is required")

@@ -8,6 +8,7 @@ linters:
     - staticcheck
     - unused
     - ineffassign
+    - depguard
   settings:
     errcheck:
       # Close() on connections and files is idiomatic to ignore in cleanup paths.
@@ -18,3 +19,14 @@ linters:
         - (*os.File).Close
         - (net.Listener).Close
         - (*net.TCPListener).Close
+
+    depguard:
+      rules:
+        # Session-manager delivery code speaks the mail-session proto directly.
+        # It must not depend on msgstore types (Envelope, DeliveryAgent, etc.).
+        session-manager-no-msgstore:
+          files:
+            - "**/smdeliver*.go"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/msgstore"
+              desc: "session-manager code must use mail-session proto types, not msgstore"

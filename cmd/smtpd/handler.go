@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 
 	_ "github.com/infodancer/maildancer/auth/passwd"      // Register passwd auth backend
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir storage backend
@@ -74,19 +73,10 @@ func runProtocolHandler() {
 		}()
 	}
 
-	// Resolve config path to an absolute path so mail-deliver subprocess can
-	// find the config file regardless of its working directory.
-	configPath, err := filepath.Abs(flags.ConfigPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "protocol-handler: resolving config path: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Build the full auth/delivery stack. Each subprocess gets its own stack
 	// instance; there is no shared state with the parent listener process.
 	stack, err := smtp.NewStack(smtp.StackConfig{
 		Config:      cfg,
-		ConfigPath:  configPath,
 		TLSConfig:   tlsConfig,
 		SpamChecker: spamChecker,
 		SpamConfig:  spamCheckConfig,

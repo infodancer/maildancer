@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -29,7 +28,6 @@ type Stack struct {
 // TLSConfig and SpamChecker are caller-supplied (main.go builds them; tests omit them).
 type StackConfig struct {
 	Config      config.Config
-	ConfigPath  string // absolute path to the config file; passed to mail-deliver subprocess
 	TLSConfig   *tls.Config
 	SpamChecker spamcheck.Checker
 	SpamConfig  config.SpamCheckConfig
@@ -86,13 +84,8 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		logger.Info("delivery enabled", "type", cfg.Config.Delivery.Type, "path", cfg.Config.Delivery.BasePath)
 	}
 
-	// Wrap delivery agent with subprocess isolation when configured.
-	switch cfg.Config.Delivery.DeliveryMode {
-	case "grpc":
-		if cfg.Config.Delivery.MailSessionCmd == "" {
-			s.Close() //nolint:errcheck
-			return nil, fmt.Errorf("delivery_mode=grpc requires mail_session_cmd")
-		}
+	// Wrap delivery agent with gRPC subprocess isolation when configured.
+	if cfg.Config.Delivery.MailSessionCmd != "" {
 		delivery = NewGrpcDeliveryAgent(GrpcDeliveryConfig{
 			MailSessionCmd:  cfg.Config.Delivery.MailSessionCmd,
 			BasePath:        cfg.Config.Delivery.BasePath,
@@ -104,18 +97,6 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 			Logger:          logger,
 		})
 		logger.Info("delivery via gRPC", "cmd", cfg.Config.Delivery.MailSessionCmd)
-
-	default:
-		// "exec" mode or unset: use legacy ExecDeliveryAgent when deliver_cmd is set.
-		if cfg.Config.Delivery.DeliverCmd != "" {
-			delivery = NewExecDeliveryAgent(ExecDeliveryConfig{
-				Cmd:        cfg.Config.Delivery.DeliverCmd,
-				ConfigPath: cfg.ConfigPath,
-				UID:        cfg.Config.Delivery.UID,
-				GID:        cfg.Config.Delivery.GID,
-			})
-			logger.Info("delivery via subprocess", "cmd", cfg.Config.Delivery.DeliverCmd)
-		}
 	}
 
 	// Create domain provider if configured.

@@ -89,7 +89,7 @@ type Session struct {
 	helo                     string
 	from                     string
 	mailFromSeen             bool     // true once MAIL FROM is accepted (from may be "" for bounces)
-	recipients               []string // local recipients → mail-deliver
+	recipients               []string // local recipients → mail-session
 	remoteRecipients         []string // remote recipients → queue (authenticated submission only)
 	authUser                 string
 	domain                   *domain.Domain // Set during RCPT TO for delivery

@@ -296,6 +296,38 @@ func (c *Client) UIDValidity(ctx context.Context, _ string, folder string) (uint
 	return resp.GetUidValidity(), nil
 }
 
+// MoveMessage atomically moves a message between folders.
+// The mailbox parameter is ignored — the server's mailbox was set at startup.
+func (c *Client) MoveMessage(ctx context.Context, _ string, srcFolder string, uid string, destFolder string) (string, error) {
+	resp, err := c.mailbox.Move(ctx, &pb.MoveRequest{
+		Uid:        uid,
+		SrcFolder:  srcFolder,
+		DestFolder: destFolder,
+	})
+	if err != nil {
+		return "", err
+	}
+	return resp.GetNewUid(), nil
+}
+
+// Rescan re-reads a folder and returns only messages that appeared since the
+// last List or Rescan call. Used by IMAP IDLE to detect new mail.
+func (c *Client) Rescan(ctx context.Context, folder string) ([]msgstore.MessageInfo, error) {
+	resp, err := c.mailbox.Rescan(ctx, &pb.RescanRequest{Folder: folder})
+	if err != nil {
+		return nil, err
+	}
+	msgs := make([]msgstore.MessageInfo, 0, len(resp.GetNewMessages()))
+	for _, m := range resp.GetNewMessages() {
+		msgs = append(msgs, msgstore.MessageInfo{
+			UID:   m.GetUid(),
+			Size:  m.GetSize(),
+			Flags: m.GetFlags(),
+		})
+	}
+	return msgs, nil
+}
+
 // Compile-time interface checks.
 var (
 	_ msgstore.MessageStore = (*Client)(nil)

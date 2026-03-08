@@ -4,6 +4,7 @@ package grpcserver
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -23,6 +24,9 @@ type Server struct {
 	sess       *session.Session
 	deliverer  *deliver.Deliverer // nil if delivery not configured
 	grpcServer *grpc.Server
+
+	// readyWriter receives "READY\n" when the socket is listening.
+	readyWriter io.Writer
 
 	// idleTimer tracks inactivity for automatic shutdown.
 	idleTimer   *time.Timer
@@ -48,15 +52,25 @@ type Config struct {
 	// RescanInterval is how often to poll for new messages in Watch streams.
 	// Zero means use 30s default.
 	RescanInterval time.Duration
+
+	// ReadyWriter receives "READY\n" when the socket is listening.
+	// Defaults to os.Stdout if nil.
+	ReadyWriter io.Writer
 }
 
 // NewServer creates a new gRPC server with all services registered.
 func NewServer(cfg Config) *Server {
+	readyWriter := cfg.ReadyWriter
+	if readyWriter == nil {
+		readyWriter = os.Stdout
+	}
+
 	srv := &Server{
 		sess:           cfg.Session,
 		deliverer:      cfg.Deliverer,
 		rescanInterval: cfg.RescanInterval,
 		idleTimeout:    cfg.IdleTimeout,
+		readyWriter:    readyWriter,
 	}
 
 	if srv.rescanInterval == 0 {
@@ -116,7 +130,7 @@ func (s *Server) Serve(socketPath string) error {
 	}
 
 	// Signal readiness to the spawning process.
-	fmt.Fprintln(os.Stdout, "READY")
+	fmt.Fprintln(s.readyWriter, "READY")
 
 	return s.grpcServer.Serve(lis)
 }

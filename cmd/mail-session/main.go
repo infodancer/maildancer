@@ -108,6 +108,7 @@ func main() {
 	idleTimeoutStr := flag.String("idle-timeout", "", "idle timeout before auto-shutdown (default: 30m for daemon, 60s for oneshot)")
 	domainsPath := flag.String("domains-path", "", "path to domain config directory (required for delivery)")
 	domainsDataPath := flag.String("domains-data-path", "", "path to domain data directory (defaults to domains-path)")
+	mailbox := flag.String("mailbox", "", "user@domain identity (required for daemon/oneshot gRPC modes)")
 	flag.Parse()
 
 	// Load config file if provided; CLI flags override.
@@ -152,6 +153,14 @@ func main() {
 	// ── Mode dispatch ────────────────────────────────────────────────────────
 	switch *mode {
 	case "daemon", "oneshot":
+		if *mailbox == "" {
+			slog.Error("--mailbox is required for " + *mode + " mode")
+			os.Exit(2)
+		}
+		if err := sess.Open(context.Background(), *mailbox); err != nil {
+			slog.Error("open mailbox", "mailbox", *mailbox, "error", err)
+			os.Exit(1)
+		}
 		runGRPC(sess, *mode, *socketPath, *idleTimeoutStr, *domainsPath, *domainsDataPath, rescanInterval)
 		return
 	case "pipe":

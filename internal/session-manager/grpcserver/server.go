@@ -12,9 +12,12 @@ import (
 	"os"
 
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	"github.com/infodancer/maildancer/internal/session-manager/certutil"
+	"github.com/infodancer/maildancer/internal/session-manager/config"
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -25,8 +28,21 @@ type Server struct {
 }
 
 // New creates a new gRPC server with all services registered.
-func New(mgr *manager.Manager) *Server {
-	gsrv := grpc.NewServer()
+// If TLS config is provided and complete, the server uses mTLS.
+func New(mgr *manager.Manager, cfg *config.Config) (*Server, error) {
+	var opts []grpc.ServerOption
+
+	// Enable mTLS if TLS config is fully specified.
+	if cfg.TLS.CACert != "" && cfg.TLS.ServerCert != "" && cfg.TLS.ServerKey != "" {
+		tlsCfg, err := certutil.ServerTLSConfig(cfg.TLS.CACert, cfg.TLS.ServerCert, cfg.TLS.ServerKey)
+		if err != nil {
+			return nil, fmt.Errorf("configure mTLS: %w", err)
+		}
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsCfg)))
+		slog.Info("mTLS enabled")
+	}
+
+	gsrv := grpc.NewServer(opts...)
 
 	s := &Server{
 		mgr:  mgr,
@@ -39,28 +55,37 @@ func New(mgr *manager.Manager) *Server {
 	pb.RegisterDeliveryServiceServer(gsrv, &deliveryProxy{mgr: mgr})
 	pb.RegisterWatchServiceServer(gsrv, &watchProxy{mgr: mgr})
 
-	return s
+	return s, nil
 }
 
-// Serve starts the gRPC server on the given unix socket path.
-func (s *Server) Serve(socketPath string) error {
-	// Remove stale socket if present.
+// ServeUnix starts the gRPC server on a unix domain socket.
+func (s *Server) ServeUnix(socketPath string) error {
 	_ = os.Remove(socketPath)
 
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
-		return fmt.Errorf("listen: %w", err)
+		return fmt.Errorf("listen unix: %w", err)
 	}
 
-	// Restrict socket permissions to owner only.
 	if err := os.Chmod(socketPath, 0600); err != nil {
 		_ = ln.Close()
 		return fmt.Errorf("chmod socket: %w", err)
 	}
 
-	slog.Info("session manager listening", "socket", socketPath)
+	slog.Info("listening (unix)", "socket", socketPath)
+	fmt.Fprintln(os.Stdout, "READY")
 
-	// Write READY signal to stdout so parent can detect startup.
+	return s.gsrv.Serve(ln)
+}
+
+// ServeTCP starts the gRPC server on a TCP address (requires mTLS).
+func (s *Server) ServeTCP(address string) error {
+	ln, err := net.Listen("tcp", address)
+	if err != nil {
+		return fmt.Errorf("listen tcp: %w", err)
+	}
+
+	slog.Info("listening (tcp+mTLS)", "address", address)
 	fmt.Fprintln(os.Stdout, "READY")
 
 	return s.gsrv.Serve(ln)

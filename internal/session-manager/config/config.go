@@ -32,8 +32,31 @@ type Config struct {
 	// IdleTimeoutStr is the TOML-friendly string form of IdleTimeout.
 	IdleTimeoutStr string `toml:"idle_timeout"`
 
+	// Listen is an optional TCP address (e.g. "0.0.0.0:9443") for network mode.
+	// When set, the server listens on TCP with mTLS instead of (or in addition to)
+	// a unix socket. Requires TLS config.
+	Listen string `toml:"listen"`
+
+	// TLS configures mTLS for network mode.
+	TLS TLSConfig `toml:"tls"`
+
 	// Auth configures the authentication backend.
 	Auth AuthConfig `toml:"auth"`
+}
+
+// TLSConfig holds certificate paths for mTLS.
+type TLSConfig struct {
+	// CACert is the path to the CA certificate used to verify client certs.
+	CACert string `toml:"ca_cert"`
+
+	// CAKey is the path to the CA private key (only needed for cert subcommand).
+	CAKey string `toml:"ca_key"`
+
+	// ServerCert is the path to the server certificate.
+	ServerCert string `toml:"server_cert"`
+
+	// ServerKey is the path to the server private key.
+	ServerKey string `toml:"server_key"`
 }
 
 // AuthConfig controls how the session manager authenticates users.

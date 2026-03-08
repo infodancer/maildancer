@@ -92,7 +92,7 @@ func TestSessionManagerDelivery_Delivered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new agent: %v", err)
 	}
-	defer agent.Close()
+	defer func() { _ = agent.Close() }()
 
 	envelope := msgstore.Envelope{
 		From:           "sender@example.com",
@@ -148,7 +148,7 @@ func TestSessionManagerDelivery_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new agent: %v", err)
 	}
-	defer agent.Close()
+	defer func() { _ = agent.Close() }()
 
 	envelope := msgstore.Envelope{
 		From:       "sender@example.com",
@@ -181,7 +181,7 @@ func TestSessionManagerDelivery_RejectedTemporary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new agent: %v", err)
 	}
-	defer agent.Close()
+	defer func() { _ = agent.Close() }()
 
 	envelope := msgstore.Envelope{
 		From:       "sender@example.com",
@@ -210,7 +210,7 @@ func TestSessionManagerDelivery_Redirected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new agent: %v", err)
 	}
-	defer agent.Close()
+	defer func() { _ = agent.Close() }()
 
 	envelope := msgstore.Envelope{
 		From:       "sender@example.com",
@@ -258,7 +258,7 @@ func TestSessionManagerDelivery_LargeMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new agent: %v", err)
 	}
-	defer agent.Close()
+	defer func() { _ = agent.Close() }()
 
 	// 256KB message — forces multiple 64KB chunks.
 	largeBody := strings.Repeat("X", 256*1024)

@@ -84,8 +84,20 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		logger.Info("delivery enabled", "type", cfg.Config.Delivery.Type, "path", cfg.Config.Delivery.BasePath)
 	}
 
-	// Wrap delivery agent with gRPC subprocess isolation when configured.
-	if cfg.Config.Delivery.MailSessionCmd != "" {
+	// Delivery agent priority:
+	// 1. Session-manager (centralized process management, no msgstore dependency)
+	// 2. GrpcDeliveryAgent (direct mail-session subprocess)
+	// 3. Direct msgstore delivery (already set above)
+	var smDelivery *SessionManagerDeliveryAgent
+	if cfg.Config.SessionManager.IsEnabled() {
+		var err error
+		smDelivery, err = NewSessionManagerDeliveryAgent(cfg.Config.SessionManager, logger)
+		if err != nil {
+			s.Close() //nolint:errcheck
+			return nil, err
+		}
+		s.closers = append(s.closers, smDelivery)
+	} else if cfg.Config.Delivery.MailSessionCmd != "" {
 		delivery = NewGrpcDeliveryAgent(GrpcDeliveryConfig{
 			MailSessionCmd:  cfg.Config.Delivery.MailSessionCmd,
 			BasePath:        cfg.Config.Delivery.BasePath,
@@ -169,6 +181,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	backend := NewBackend(BackendConfig{
 		Hostname:       cfg.Config.Hostname,
 		Delivery:       delivery,
+		SMDelivery:     smDelivery,
 		QueueConfig:    queueCfg,
 		AuthAgent:      authAgent,
 		AuthRouter:     authRouter,

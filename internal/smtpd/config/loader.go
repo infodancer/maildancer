@@ -75,6 +75,9 @@ func Load(path string) (Config, error) {
 	// Merge shared Redis config
 	cfg = mergeRedisConfig(cfg, fileConfig.Redis)
 
+	// Merge shared session-manager config
+	cfg = mergeSessionManagerConfig(cfg, fileConfig.SessionManager)
+
 	return cfg, nil
 }
 
@@ -292,6 +295,26 @@ func mergeRedisConfig(dst Config, src RedisConfig) Config {
 	}
 	if src.Password != "" {
 		dst.Redis.Password = src.Password
+	}
+	return dst
+}
+
+// mergeSessionManagerConfig merges shared session-manager settings into the config.
+func mergeSessionManagerConfig(dst Config, src SessionManagerConfig) Config {
+	if src.Socket != "" {
+		dst.SessionManager.Socket = src.Socket
+	}
+	if src.Address != "" {
+		dst.SessionManager.Address = src.Address
+	}
+	if src.CACert != "" {
+		dst.SessionManager.CACert = src.CACert
+	}
+	if src.ClientCert != "" {
+		dst.SessionManager.ClientCert = src.ClientCert
+	}
+	if src.ClientKey != "" {
+		dst.SessionManager.ClientKey = src.ClientKey
 	}
 	return dst
 }

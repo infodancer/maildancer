@@ -25,10 +25,11 @@ const (
 // FileConfig is the top-level wrapper for the shared configuration file.
 // This allows smtpd, pop3d, and msgstore to share a single config file.
 type FileConfig struct {
-	Server    ServerConfig    `toml:"server"`
-	Redis     RedisConfig     `toml:"redis"`
-	Smtpd     Config          `toml:"smtpd"`
-	SpamCheck SpamCheckConfig `toml:"spamcheck"`
+	Server         ServerConfig         `toml:"server"`
+	Redis          RedisConfig          `toml:"redis"`
+	SessionManager SessionManagerConfig `toml:"session-manager"`
+	Smtpd          Config               `toml:"smtpd"`
+	SpamCheck      SpamCheckConfig      `toml:"spamcheck"`
 }
 
 // RedisConfig holds shared Redis connection settings.
@@ -59,25 +60,51 @@ const (
 	RejectionModeData RejectionMode = "data"
 )
 
+// SessionManagerConfig holds connection settings for the session-manager service.
+// This is a top-level [session-manager] section shared by all daemons.
+type SessionManagerConfig struct {
+	// Socket is the unix domain socket path for session-manager.
+	Socket string `toml:"socket"`
+
+	// Address is the TCP address for network mode (e.g. "session-manager:9443").
+	// Requires CACert, ClientCert, and ClientKey for mTLS.
+	Address string `toml:"address"`
+
+	// CACert is the CA certificate path for verifying the server.
+	CACert string `toml:"ca_cert"`
+
+	// ClientCert is the client certificate path for mTLS authentication.
+	ClientCert string `toml:"client_cert"`
+
+	// ClientKey is the client private key path for mTLS authentication.
+	ClientKey string `toml:"client_key"`
+}
+
+// IsEnabled returns true if a session-manager connection is configured.
+func (c *SessionManagerConfig) IsEnabled() bool {
+	return c.Socket != "" || c.Address != ""
+}
+
 // Config holds the complete SMTP server configuration.
 type Config struct {
-	Hostname           string           `toml:"hostname"`
-	LogLevel           string           `toml:"log_level"`
-	DomainsPath        string           `toml:"domains_path"`
-	DomainsDataPath    string           `toml:"domains_data_path"`
-	RecipientRejection RejectionMode    `toml:"recipient_rejection"`
-	Listeners          []ListenerConfig `toml:"listeners"`
-	TLS                TLSConfig        `toml:"tls"`
-	Limits             LimitsConfig     `toml:"limits"`
-	Timeouts           TimeoutsConfig   `toml:"timeouts"`
-	Metrics            MetricsConfig    `toml:"metrics"`
-	Delivery           DeliveryConfig   `toml:"delivery"`
-	Queue              QueueConfig      `toml:"queue"`
-	Encryption         EncryptionConfig `toml:"encryption"`
-	Auth               AuthConfig       `toml:"auth"`
-	SpamCheck          SpamCheckConfig  `toml:"spamcheck"`
-	Spamtrap           SpamtrapConfig   `toml:"spamtrap"`
-	Redis              RedisConfig      `toml:"-"` // populated from [redis] top-level section
+	Hostname           string               `toml:"hostname"`
+	LogLevel           string               `toml:"log_level"`
+	DomainsPath        string               `toml:"domains_path"`
+	DomainsDataPath    string               `toml:"domains_data_path"`
+	RecipientRejection RejectionMode        `toml:"recipient_rejection"`
+	Listeners          []ListenerConfig     `toml:"listeners"`
+	TLS                TLSConfig            `toml:"tls"`
+	Limits             LimitsConfig         `toml:"limits"`
+	Timeouts           TimeoutsConfig       `toml:"timeouts"`
+	Metrics            MetricsConfig        `toml:"metrics"`
+	Delivery           DeliveryConfig       `toml:"delivery"`
+	Queue              QueueConfig          `toml:"queue"`
+	Encryption         EncryptionConfig     `toml:"encryption"`
+	Auth               AuthConfig           `toml:"auth"`
+	SpamCheck          SpamCheckConfig      `toml:"spamcheck"`
+	Spamtrap           SpamtrapConfig       `toml:"spamtrap"`
+	Redis              RedisConfig          `toml:"-"` // populated from [redis] top-level section
+	SessionManager     SessionManagerConfig `toml:"-"` // populated from [session-manager] top-level section
 }
 
 // SpamtrapConfig holds configuration for spamtrap auto-learning.

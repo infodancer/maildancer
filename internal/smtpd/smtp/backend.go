@@ -19,7 +19,8 @@ import (
 // It creates new sessions for each connection.
 type Backend struct {
 	hostname            string
-	delivery            msgstore.DeliveryAgent
+	delivery            msgstore.DeliveryAgent       // legacy: direct or GrpcDeliveryAgent
+	smDelivery          *SessionManagerDeliveryAgent // session-manager: takes priority over delivery
 	queueCfg            queue.Config
 	authAgent           auth.AuthenticationAgent
 	authRouter          *domain.AuthRouter
@@ -41,7 +42,8 @@ type Backend struct {
 // BackendConfig holds configuration for creating a Backend.
 type BackendConfig struct {
 	Hostname       string
-	Delivery       msgstore.DeliveryAgent
+	Delivery       msgstore.DeliveryAgent       // legacy delivery agent
+	SMDelivery     *SessionManagerDeliveryAgent // session-manager delivery agent (preferred)
 	QueueConfig    queue.Config
 	AuthAgent      auth.AuthenticationAgent
 	AuthRouter     *domain.AuthRouter
@@ -72,6 +74,7 @@ func NewBackend(cfg BackendConfig) *Backend {
 	b := &Backend{
 		hostname:       cfg.Hostname,
 		delivery:       cfg.Delivery,
+		smDelivery:     cfg.SMDelivery,
 		queueCfg:       cfg.QueueConfig,
 		authAgent:      cfg.AuthAgent,
 		authRouter:     cfg.AuthRouter,

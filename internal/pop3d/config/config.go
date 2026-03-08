@@ -45,8 +45,7 @@ type Config struct {
 	Maildir         string           `toml:"maildir"`
 	DomainsPath     string           `toml:"domains_path"`
 	DomainsDataPath string           `toml:"domains_data_path"`
-	MailSessionPath string           `toml:"mail_session"`      // path to the mail-session binary
-	MailSessionMode string           `toml:"mail_session_mode"` // "pipe" (default) or "grpc"
+	MailSessionPath string           `toml:"mail_session"` // path to the mail-session binary
 	Auth            AuthConfig       `toml:"auth"`
 }
 

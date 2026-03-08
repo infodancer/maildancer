@@ -3,7 +3,6 @@ package pop3
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -28,17 +27,13 @@ import (
 //
 //	fd 3  TCP socket (from listener)
 //	fd 4  write-only: protocol-handler writes auth signal to dispatcher
-//	fd 5  read-only:  protocol-handler reads mail-session responses
-//	fd 6  write-only: protocol-handler writes mail-session commands
-//
-// The dispatcher holds the peer fds: authPipeR, fromSessionW, toSessionR.
+//	fd 5  read-only:  protocol-handler reads gRPC socket path from dispatcher
 type SubprocessServer struct {
 	listeners       []config.ListenerConfig
 	execPath        string
 	configPath      string
 	domainsPath     string // directory containing per-domain subdirectories
 	mailSessionPath string // path to the mail-session binary; empty = disabled
-	mailSessionMode string // "pipe" (default) or "grpc"
 	logger          *slog.Logger
 	wg              sync.WaitGroup
 }
@@ -53,7 +48,7 @@ type SubprocessServer struct {
 // mail-session spawning.
 func NewSubprocessServer(
 	listeners []config.ListenerConfig,
-	execPath, configPath, domainsPath, mailSessionPath, mailSessionMode string,
+	execPath, configPath, domainsPath, mailSessionPath string,
 	logger *slog.Logger,
 ) *SubprocessServer {
 	return &SubprocessServer{
@@ -62,7 +57,6 @@ func NewSubprocessServer(
 		configPath:      configPath,
 		domainsPath:     domainsPath,
 		mailSessionPath: mailSessionPath,
-		mailSessionMode: mailSessionMode,
 		logger:          logger,
 	}
 }
@@ -119,7 +113,7 @@ func (s *SubprocessServer) acceptLoop(ctx context.Context, ln net.Listener, lc c
 	}
 }
 
-// spawnHandler pre-allocates three pipe pairs and passes fds 3–6 to a new
+// spawnHandler pre-allocates two pipe pairs and passes fds 3–5 to a new
 // protocol-handler subprocess, then starts a dispatcher goroutine.
 func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig) {
 	clientIP := extractIPFromAddr(conn.RemoteAddr())
@@ -144,11 +138,10 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 	// Parent relinquishes its copy of the socket; subprocess owns it.
 	_ = conn.Close()
 
-	// Pre-allocate all three pipe pairs before forking.
+	// Pre-allocate pipe pairs before forking.
 	//
 	//  authPipeR  (dispatcher reads)   ←  authPipeW  (child fd 4, writes signal)
-	//  fromSessR  (child fd 5, reads)  ←  fromSessW  (mail-session stdout)
-	//  toSessR    (mail-session stdin) ←  toSessW    (child fd 6, writes cmds)
+	//  fromSessR  (child fd 5, reads)  ←  fromSessW  (dispatcher writes socket path)
 	authPipeR, authPipeW, err := os.Pipe()
 	if err != nil {
 		s.logger.Error("failed to create auth pipe",
@@ -167,31 +160,17 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		_ = authPipeW.Close()
 		return
 	}
-	toSessR, toSessW, err := os.Pipe()
-	if err != nil {
-		s.logger.Error("failed to create toSession pipe",
-			slog.String("client_ip", clientIP),
-			slog.String("error", err.Error()))
-		_ = connFile.Close()
-		_ = authPipeR.Close()
-		_ = authPipeW.Close()
-		_ = fromSessR.Close()
-		_ = fromSessW.Close()
-		return
-	}
 
 	cmd := exec.Command(s.execPath, "protocol-handler", "--config", s.configPath)
 	cmd.ExtraFiles = []*os.File{
 		connFile,  // fd 3 — TCP socket
 		authPipeW, // fd 4 — write auth signal to dispatcher
-		fromSessR, // fd 5 — read responses from mail-session
-		toSessW,   // fd 6 — write commands to mail-session
+		fromSessR, // fd 5 — read gRPC socket path from dispatcher
 	}
 	cmd.Env = append(
 		[]string{
 			"POP3D_CLIENT_IP=" + clientIP,
 			"POP3D_LISTENER_MODE=" + string(lc.Mode),
-			"POP3D_SESSION_MODE=" + s.mailSessionMode,
 		},
 		inheritEnv("PATH", "HOME", "USER", "TMPDIR", "TMP", "TEMP")...,
 	)
@@ -206,8 +185,6 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		_ = authPipeW.Close()
 		_ = fromSessR.Close()
 		_ = fromSessW.Close()
-		_ = toSessR.Close()
-		_ = toSessW.Close()
 		return
 	}
 
@@ -215,7 +192,6 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 	_ = connFile.Close()
 	_ = authPipeW.Close()
 	_ = fromSessR.Close()
-	_ = toSessW.Close()
 
 	pid := cmd.Process.Pid
 	s.logger.Debug("spawned protocol-handler",
@@ -224,14 +200,14 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		slog.String("mode", string(lc.Mode)))
 
 	// Dispatcher goroutine: wait for auth signal, fork mail-session, reap both.
-	go s.dispatchSession(cmd, authPipeR, toSessR, fromSessW, clientIP)
+	go s.dispatchSession(cmd, fromSessW, authPipeR, clientIP)
 }
 
 // dispatchSession reads the auth signal from authPipeR, looks up credentials,
-// forks mail-session, then reaps both subprocesses.
+// spawns mail-session in gRPC daemon mode, then reaps both subprocesses.
 func (s *SubprocessServer) dispatchSession(
 	phCmd *exec.Cmd,
-	authPipeR, toSessR, fromSessW *os.File,
+	fromSessW, authPipeR *os.File,
 	clientIP string,
 ) {
 	defer func() {
@@ -255,7 +231,6 @@ func (s *SubprocessServer) dispatchSession(
 		s.logger.Debug("no auth signal received",
 			slog.String("client_ip", clientIP),
 			slog.String("reason", err.Error()))
-		_ = toSessR.Close()
 		_ = fromSessW.Close()
 		return
 	}
@@ -269,7 +244,6 @@ func (s *SubprocessServer) dispatchSession(
 	if s.mailSessionPath == "" || s.domainsPath == "" {
 		s.logger.Debug("mail-session not configured, skipping spawn",
 			slog.String("client_ip", clientIP))
-		_ = toSessR.Close()
 		_ = fromSessW.Close()
 		return
 	}
@@ -280,103 +254,20 @@ func (s *SubprocessServer) dispatchSession(
 			slog.String("client_ip", clientIP),
 			slog.String("username", sig.Username),
 			slog.String("error", err.Error()))
-		_ = toSessR.Close()
 		_ = fromSessW.Close()
 		return
 	}
 
-	if s.mailSessionMode == "grpc" {
-		s.dispatchGrpcSession(phCmd, toSessR, fromSessW, sig.Username, uid, gid, basePath, clientIP)
-	} else {
-		s.dispatchPipeSession(toSessR, fromSessW, sig.Username, uid, gid, basePath, clientIP)
-	}
-}
-
-// dispatchPipeSession spawns mail-session in pipe mode (legacy behavior).
-func (s *SubprocessServer) dispatchPipeSession(
-	toSessR, fromSessW *os.File,
-	username string, uid, gid uint32, basePath, clientIP string,
-) {
-	// ── Encryption seam: key pipe (fd 3 in mail-session) ────────────────────
-	keyPipeR, keyPipeW, err := os.Pipe()
-	if err != nil {
-		s.logger.Error("failed to create key pipe",
-			slog.String("client_ip", clientIP),
-			slog.String("username", username),
-			slog.String("error", err.Error()))
-		_ = toSessR.Close()
-		_ = fromSessW.Close()
-		return
-	}
-
-	msCmd := exec.Command(s.mailSessionPath, "--type", "maildir", "--basepath", basePath)
-	msCmd.Stdin = toSessR
-	msCmd.Stdout = fromSessW
-	msCmd.Stderr = os.Stderr
-	msCmd.ExtraFiles = []*os.File{keyPipeR} // fd 3: read-only session key
-	msCmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{
-			Uid: uid,
-			Gid: gid,
-		},
-	}
-
-	if err := msCmd.Start(); err != nil {
-		s.logger.Error("failed to start mail-session",
-			slog.String("client_ip", clientIP),
-			slog.String("username", username),
-			slog.String("error", err.Error()))
-		_ = toSessR.Close()
-		_ = fromSessW.Close()
-		_ = keyPipeR.Close()
-		_ = keyPipeW.Close()
-		return
-	}
-
-	// Parent closes its copies; the child processes own these fds now.
-	_ = toSessR.Close()
-	_ = fromSessW.Close()
-	_ = keyPipeR.Close()
-
-	// Stub: write a zeroed key envelope and close the pipe so mail-session
-	// can proceed. Real key derivation (auth.DeriveKeyPair) is deferred.
-	_ = json.NewEncoder(keyPipeW).Encode(struct {
-		Version int    `json:"version"`
-		Key     []byte `json:"key"`
-	}{Version: 1, Key: make([]byte, 32)})
-	_ = keyPipeW.Close()
-
-	s.logger.Debug("spawned mail-session (pipe)",
-		slog.Int("pid", msCmd.Process.Pid),
-		slog.String("client_ip", clientIP),
-		slog.String("username", username),
-		slog.Uint64("uid", uint64(uid)),
-		slog.Uint64("gid", uint64(gid)))
-
-	// Reap mail-session asynchronously; it exits when the session pipe closes.
-	go func() {
-		if err := msCmd.Wait(); err != nil {
-			s.logger.Debug("mail-session exited",
-				slog.Int("pid", msCmd.Process.Pid),
-				slog.String("error", err.Error()))
-		} else {
-			s.logger.Debug("mail-session exited",
-				slog.Int("pid", msCmd.Process.Pid))
-		}
-	}()
+	s.dispatchGrpcSession(phCmd, fromSessW, sig.Username, uid, gid, basePath, clientIP)
 }
 
 // dispatchGrpcSession spawns mail-session in gRPC daemon mode and writes the
 // socket path to fromSessW so the protocol-handler can dial gRPC.
 func (s *SubprocessServer) dispatchGrpcSession(
 	phCmd *exec.Cmd,
-	toSessR, fromSessW *os.File,
+	fromSessW *os.File,
 	username string, uid, gid uint32, basePath, clientIP string,
 ) {
-	// In gRPC mode, toSessR is not connected to mail-session's stdin.
-	// Close it immediately since the protocol-handler's fd 6 is unused.
-	_ = toSessR.Close()
-
 	// Create a temp directory for the unix socket.
 	tmpDir, err := os.MkdirTemp("", "mail-session-*")
 	if err != nil {
@@ -451,8 +342,6 @@ func (s *SubprocessServer) dispatchGrpcSession(
 		}
 	}()
 
-	// Use phCmd's process context: if the protocol-handler exits, we should
-	// stop waiting and clean up.
 	err = <-readyCh
 	if err != nil {
 		s.logger.Error("mail-session gRPC not ready",

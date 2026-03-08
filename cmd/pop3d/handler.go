@@ -5,10 +5,8 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 
-	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd auth backend
-	"github.com/infodancer/maildancer/msgstore"
+	_ "github.com/infodancer/maildancer/auth/passwd"      // Register passwd auth backend
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir storage backend
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
@@ -21,13 +19,11 @@ import (
 //
 //	fd 3  TCP socket
 //	fd 4  write-only: auth signal → dispatcher
-//	fd 5  read-only:  responses from mail-session
-//	fd 6  write-only: commands to mail-session
+//	fd 5  read-only:  gRPC socket path from dispatcher
 const (
 	connFD     = 3
 	authPipeFD = 4
 	fromSessFD = 5
-	toSessFD   = 6
 )
 
 func runProtocolHandler() {
@@ -71,44 +67,25 @@ func runProtocolHandler() {
 		}
 	}
 
-	// Resolve config path to an absolute path.
-	configPath, err := filepath.Abs(flags.ConfigPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "protocol-handler: resolving config path: %v\n", err)
-		os.Exit(1)
-	}
-
 	// Open session pipe fds provided by the dispatcher parent.
 	authPipeFile := os.NewFile(uintptr(authPipeFD), "auth-pipe-w")
 	fromSessFile := os.NewFile(uintptr(fromSessFD), "from-session")
-	toSessFile := os.NewFile(uintptr(toSessFD), "to-session")
-	if authPipeFile == nil || fromSessFile == nil || toSessFile == nil {
+	if authPipeFile == nil || fromSessFile == nil {
 		fmt.Fprintf(os.Stderr, "protocol-handler: session pipe fds not available\n")
 		os.Exit(1)
 	}
 
-	// Select session store based on mode.
-	sessionMode := os.Getenv("POP3D_SESSION_MODE")
-	var sessionStore msgstore.MessageStore
-	if sessionMode == "grpc" {
-		// In gRPC mode, fd 5 carries the socket path (not pipe protocol data).
-		// fd 6 is unused; close it.
-		_ = toSessFile.Close()
-		sessionStore = pop3.NewGrpcSessionStore(authPipeFile, fromSessFile)
-	} else {
-		sessionStore = pop3.NewSessionPipeStore(authPipeFile, fromSessFile, toSessFile)
-	}
+	sessionStore := pop3.NewGrpcSessionStore(authPipeFile, fromSessFile)
 
 	// Build the protocol stack. Each subprocess gets its own stack instance;
 	// there is no shared state with the parent listener process.
 	// MsgStore is injected so the stack never opens a local maildir.
 	stack, err := pop3.NewStack(pop3.StackConfig{
-		Config:     cfg,
-		ConfigPath: configPath,
-		TLSConfig:  tlsConfig,
-		MsgStore:   sessionStore,
-		Collector:  &metrics.NoopCollector{},
-		Logger:     logger,
+		Config:    cfg,
+		TLSConfig: tlsConfig,
+		MsgStore:  sessionStore,
+		Collector: &metrics.NoopCollector{},
+		Logger:    logger,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "protocol-handler: error creating stack: %v\n", err)

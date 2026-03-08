@@ -81,3 +81,17 @@ func writeAuthSignal(w io.Writer, sig *authSignal) error {
 	_, err := fmt.Fprintf(w, "AUTH %d\r\nUSER:%s\r\nEND\r\n", sig.Version, sig.Username)
 	return err
 }
+
+// validateToken checks that a pipe-protocol token is non-empty and contains no
+// whitespace or control characters.
+func validateToken(name, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", name)
+	}
+	for _, r := range value {
+		if r <= ' ' {
+			return fmt.Errorf("%s contains invalid character %q", name, r)
+		}
+	}
+	return nil
+}

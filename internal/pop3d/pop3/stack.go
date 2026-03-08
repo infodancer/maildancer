@@ -20,12 +20,11 @@ import (
 // StackConfig groups the configuration needed to build a Stack.
 // TLSConfig is caller-supplied; tests may omit it (nil = plain POP3 only).
 type StackConfig struct {
-	Config     config.Config
-	ConfigPath string         // absolute path to config file, used by subprocesses
-	TLSConfig  *tls.Config
-	MsgStore   msgstore.MessageStore // overrides config.Maildir when non-nil
-	Collector  metrics.Collector    // nil → NoopCollector
-	Logger     *slog.Logger         // nil → slog.Default()
+	Config    config.Config
+	TLSConfig *tls.Config
+	MsgStore  msgstore.MessageStore // overrides config.Maildir when non-nil
+	Collector metrics.Collector     // nil → NoopCollector
+	Logger    *slog.Logger          // nil → slog.Default()
 }
 
 // Stack owns all components of a running pop3d instance and manages their lifecycle.

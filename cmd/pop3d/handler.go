@@ -7,7 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "github.com/infodancer/maildancer/auth/passwd"      // Register passwd auth backend
+	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd auth backend
+	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir storage backend
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
@@ -85,7 +86,18 @@ func runProtocolHandler() {
 		fmt.Fprintf(os.Stderr, "protocol-handler: session pipe fds not available\n")
 		os.Exit(1)
 	}
-	sessionStore := pop3.NewSessionPipeStore(authPipeFile, fromSessFile, toSessFile)
+
+	// Select session store based on mode.
+	sessionMode := os.Getenv("POP3D_SESSION_MODE")
+	var sessionStore msgstore.MessageStore
+	if sessionMode == "grpc" {
+		// In gRPC mode, fd 5 carries the socket path (not pipe protocol data).
+		// fd 6 is unused; close it.
+		_ = toSessFile.Close()
+		sessionStore = pop3.NewGrpcSessionStore(authPipeFile, fromSessFile)
+	} else {
+		sessionStore = pop3.NewSessionPipeStore(authPipeFile, fromSessFile, toSessFile)
+	}
 
 	// Build the protocol stack. Each subprocess gets its own stack instance;
 	// there is no shared state with the parent listener process.

@@ -1,6 +1,7 @@
 package pop3
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,7 @@ type SubprocessServer struct {
 	configPath      string
 	domainsPath     string // directory containing per-domain subdirectories
 	mailSessionPath string // path to the mail-session binary; empty = disabled
+	mailSessionMode string // "pipe" (default) or "grpc"
 	logger          *slog.Logger
 	wg              sync.WaitGroup
 }
@@ -51,7 +53,7 @@ type SubprocessServer struct {
 // mail-session spawning.
 func NewSubprocessServer(
 	listeners []config.ListenerConfig,
-	execPath, configPath, domainsPath, mailSessionPath string,
+	execPath, configPath, domainsPath, mailSessionPath, mailSessionMode string,
 	logger *slog.Logger,
 ) *SubprocessServer {
 	return &SubprocessServer{
@@ -60,6 +62,7 @@ func NewSubprocessServer(
 		configPath:      configPath,
 		domainsPath:     domainsPath,
 		mailSessionPath: mailSessionPath,
+		mailSessionMode: mailSessionMode,
 		logger:          logger,
 	}
 }
@@ -188,6 +191,7 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 		[]string{
 			"POP3D_CLIENT_IP=" + clientIP,
 			"POP3D_LISTENER_MODE=" + string(lc.Mode),
+			"POP3D_SESSION_MODE=" + s.mailSessionMode,
 		},
 		inheritEnv("PATH", "HOME", "USER", "TMPDIR", "TMP", "TEMP")...,
 	)
@@ -281,19 +285,24 @@ func (s *SubprocessServer) dispatchSession(
 		return
 	}
 
+	if s.mailSessionMode == "grpc" {
+		s.dispatchGrpcSession(phCmd, toSessR, fromSessW, sig.Username, uid, gid, basePath, clientIP)
+	} else {
+		s.dispatchPipeSession(toSessR, fromSessW, sig.Username, uid, gid, basePath, clientIP)
+	}
+}
+
+// dispatchPipeSession spawns mail-session in pipe mode (legacy behavior).
+func (s *SubprocessServer) dispatchPipeSession(
+	toSessR, fromSessW *os.File,
+	username string, uid, gid uint32, basePath, clientIP string,
+) {
 	// ── Encryption seam: key pipe (fd 3 in mail-session) ────────────────────
-	// Create a one-shot pipe to pass the session decryption key to mail-session.
-	// mail-session reads exactly 32 bytes from fd 3 before entering its command
-	// loop. The write end is closed after writing so mail-session gets EOF.
-	// When encryption is not configured for this user, zeroed bytes are written;
-	// real key derivation (auth.DeriveKeyPair) is deferred to a future PR.
-	// See: infodancer/infodancer/docs/encryption-design.md
-	// ─────────────────────────────────────────────────────────────────────────
 	keyPipeR, keyPipeW, err := os.Pipe()
 	if err != nil {
 		s.logger.Error("failed to create key pipe",
 			slog.String("client_ip", clientIP),
-			slog.String("username", sig.Username),
+			slog.String("username", username),
 			slog.String("error", err.Error()))
 		_ = toSessR.Close()
 		_ = fromSessW.Close()
@@ -315,7 +324,7 @@ func (s *SubprocessServer) dispatchSession(
 	if err := msCmd.Start(); err != nil {
 		s.logger.Error("failed to start mail-session",
 			slog.String("client_ip", clientIP),
-			slog.String("username", sig.Username),
+			slog.String("username", username),
 			slog.String("error", err.Error()))
 		_ = toSessR.Close()
 		_ = fromSessW.Close()
@@ -331,18 +340,16 @@ func (s *SubprocessServer) dispatchSession(
 
 	// Stub: write a zeroed key envelope and close the pipe so mail-session
 	// can proceed. Real key derivation (auth.DeriveKeyPair) is deferred.
-	// The envelope format is versioned JSON so future fields (algorithm,
-	// key_id, keyring) can be added without a breaking protocol change.
 	_ = json.NewEncoder(keyPipeW).Encode(struct {
 		Version int    `json:"version"`
 		Key     []byte `json:"key"`
 	}{Version: 1, Key: make([]byte, 32)})
 	_ = keyPipeW.Close()
 
-	s.logger.Debug("spawned mail-session",
+	s.logger.Debug("spawned mail-session (pipe)",
 		slog.Int("pid", msCmd.Process.Pid),
 		slog.String("client_ip", clientIP),
-		slog.String("username", sig.Username),
+		slog.String("username", username),
 		slog.Uint64("uid", uint64(uid)),
 		slog.Uint64("gid", uint64(gid)))
 
@@ -356,6 +363,137 @@ func (s *SubprocessServer) dispatchSession(
 			s.logger.Debug("mail-session exited",
 				slog.Int("pid", msCmd.Process.Pid))
 		}
+	}()
+}
+
+// dispatchGrpcSession spawns mail-session in gRPC daemon mode and writes the
+// socket path to fromSessW so the protocol-handler can dial gRPC.
+func (s *SubprocessServer) dispatchGrpcSession(
+	phCmd *exec.Cmd,
+	toSessR, fromSessW *os.File,
+	username string, uid, gid uint32, basePath, clientIP string,
+) {
+	// In gRPC mode, toSessR is not connected to mail-session's stdin.
+	// Close it immediately since the protocol-handler's fd 6 is unused.
+	_ = toSessR.Close()
+
+	// Create a temp directory for the unix socket.
+	tmpDir, err := os.MkdirTemp("", "mail-session-*")
+	if err != nil {
+		s.logger.Error("failed to create temp dir for gRPC socket",
+			slog.String("client_ip", clientIP),
+			slog.String("username", username),
+			slog.String("error", err.Error()))
+		_ = fromSessW.Close()
+		return
+	}
+
+	socketPath := filepath.Join(tmpDir, "session.sock")
+
+	msCmd := exec.Command(s.mailSessionPath,
+		"--mode=daemon",
+		"--socket="+socketPath,
+		"--mailbox="+username,
+		"--type=maildir",
+		"--basepath="+basePath,
+	)
+	msCmd.Stderr = os.Stderr
+	msCmd.SysProcAttr = &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid: uid,
+			Gid: gid,
+		},
+	}
+
+	// Capture stdout for READY signal.
+	stdout, err := msCmd.StdoutPipe()
+	if err != nil {
+		s.logger.Error("failed to create stdout pipe for mail-session",
+			slog.String("client_ip", clientIP),
+			slog.String("error", err.Error()))
+		_ = fromSessW.Close()
+		_ = os.RemoveAll(tmpDir)
+		return
+	}
+
+	if err := msCmd.Start(); err != nil {
+		s.logger.Error("failed to start mail-session (grpc)",
+			slog.String("client_ip", clientIP),
+			slog.String("username", username),
+			slog.String("error", err.Error()))
+		_ = fromSessW.Close()
+		_ = os.RemoveAll(tmpDir)
+		return
+	}
+
+	s.logger.Debug("spawned mail-session (grpc)",
+		slog.Int("pid", msCmd.Process.Pid),
+		slog.String("client_ip", clientIP),
+		slog.String("username", username),
+		slog.String("socket", socketPath),
+		slog.Uint64("uid", uint64(uid)),
+		slog.Uint64("gid", uint64(gid)))
+
+	// Wait for READY signal from mail-session.
+	readyCh := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			if strings.TrimSpace(scanner.Text()) == "READY" {
+				readyCh <- nil
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			readyCh <- fmt.Errorf("reading stdout: %w", err)
+		} else {
+			readyCh <- fmt.Errorf("mail-session exited without READY signal")
+		}
+	}()
+
+	// Use phCmd's process context: if the protocol-handler exits, we should
+	// stop waiting and clean up.
+	err = <-readyCh
+	if err != nil {
+		s.logger.Error("mail-session gRPC not ready",
+			slog.String("client_ip", clientIP),
+			slog.String("username", username),
+			slog.String("error", err.Error()))
+		_ = msCmd.Process.Kill()
+		_ = msCmd.Wait()
+		_ = fromSessW.Close()
+		_ = os.RemoveAll(tmpDir)
+		return
+	}
+
+	// Write socket path to fromSessW so the protocol-handler can read it from fd 5.
+	if _, err := fmt.Fprintf(fromSessW, "%s\n", socketPath); err != nil {
+		s.logger.Error("failed to write socket path to protocol-handler",
+			slog.String("client_ip", clientIP),
+			slog.String("error", err.Error()))
+		_ = msCmd.Process.Kill()
+		_ = msCmd.Wait()
+		_ = fromSessW.Close()
+		_ = os.RemoveAll(tmpDir)
+		return
+	}
+	_ = fromSessW.Close()
+
+	// Reap mail-session when the protocol-handler exits.
+	go func() {
+		// Wait for protocol-handler to exit first.
+		_ = phCmd.Wait()
+		// Then stop mail-session gracefully.
+		_ = msCmd.Process.Signal(syscall.SIGTERM)
+		if err := msCmd.Wait(); err != nil {
+			s.logger.Debug("mail-session exited",
+				slog.Int("pid", msCmd.Process.Pid),
+				slog.String("error", err.Error()))
+		} else {
+			s.logger.Debug("mail-session exited",
+				slog.Int("pid", msCmd.Process.Pid))
+		}
+		_ = os.RemoveAll(tmpDir)
 	}()
 }
 

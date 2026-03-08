@@ -35,18 +35,19 @@ type ServerConfig struct {
 
 // Config holds the POP3-specific server configuration.
 type Config struct {
-	Hostname  string           `toml:"hostname"`
-	LogLevel  string           `toml:"log_level"`
-	Listeners []ListenerConfig `toml:"listeners"`
-	TLS       TLSConfig        `toml:"tls"`
-	Timeouts  TimeoutsConfig   `toml:"timeouts"`
-	Limits    LimitsConfig     `toml:"limits"`
-	Metrics   MetricsConfig    `toml:"metrics"`
-	Maildir         string     `toml:"maildir"`
-	DomainsPath     string     `toml:"domains_path"`
-	DomainsDataPath string     `toml:"domains_data_path"`
-	MailSessionPath string     `toml:"mail_session"` // path to the mail-session binary
-	Auth            AuthConfig `toml:"auth"`
+	Hostname        string           `toml:"hostname"`
+	LogLevel        string           `toml:"log_level"`
+	Listeners       []ListenerConfig `toml:"listeners"`
+	TLS             TLSConfig        `toml:"tls"`
+	Timeouts        TimeoutsConfig   `toml:"timeouts"`
+	Limits          LimitsConfig     `toml:"limits"`
+	Metrics         MetricsConfig    `toml:"metrics"`
+	Maildir         string           `toml:"maildir"`
+	DomainsPath     string           `toml:"domains_path"`
+	DomainsDataPath string           `toml:"domains_data_path"`
+	MailSessionPath string           `toml:"mail_session"`      // path to the mail-session binary
+	MailSessionMode string           `toml:"mail_session_mode"` // "pipe" (default) or "grpc"
+	Auth            AuthConfig       `toml:"auth"`
 }
 
 // AuthConfig holds configuration for the authentication agent.

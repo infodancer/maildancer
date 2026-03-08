@@ -9,8 +9,16 @@ tasks:
     cmds:
       - task --list
 
+  proto:
+    desc: Generate Go code from proto definitions
+    cmds:
+      - protoc --proto_path=proto --go_out=proto --go_opt=paths=source_relative --go-grpc_out=proto --go-grpc_opt=paths=source_relative mailsession/v1/mailbox.proto mailsession/v1/folders.proto mailsession/v1/delivery.proto mailsession/v1/watch.proto
+    sources:
+      - proto/mailsession/v1/*.proto
+
   build:
     desc: Build the binary
+    deps: [proto]
     cmds:
       - go build -o {{.BINARY}} ./cmd/{{.BINARY}}
 

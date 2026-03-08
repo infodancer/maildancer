@@ -11,7 +11,6 @@ import (
 	"time"
 
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"google.golang.org/grpc"
 )
@@ -61,7 +60,7 @@ func (s *mockDeliveryServer) Deliver(stream grpc.ClientStreamingServer[pb.Delive
 }
 
 // startMockServer starts a gRPC server on a temp unix socket and returns the
-// socket path and a cleanup function.
+// socket path.
 func startMockServer(t *testing.T, srv *mockDeliveryServer) string {
 	t.Helper()
 
@@ -94,16 +93,13 @@ func TestSessionManagerDelivery_Delivered(t *testing.T) {
 	}
 	defer func() { _ = agent.Close() }()
 
-	envelope := msgstore.Envelope{
-		From:           "sender@example.com",
-		Recipients:     []string{"user@example.com"},
-		ClientIP:       net.ParseIP("192.168.1.1"),
-		ClientHostname: "mail.example.com",
-		ReceivedTime:   time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC),
-	}
-
 	body := "Subject: Test\r\n\r\nHello, world!\r\n"
-	err = agent.Deliver(context.Background(), envelope, strings.NewReader(body))
+	receivedTime := time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)
+
+	err = agent.Deliver(context.Background(),
+		"sender@example.com", "user@example.com",
+		"192.168.1.1", "mail.example.com",
+		receivedTime, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
@@ -150,12 +146,9 @@ func TestSessionManagerDelivery_Rejected(t *testing.T) {
 	}
 	defer func() { _ = agent.Close() }()
 
-	envelope := msgstore.Envelope{
-		From:       "sender@example.com",
-		Recipients: []string{"user@example.com"},
-	}
-
-	err = agent.Deliver(context.Background(), envelope, strings.NewReader("test"))
+	err = agent.Deliver(context.Background(),
+		"sender@example.com", "user@example.com",
+		"", "", time.Time{}, strings.NewReader("test"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -183,12 +176,9 @@ func TestSessionManagerDelivery_RejectedTemporary(t *testing.T) {
 	}
 	defer func() { _ = agent.Close() }()
 
-	envelope := msgstore.Envelope{
-		From:       "sender@example.com",
-		Recipients: []string{"user@example.com"},
-	}
-
-	err = agent.Deliver(context.Background(), envelope, strings.NewReader("test"))
+	err = agent.Deliver(context.Background(),
+		"sender@example.com", "user@example.com",
+		"", "", time.Time{}, strings.NewReader("test"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -212,12 +202,9 @@ func TestSessionManagerDelivery_Redirected(t *testing.T) {
 	}
 	defer func() { _ = agent.Close() }()
 
-	envelope := msgstore.Envelope{
-		From:       "sender@example.com",
-		Recipients: []string{"user@example.com"},
-	}
-
-	err = agent.Deliver(context.Background(), envelope, strings.NewReader("test"))
+	err = agent.Deliver(context.Background(),
+		"sender@example.com", "user@example.com",
+		"", "", time.Time{}, strings.NewReader("test"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -231,18 +218,6 @@ func TestSessionManagerDelivery_Redirected(t *testing.T) {
 	}
 	if redirectErr.Addresses[0] != "forward@other.com" {
 		t.Errorf("redirect[0] = %q, want %q", redirectErr.Addresses[0], "forward@other.com")
-	}
-}
-
-func TestSessionManagerDelivery_NoRecipients(t *testing.T) {
-	// No need for a server — should fail before connecting.
-	agent := &SessionManagerDeliveryAgent{}
-	err := agent.Deliver(context.Background(), msgstore.Envelope{}, strings.NewReader("test"))
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "no recipients") {
-		t.Errorf("error = %q, want 'no recipients'", err.Error())
 	}
 }
 
@@ -262,12 +237,10 @@ func TestSessionManagerDelivery_LargeMessage(t *testing.T) {
 
 	// 256KB message — forces multiple 64KB chunks.
 	largeBody := strings.Repeat("X", 256*1024)
-	envelope := msgstore.Envelope{
-		From:       "sender@example.com",
-		Recipients: []string{"user@example.com"},
-	}
 
-	err = agent.Deliver(context.Background(), envelope, strings.NewReader(largeBody))
+	err = agent.Deliver(context.Background(),
+		"sender@example.com", "user@example.com",
+		"", "", time.Time{}, strings.NewReader(largeBody))
 	if err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
@@ -320,7 +293,7 @@ hostname = "mail.example.com"
 address = ":25"
 mode = "smtp"
 `
-	if err := writeTestFile(configPath, tomlContent); err != nil {
+	if err := os.WriteFile(configPath, []byte(tomlContent), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -354,7 +327,7 @@ hostname = "mail.example.com"
 address = ":25"
 mode = "smtp"
 `
-	if err := writeTestFile(configPath, tomlContent); err != nil {
+	if err := os.WriteFile(configPath, []byte(tomlContent), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -375,8 +348,4 @@ mode = "smtp"
 	if cfg.SessionManager.ClientKey != "/etc/mail/certs/smtpd.key" {
 		t.Errorf("ClientKey = %q, want %q", cfg.SessionManager.ClientKey, "/etc/mail/certs/smtpd.key")
 	}
-}
-
-func writeTestFile(path, content string) error {
-	return os.WriteFile(path, []byte(content), 0644)
 }

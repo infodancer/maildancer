@@ -325,7 +325,7 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 
 		// Fail early: verify delivery is possible before accepting the recipient.
 		// Returning a temp fail lets the sender retry rather than lose the message.
-		if d.DeliveryAgent == nil && s.backend.delivery == nil {
+		if d.DeliveryAgent == nil && s.backend.delivery == nil && s.backend.smDelivery == nil {
 			s.logger.Debug("no delivery agent for domain", slog.String("domain", domainName))
 			return &smtp.SMTPError{
 				Code:         452,
@@ -392,8 +392,10 @@ func (s *Session) Data(r io.Reader) error {
 
 	// Resolve the local delivery agent (only needed if we have local recipients).
 	// Fail early to avoid buffering the body only to discard it.
+	// Session-manager takes priority — it has no msgstore dependency.
+	useSessionManager := s.backend.smDelivery != nil
 	var deliveryAgent msgstore.DeliveryAgent
-	if len(s.recipients) > 0 {
+	if len(s.recipients) > 0 && !useSessionManager {
 		if s.domain != nil && s.domain.DeliveryAgent != nil {
 			deliveryAgent = s.domain.DeliveryAgent
 		} else if s.backend.delivery != nil {
@@ -586,23 +588,35 @@ func (s *Session) Data(r io.Reader) error {
 
 	// Local delivery (synchronous; failures reject at SMTP time).
 	if len(s.recipients) > 0 {
-		envelope := msgstore.Envelope{
-			From:           s.from,
-			Recipients:     s.recipients,
-			ReceivedTime:   time.Now(),
-			ClientIP:       net.ParseIP(s.clientIP),
-			ClientHostname: s.helo,
-		}
-		if checkResult != nil {
-			envelope.SpamResult = &msgstore.SpamResult{
-				Score:   checkResult.Score,
-				Action:  string(checkResult.Action),
-				Checker: checkResult.CheckerName,
+		var deliverErr error
+		now := time.Now()
+
+		if useSessionManager {
+			// Session-manager path: pass SMTP envelope fields directly.
+			// Single recipient enforced by Rcpt().
+			deliverErr = s.backend.smDelivery.Deliver(ctx,
+				s.from, s.recipients[0], s.clientIP, s.helo, now, tmp.reader())
+		} else {
+			// Legacy path: build msgstore.Envelope for direct/GrpcDeliveryAgent.
+			envelope := msgstore.Envelope{
+				From:           s.from,
+				Recipients:     s.recipients,
+				ReceivedTime:   now,
+				ClientIP:       net.ParseIP(s.clientIP),
+				ClientHostname: s.helo,
 			}
+			if checkResult != nil {
+				envelope.SpamResult = &msgstore.SpamResult{
+					Score:   checkResult.Score,
+					Action:  string(checkResult.Action),
+					Checker: checkResult.CheckerName,
+				}
+			}
+			deliverErr = deliveryAgent.Deliver(ctx, envelope, tmp.reader())
 		}
 
-		if err := deliveryAgent.Deliver(ctx, envelope, tmp.reader()); err != nil {
-			s.logger.Debug("local delivery failed", slog.String("error", err.Error()))
+		if deliverErr != nil {
+			s.logger.Debug("local delivery failed", slog.String("error", deliverErr.Error()))
 
 			if s.backend.collector != nil {
 				recipientDomain := sessionExtractRecipientDomain(s.recipients)

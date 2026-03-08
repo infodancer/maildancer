@@ -12,17 +12,19 @@ import (
 	"time"
 
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// SessionManagerDeliveryAgent implements msgstore.DeliveryAgent by calling the
-// session-manager's DeliveryService over gRPC. The session-manager proxies the
-// request to a oneshot mail-session subprocess, handling credential lookup and
-// process isolation.
+// SessionManagerDeliveryAgent delivers messages via the session-manager's
+// DeliveryService gRPC endpoint. The session-manager proxies the request to a
+// oneshot mail-session subprocess, handling credential lookup and process
+// isolation.
+//
+// This agent has no dependency on msgstore — it speaks the mail-session proto
+// directly. SMTP envelope fields are passed individually, not as a store type.
 type SessionManagerDeliveryAgent struct {
 	conn     *grpc.ClientConn
 	delivery pb.DeliveryServiceClient
@@ -67,30 +69,22 @@ func NewSessionManagerDeliveryAgent(cfg config.SessionManagerConfig, logger *slo
 	}, nil
 }
 
-// Deliver sends the message to the session-manager for delivery to the recipient.
-func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envelope, message io.Reader) error {
-	if len(envelope.Recipients) == 0 {
-		return fmt.Errorf("session-manager delivery: no recipients")
-	}
-
-	recipient := envelope.Recipients[0]
-
+// Deliver sends a message to the session-manager for delivery.
+// Parameters map directly to SMTP envelope fields — no msgstore types involved.
+func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, message io.Reader) error {
 	stream, err := a.delivery.Deliver(ctx)
 	if err != nil {
 		return fmt.Errorf("session-manager delivery: open stream: %w", err)
 	}
 
-	// Send metadata.
 	meta := &pb.DeliverMetadata{
-		Sender:    envelope.From,
-		Recipient: recipient,
+		Sender:         sender,
+		Recipient:      recipient,
+		ClientIp:       clientIP,
+		ClientHostname: clientHostname,
 	}
-	if envelope.ClientIP != nil {
-		meta.ClientIp = envelope.ClientIP.String()
-	}
-	meta.ClientHostname = envelope.ClientHostname
-	if !envelope.ReceivedTime.IsZero() {
-		meta.ReceivedTime = envelope.ReceivedTime.Format(time.RFC3339)
+	if !receivedTime.IsZero() {
+		meta.ReceivedTime = receivedTime.Format(time.RFC3339)
 	}
 
 	if err := stream.Send(&pb.DeliverRequest{
@@ -181,9 +175,3 @@ func buildClientTLS(caCertPath, clientCertPath, clientKeyPath string) (*tls.Conf
 		MinVersion:   tls.VersionTLS13,
 	}, nil
 }
-
-// Compile-time checks.
-var (
-	_ msgstore.DeliveryAgent = (*SessionManagerDeliveryAgent)(nil)
-	_ io.Closer              = (*SessionManagerDeliveryAgent)(nil)
-)

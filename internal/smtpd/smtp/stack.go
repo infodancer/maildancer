@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -85,15 +86,36 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		logger.Info("delivery enabled", "type", cfg.Config.Delivery.Type, "path", cfg.Config.Delivery.BasePath)
 	}
 
-	// Wrap delivery agent with subprocess isolation when deliver_cmd is set.
-	if cfg.Config.Delivery.DeliverCmd != "" {
-		delivery = NewExecDeliveryAgent(ExecDeliveryConfig{
-			Cmd:        cfg.Config.Delivery.DeliverCmd,
-			ConfigPath: cfg.ConfigPath,
-			UID:        cfg.Config.Delivery.UID,
-			GID:        cfg.Config.Delivery.GID,
+	// Wrap delivery agent with subprocess isolation when configured.
+	switch cfg.Config.Delivery.DeliveryMode {
+	case "grpc":
+		if cfg.Config.Delivery.MailSessionCmd == "" {
+			s.Close() //nolint:errcheck
+			return nil, fmt.Errorf("delivery_mode=grpc requires mail_session_cmd")
+		}
+		delivery = NewGrpcDeliveryAgent(GrpcDeliveryConfig{
+			MailSessionCmd:  cfg.Config.Delivery.MailSessionCmd,
+			BasePath:        cfg.Config.Delivery.BasePath,
+			StoreType:       cfg.Config.Delivery.Type,
+			DomainsPath:     cfg.Config.Delivery.DomainsPath,
+			DomainsDataPath: cfg.Config.Delivery.DomainsDataPath,
+			UID:             cfg.Config.Delivery.UID,
+			GID:             cfg.Config.Delivery.GID,
+			Logger:          logger,
 		})
-		logger.Info("delivery via subprocess", "cmd", cfg.Config.Delivery.DeliverCmd)
+		logger.Info("delivery via gRPC", "cmd", cfg.Config.Delivery.MailSessionCmd)
+
+	default:
+		// "exec" mode or unset: use legacy ExecDeliveryAgent when deliver_cmd is set.
+		if cfg.Config.Delivery.DeliverCmd != "" {
+			delivery = NewExecDeliveryAgent(ExecDeliveryConfig{
+				Cmd:        cfg.Config.Delivery.DeliverCmd,
+				ConfigPath: cfg.ConfigPath,
+				UID:        cfg.Config.Delivery.UID,
+				GID:        cfg.Config.Delivery.GID,
+			})
+			logger.Info("delivery via subprocess", "cmd", cfg.Config.Delivery.DeliverCmd)
+		}
 	}
 
 	// Create domain provider if configured.

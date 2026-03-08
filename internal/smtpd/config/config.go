@@ -190,12 +190,16 @@ type MetricsConfig struct {
 // DeliveryConfig holds configuration for message delivery.
 // Uses the msgstore registry pattern for pluggable storage backends.
 type DeliveryConfig struct {
-	Type       string            `toml:"type"`        // Storage backend type (e.g., "maildir")
-	BasePath   string            `toml:"base_path"`   // Base path for storage
-	Options    map[string]string `toml:"options"`     // Backend-specific options
-	DeliverCmd string            `toml:"deliver_cmd"` // Path to mail-deliver binary; empty = direct delivery
-	UID        int               `toml:"uid"`         // Setuid target for mail-deliver (0 = no drop)
-	GID        int               `toml:"gid"`         // Setgid target for mail-deliver (0 = no drop)
+	Type            string            `toml:"type"`              // Storage backend type (e.g., "maildir")
+	BasePath        string            `toml:"base_path"`         // Base path for storage
+	Options         map[string]string `toml:"options"`           // Backend-specific options
+	DeliverCmd      string            `toml:"deliver_cmd"`       // Path to mail-deliver binary; empty = direct delivery
+	UID             int               `toml:"uid"`               // Setuid target for mail-deliver/mail-session (0 = no drop)
+	GID             int               `toml:"gid"`               // Setgid target for mail-deliver/mail-session (0 = no drop)
+	DeliveryMode    string            `toml:"delivery_mode"`     // "exec" (default) or "grpc"
+	MailSessionCmd  string            `toml:"mail_session_cmd"`  // Path to mail-session binary (for grpc mode)
+	DomainsPath     string            `toml:"domains_path"`      // Domains config path (passed to mail-session)
+	DomainsDataPath string            `toml:"domains_data_path"` // Domains data path (passed to mail-session)
 }
 
 // AuthConfig holds configuration for SMTP authentication.

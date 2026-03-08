@@ -15,6 +15,7 @@ import (
 	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
+	"github.com/infodancer/maildancer/internal/imapd/notify"
 	msgstore "github.com/infodancer/maildancer/msgstore"
 )
 
@@ -111,6 +112,19 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		logger.Info("message store opened", "type", cfg.Config.Store.Type)
 	}
 
+	// Create Redis subscriber for IDLE notifications.
+	var subscriber *notify.Subscriber
+	if cfg.Config.Redis.URL != "" {
+		var err error
+		subscriber, err = notify.NewSubscriber(cfg.Config.Redis.URL, cfg.Config.Redis.Password, logger)
+		if err != nil {
+			s.Close() //nolint:errcheck
+			return nil, err
+		}
+		s.closers = append(s.closers, subscriber)
+		logger.Info("redis subscriber enabled", "url", cfg.Config.Redis.URL)
+	}
+
 	// Create session-manager client if configured.
 	var smClient *SessionManagerClient
 	if cfg.Config.SessionManager.IsEnabled() {
@@ -131,7 +145,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	opts := &imapserver.Options{
 		NewSession: func(conn *imapserver.Conn) (imapserver.Session, *imapserver.GreetingData, error) {
 			collector.ConnectionOpened()
-			session := NewSession(conn, &cfg.Config, authRouter, store, smClient, collector, logger)
+			session := NewSession(conn, &cfg.Config, authRouter, store, smClient, subscriber, collector, logger)
 			return session, &imapserver.GreetingData{}, nil
 		},
 		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapMove: {}},

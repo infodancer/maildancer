@@ -20,6 +20,7 @@ import (
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/logging"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
+	"github.com/infodancer/maildancer/internal/imapd/notify"
 	"github.com/infodancer/maildancer/internal/mail-session/client"
 	"github.com/infodancer/maildancer/msgstore"
 	storeerrors "github.com/infodancer/maildancer/msgstore/errors"
@@ -43,6 +44,10 @@ type Session struct {
 	// Spam learning (nil when disabled)
 	learner *spamLearner
 
+	// Redis new-mail notifications (nil when disabled)
+	subscriber   *notify.Subscriber
+	subscription *notify.Subscription
+
 	// Selected state
 	selectedMailbox string
 	messages        []msgstore.MessageInfo
@@ -52,7 +57,7 @@ type Session struct {
 }
 
 // NewSession creates a new IMAP session for the given connection.
-func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.AuthRouter, store msgstore.MessageStore, smClient *SessionManagerClient, collector metrics.Collector, logger *slog.Logger) *Session {
+func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.AuthRouter, store msgstore.MessageStore, smClient *SessionManagerClient, subscriber *notify.Subscriber, collector metrics.Collector, logger *slog.Logger) *Session {
 	var folderStore msgstore.FolderStore
 	if store != nil {
 		folderStore, _ = store.(msgstore.FolderStore)
@@ -70,6 +75,7 @@ func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.Au
 		folderStore: folderStore,
 		smClient:    smClient,
 		learner:     learner,
+		subscriber:  subscriber,
 		collector:   collector,
 		logger:      logging.WithConnection(logger, conn.NetConn().RemoteAddr().String()),
 	}
@@ -150,6 +156,11 @@ func (s *Session) loginLegacy(username, password string) error {
 		s.ensureDefaultFolders()
 	}
 
+	// Subscribe to Redis new-mail notifications for this user.
+	if s.subscriber != nil {
+		s.subscription = s.subscriber.Subscribe(ctx, username)
+	}
+
 	s.collector.AuthAttempt(s.userDomain, true)
 	s.logger.Info("login success", "username", username)
 	return nil
@@ -176,11 +187,51 @@ func (s *Session) Poll(w *imapserver.UpdateWriter, allowExpunge bool) error {
 }
 
 // Idle waits for mailbox updates.
+// When Redis notifications are available and the store supports RESCAN,
+// incoming notifications for the selected folder trigger a rescan and
+// update the tracker so the client receives * EXISTS.
 func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 	if s.sessionTracker == nil {
 		return nil
 	}
-	return s.sessionTracker.Idle(w, stop)
+
+	// If no Redis subscription, fall back to the standard tracker-only idle.
+	if s.subscription == nil {
+		return s.sessionTracker.Idle(w, stop)
+	}
+
+	rs, _ := s.store.(rescanner)
+
+	for {
+		select {
+		case <-stop:
+			return s.sessionTracker.Poll(w, true)
+		case msg, ok := <-s.subscription.C:
+			if !ok {
+				// Channel closed, fall back to blocking idle.
+				return s.sessionTracker.Idle(w, stop)
+			}
+			// Only trigger rescan if the notified folder matches the selected mailbox.
+			if !strings.EqualFold(msg.Payload, s.selectedMailbox) {
+				continue
+			}
+			if rs == nil {
+				continue
+			}
+			newMsgs, err := rs.Rescan()
+			if err != nil {
+				s.logger.Warn("rescan after notification failed", "error", err)
+				continue
+			}
+			if len(newMsgs) > 0 {
+				s.messages = append(s.messages, newMsgs...)
+				s.tracker.QueueNumMessages(uint32(len(s.messages)))
+				if err := s.sessionTracker.Poll(w, false); err != nil {
+					return err
+				}
+			}
+		}
+	}
 }
 
 // Unselect closes the currently selected mailbox without expunging.
@@ -192,6 +243,10 @@ func (s *Session) Unselect() error {
 // Close ends the session and releases resources.
 func (s *Session) Close() error {
 	s.unselect()
+	if s.subscription != nil {
+		_ = s.subscription.Close()
+		s.subscription = nil
+	}
 	if closer, ok := s.store.(io.Closer); ok {
 		if err := closer.Close(); err != nil {
 			s.logger.Warn("store close error", "error", err)
@@ -231,6 +286,9 @@ func (s *Session) spawnGrpcMailSession(username string) (*grpcStore, error) {
 	}
 	if maxMsgSize > 0 {
 		args = append(args, "--max-message-size", fmt.Sprintf("%d", maxMsgSize))
+	}
+	if s.cfg.ConfigPath != "" {
+		args = append(args, "--config", s.cfg.ConfigPath)
 	}
 	if s.cfg.Rspamd.Controller != "" {
 		args = append(args, "--rspamd", s.cfg.Rspamd.Controller)

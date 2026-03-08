@@ -37,6 +37,7 @@ func (c *SessionManagerConfig) IsEnabled() bool {
 type FileConfig struct {
 	Server         ServerConfig         `toml:"server"`
 	Imapd          Config               `toml:"imapd"`
+	Redis          RedisConfig          `toml:"redis"`
 	SessionManager SessionManagerConfig `toml:"session-manager"`
 }
 
@@ -45,6 +46,15 @@ type ServerConfig struct {
 	Hostname    string    `toml:"hostname"`
 	DomainsPath string    `toml:"domains_path"`
 	TLS         TLSConfig `toml:"tls"`
+}
+
+// RedisConfig holds Redis connection settings for pub/sub notifications.
+type RedisConfig struct {
+	// URL is the Redis connection URL (e.g. "redis://redis:6379/1").
+	// Empty disables Redis notifications.
+	URL string `toml:"url"`
+	// Password is the optional Redis AUTH password.
+	Password string `toml:"password"`
 }
 
 // RspamdConfig holds configuration for rspamd ham/spam learning.
@@ -72,7 +82,11 @@ type Config struct {
 	Store           StoreConfig          `toml:"store"`
 	MailSessionCmd  string               `toml:"mail_session"` // path to mail-session binary; empty = in-process
 	Rspamd          RspamdConfig         `toml:"rspamd"`
+	Redis           RedisConfig          `toml:"redis"`
 	SessionManager  SessionManagerConfig `toml:"-"` // populated by loader from top-level [session-manager]
+
+	// ConfigPath is the resolved path to the config file (set by loader, not TOML).
+	ConfigPath string `toml:"-"`
 }
 
 // AuthConfig holds configuration for the authentication agent.

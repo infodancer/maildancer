@@ -482,6 +482,87 @@ mode = "imap"
 	}
 }
 
+func TestRedisConfigFromTopLevel(t *testing.T) {
+	const tomlContent = `
+[redis]
+url = "redis://redis:6379/1"
+password = "secret"
+
+[imapd]
+hostname = "mail.example.com"
+
+[[imapd.listeners]]
+address = ":143"
+mode = "imap"
+`
+	path := writeTempTOML(t, tomlContent)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Redis.URL != "redis://redis:6379/1" {
+		t.Errorf("redis.url = %q, want %q", cfg.Redis.URL, "redis://redis:6379/1")
+	}
+	if cfg.Redis.Password != "secret" {
+		t.Errorf("redis.password = %q, want %q", cfg.Redis.Password, "secret")
+	}
+}
+
+func TestRedisConfigFromImapSection(t *testing.T) {
+	const tomlContent = `
+[imapd]
+hostname = "mail.example.com"
+
+[[imapd.listeners]]
+address = ":143"
+mode = "imap"
+
+[imapd.redis]
+url = "redis://localhost:6379/2"
+`
+	path := writeTempTOML(t, tomlContent)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Redis.URL != "redis://localhost:6379/2" {
+		t.Errorf("redis.url = %q, want %q", cfg.Redis.URL, "redis://localhost:6379/2")
+	}
+}
+
+func TestRedisImapSectionOverridesTopLevel(t *testing.T) {
+	const tomlContent = `
+[redis]
+url = "redis://shared:6379/0"
+password = "shared-pass"
+
+[imapd]
+hostname = "mail.example.com"
+
+[[imapd.listeners]]
+address = ":143"
+mode = "imap"
+
+[imapd.redis]
+url = "redis://imap-specific:6379/1"
+`
+	path := writeTempTOML(t, tomlContent)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Redis.URL != "redis://imap-specific:6379/1" {
+		t.Errorf("redis.url = %q, want imapd-specific %q", cfg.Redis.URL, "redis://imap-specific:6379/1")
+	}
+	// Password from top-level should survive since imapd section didn't override it
+	if cfg.Redis.Password != "shared-pass" {
+		t.Errorf("redis.password = %q, want top-level %q", cfg.Redis.Password, "shared-pass")
+	}
+}
+
 func TestAuthConfigIsConfigured(t *testing.T) {
 	a := AuthConfig{}
 	if a.IsConfigured() {

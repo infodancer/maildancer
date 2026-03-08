@@ -197,7 +197,7 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 		srcUID := imap.UID(idx + 1)
 
 		if hasMover {
-			// SubprocessStore handles MOVE atomically, including rspamd learning.
+			// grpcStore handles MOVE atomically, including rspamd learning.
 			if _, err := mv.MoveMessage(ctx, s.mailbox, srcFolder, info.UID, dest); err != nil {
 				return err
 			}

@@ -61,6 +61,14 @@ func Load(path string) (Config, error) {
 	// First merge shared server config into defaults
 	cfg = mergeServerConfig(cfg, fileConfig.Server)
 
+	// Merge top-level [redis] section (shared across services)
+	if fileConfig.Redis.URL != "" {
+		cfg.Redis.URL = fileConfig.Redis.URL
+	}
+	if fileConfig.Redis.Password != "" {
+		cfg.Redis.Password = fileConfig.Redis.Password
+	}
+
 	// Then merge imapd-specific config (takes precedence)
 	cfg = mergeConfig(cfg, fileConfig.Imapd)
 
@@ -114,7 +122,9 @@ func LoadWithFlags(f *Flags) (Config, error) {
 	if err != nil {
 		return cfg, err
 	}
-	return ApplyFlags(cfg, f), nil
+	cfg = ApplyFlags(cfg, f)
+	cfg.ConfigPath = f.ConfigPath
+	return cfg, nil
 }
 
 // mergeServerConfig merges shared server settings into the config.
@@ -239,6 +249,13 @@ func mergeConfig(dst, src Config) Config {
 
 	if src.Rspamd.JunkFolder != "" {
 		dst.Rspamd.JunkFolder = src.Rspamd.JunkFolder
+	}
+
+	if src.Redis.URL != "" {
+		dst.Redis.URL = src.Redis.URL
+	}
+	if src.Redis.Password != "" {
+		dst.Redis.Password = src.Redis.Password
 	}
 
 	// Merge auth config

@@ -32,7 +32,7 @@ func ParsePostmasterFile(path string) (map[string]*PostmasterEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	entries := make(map[string]*PostmasterEntry)
 	scanner := bufio.NewScanner(f)

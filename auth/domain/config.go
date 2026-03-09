@@ -113,6 +113,29 @@ func mergeConfig(base, override DomainConfig) DomainConfig {
 	return result
 }
 
+// DomainsConfig holds per-domain configuration overrides from domains.toml.
+// Keys are domain names (e.g. "matthewjayhunter.com").
+// This file is managed by the system postmaster and provides per-domain settings
+// that domain admins can further override in their own config.toml.
+type DomainsConfig map[string]DomainConfig
+
+// LoadDomainsConfig reads and parses a domains.toml file.
+// A missing file is not an error — returns an empty DomainsConfig.
+func LoadDomainsConfig(path string) (DomainsConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(DomainsConfig), nil
+		}
+		return nil, fmt.Errorf("read domains config: %w", err)
+	}
+	var cfg DomainsConfig
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parse domains config: %w", err)
+	}
+	return cfg, nil
+}
+
 // LoadDomainConfig reads and parses a domain configuration file.
 func LoadDomainConfig(path string) (*DomainConfig, error) {
 	data, err := os.ReadFile(path)

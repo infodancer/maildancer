@@ -1,9 +1,5 @@
 version: '3'
 
-vars:
-  BINARY_NAME: gotemplate
-  BUILD_DIR: ./bin
-
 tasks:
   default:
     desc: Run all checks (build, lint, vulncheck, test)
@@ -11,16 +7,13 @@ tasks:
       - task: all
 
   build:
-    desc: Build the Go binary
+    desc: Build all packages (library — no binary)
     cmds:
-      - mkdir -p {{.BUILD_DIR}}
-      - go build -o {{.BUILD_DIR}}/{{.BINARY_NAME}} ./cmd/gotemplate
+      - go build ./...
     sources:
       - ./**/*.go
       - go.mod
       - go.sum
-    generates:
-      - "{{.BUILD_DIR}}/{{.BINARY_NAME}}"
 
   lint:
     desc: Run golangci-lint
@@ -54,7 +47,6 @@ tasks:
   clean:
     desc: Clean build artifacts
     cmds:
-      - rm -rf {{.BUILD_DIR}}
       - rm -f coverage.out coverage.html
 
   install:deps:

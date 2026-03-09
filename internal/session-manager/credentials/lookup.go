@@ -23,8 +23,13 @@ type Info struct {
 // Lookup resolves credentials for username (localpart@domain) using the
 // per-domain config and passwd files under domainsPath.
 //
+// Resolution order (highest priority wins):
+//   - GID:      postmaster file > config.toml
+//   - BasePath: postmaster file DataPath > domainsDataPath/domain > domainDir/users
+//
 // domainsDataPath, if non-empty, is used to resolve relative MsgStore.BasePath
 // values — matching the behaviour of FilesystemDomainProvider.WithDataPath.
+// The postmaster file (if present) takes priority over domainsDataPath.
 // Credential backend paths are always resolved relative to domainsPath.
 func Lookup(domainsPath, domainsDataPath, localpart, domainName string) (*Info, error) {
 	domainDir := filepath.Join(domainsPath, domainName)
@@ -50,18 +55,31 @@ func Lookup(domainsPath, domainsDataPath, localpart, domainName string) (*Info, 
 		return nil, fmt.Errorf("lookup uid for %q in %q: %w", localpart, passwdPath, err)
 	}
 
+	gid := cfg.Gid
+
 	// Resolve mail-session basePath (default: "users").
-	// Relative paths are resolved against the data dir when set, matching
-	// FilesystemDomainProvider.WithDataPath behaviour.
+	// Priority: postmaster DataPath > domainsDataPath+domain > domainDir.
+	storageBase := domainDir
+	if domainsDataPath != "" {
+		storageBase = filepath.Join(domainsDataPath, domainName)
+	}
+
 	base := cfg.MsgStore.BasePath
 	if base == "" {
 		base = "users"
 	}
-	if !filepath.IsAbs(base) {
-		storageBase := domainDir
-		if domainsDataPath != "" {
-			storageBase = filepath.Join(domainsDataPath, domainName)
+
+	// Postmaster file is authoritative for GID and data path.
+	if entry := domain.LookupDomainPostmaster(domainsPath, domainName); entry != nil {
+		if entry.GID != 0 {
+			gid = entry.GID
 		}
+		if entry.DataPath != "" {
+			storageBase = entry.DataPath
+		}
+	}
+
+	if !filepath.IsAbs(base) {
 		base = filepath.Join(storageBase, base)
 	}
 
@@ -72,7 +90,7 @@ func Lookup(domainsPath, domainsDataPath, localpart, domainName string) (*Info, 
 
 	return &Info{
 		UID:       uid,
-		GID:       cfg.Gid,
+		GID:       gid,
 		BasePath:  base,
 		StoreType: storeType,
 	}, nil

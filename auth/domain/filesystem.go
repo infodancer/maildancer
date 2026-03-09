@@ -19,31 +19,37 @@ import (
 // when defaults are set via WithDefaults — any subdirectory is then a valid
 // domain, with config.toml values overriding the defaults when present.
 //
-// A config.toml at the basePath level (alongside domain directories) provides
-// provider-level defaults, including a [forwards] section for the system-wide
-// default forwarding rules.
+// Additional config files at the basePath level:
+//
+//   - config.toml  — system-wide defaults (forwards, auth type, etc.)
+//   - domains.toml — per-domain behavior overrides managed by the system postmaster
+//   - postmaster   — authoritative domain GIDs, postmaster UIDs, and data paths
 //
 // Directory structure:
 //
 //	/etc/mail/domains/
-//	├── config.toml       (optional; provider-level defaults incl. [forwards])
+//	├── config.toml       (optional; system-wide defaults incl. [forwards])
+//	├── domains.toml      (optional; per-domain overrides with ["example.com"] sections)
+//	├── postmaster        (optional; address:uid:gid:data-path entries)
 //	├── example.com/
-//	│   └── config.toml   (optional when defaults are set)
+//	│   └── config.toml   (optional when defaults are set; domain-admin editable)
 //	├── other.org/
 //	│   └── config.toml
 type FilesystemDomainProvider struct {
-	basePath     string
-	dataPath     string // separate writable directory for msgstore data
-	defaults     *DomainConfig
-	baseDefaults *DomainConfig // loaded from {basePath}/config.toml
-	cache        map[string]*Domain
-	mu           sync.RWMutex
-	logger       *slog.Logger
+	basePath        string
+	dataPath        string // provider-level data directory (overridden per-domain by postmaster)
+	defaults        *DomainConfig
+	baseDefaults    *DomainConfig               // loaded from {basePath}/config.toml
+	domainOverrides DomainsConfig               // loaded from {basePath}/domains.toml
+	postmaster      map[string]*PostmasterEntry // loaded from {basePath}/postmaster
+	cache           map[string]*Domain
+	mu              sync.RWMutex
+	logger          *slog.Logger
 }
 
 // NewFilesystemDomainProvider creates a new filesystem-based domain provider.
-// If {basePath}/config.toml exists, it is loaded as provider-level defaults
-// (used for [forwards] and other domain-wide settings).
+// Loads optional config files from basePath: config.toml (system-wide defaults),
+// domains.toml (per-domain behavior overrides), and postmaster (domain GIDs and paths).
 func NewFilesystemDomainProvider(basePath string, logger *slog.Logger) *FilesystemDomainProvider {
 	if logger == nil {
 		logger = slog.Default()
@@ -55,6 +61,12 @@ func NewFilesystemDomainProvider(basePath string, logger *slog.Logger) *Filesyst
 	}
 	if baseCfg, err := LoadDomainConfig(filepath.Join(basePath, "config.toml")); err == nil {
 		p.baseDefaults = baseCfg
+	}
+	if overrides, err := LoadDomainsConfig(filepath.Join(basePath, "domains.toml")); err == nil {
+		p.domainOverrides = overrides
+	}
+	if entries, err := ParsePostmasterFile(filepath.Join(basePath, "postmaster")); err == nil {
+		p.postmaster = entries
 	}
 	return p
 }
@@ -171,11 +183,33 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		return nil, fmt.Errorf("create auth agent: %w", err)
 	}
 
-	// Create message store. When dataPath is set, relative BasePath values are
-	// resolved against {dataPath}/{domain} rather than the config domainPath.
-	// This separates read-only config from writable message storage.
+	// Apply domains.toml per-domain overrides (system postmaster, lower priority
+	// than per-domain config.toml which was already merged above).
+	if override, ok := p.domainOverrides[name]; ok {
+		merged := mergeConfig(override, *cfg) // cfg wins over override
+		cfg = &merged
+	}
+
+	// Postmaster GID is authoritative — applied after all config merges so that
+	// neither system defaults nor domain-admin config.toml can override it.
+	if p.postmaster != nil {
+		if entry, ok := p.postmaster[name]; ok && entry.GID != 0 {
+			cfg.Gid = entry.GID
+		}
+	}
+
+	// Create message store. The data path comes from (highest priority first):
+	//   1. postmaster file DataPath for this domain
+	//   2. provider-level WithDataPath() joined with domain name
+	//   3. the domain's config directory
 	storageBase := domainPath
-	if p.dataPath != "" {
+	if p.postmaster != nil {
+		if entry, ok := p.postmaster[name]; ok && entry.DataPath != "" {
+			storageBase = entry.DataPath
+		} else if p.dataPath != "" {
+			storageBase = filepath.Join(p.dataPath, name)
+		}
+	} else if p.dataPath != "" {
 		storageBase = filepath.Join(p.dataPath, name)
 	}
 	storeCfg := msgstore.StoreConfig{

@@ -529,11 +529,13 @@ func (s *Scheduler) invoke(bodyPath string, envPaths []string, final bool, outbo
 	// Avoids environment variables which are visible in /proc/pid/environ.
 	stdinCfg := struct {
 		Strategy      string `json:"strategy"`
+		Hostname      string `json:"hostname,omitempty"`
 		Smarthost     string `json:"smarthost,omitempty"`
 		SmarthostUser string `json:"smarthost_user,omitempty"`
 		Password      string `json:"password,omitempty"`
 	}{
 		Strategy:      outbound.Strategy,
+		Hostname:      s.cfg.Hostname,
 		Smarthost:     outbound.Smarthost,
 		SmarthostUser: outbound.SmarthostUser,
 		Password:      outbound.password,

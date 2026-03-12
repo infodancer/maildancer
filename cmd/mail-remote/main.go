@@ -30,6 +30,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -41,6 +42,16 @@ import (
 	"github.com/infodancer/maildancer/internal/mail-remote/mx"
 	"github.com/infodancer/maildancer/internal/mail-remote/smtp"
 )
+
+// recipientResult is the per-recipient delivery outcome written to stdout
+// as a JSON array. queue-manager reads this via pipe for delivery logging
+// and DSN generation.
+type recipientResult struct {
+	Envelope   string `json:"envelope"`
+	Status     string `json:"status"`     // "delivered", "perm_fail", "temp_fail"
+	SMTPCode   int    `json:"smtp_code"`  // SMTP reply code; 0 if no SMTP response
+	Diagnostic string `json:"diagnostic"` // SMTP reply text or error string
+}
 
 // Exit codes follow sysexits.h conventions used by qmail and Postfix.
 const (
@@ -131,9 +142,13 @@ func run() int {
 	}
 
 	tempFail, permFail := false, false
+	var output []recipientResult
 	for path, err := range results {
 		if err == nil {
 			slog.Info("delivered", "envelope", path)
+			output = append(output, recipientResult{
+				Envelope: path, Status: "delivered", SMTPCode: 250,
+			})
 			if removeErr := os.Remove(path); removeErr != nil {
 				slog.Warn("could not remove delivered envelope", "path", path, "error", removeErr)
 			}
@@ -143,18 +158,30 @@ func run() int {
 		if smtp.IsPermanent(err) {
 			slog.Error("permanent delivery failure", "envelope", path, "error", err)
 			permFail = true
+			output = append(output, recipientResult{
+				Envelope: path, Status: "perm_fail",
+				SMTPCode: smtp.SMTPCode(err), Diagnostic: err.Error(),
+			})
 			if removeErr := os.Remove(path); removeErr != nil {
 				slog.Warn("could not remove rejected envelope", "path", path, "error", removeErr)
 			}
 		} else {
 			slog.Error("temporary delivery failure", "envelope", path, "error", err)
 			tempFail = true
+			output = append(output, recipientResult{
+				Envelope: path, Status: "temp_fail",
+				SMTPCode: smtp.SMTPCode(err), Diagnostic: err.Error(),
+			})
 			// Touch mtime to update the backoff clock.
 			now := time.Now()
 			if touchErr := os.Chtimes(path, now, now); touchErr != nil {
 				slog.Warn("could not update envelope mtime", "path", path, "error", touchErr)
 			}
 		}
+	}
+
+	if err := json.NewEncoder(os.Stdout).Encode(output); err != nil {
+		slog.Warn("could not write results to stdout", "error", err)
 	}
 
 	switch {

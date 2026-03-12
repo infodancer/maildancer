@@ -575,6 +575,32 @@ func TestIsPermanent(t *testing.T) {
 	}
 }
 
+func TestSMTPCode(t *testing.T) {
+	if SMTPCode(nil) != 0 {
+		t.Error("nil error should return 0")
+	}
+	if SMTPCode(fmt.Errorf("connection refused")) != 0 {
+		t.Error("plain error should return 0")
+	}
+
+	smtpErr := &gosmtp.SMTPError{Code: 550, Message: "user not found"}
+	if code := SMTPCode(smtpErr); code != 550 {
+		t.Errorf("SMTPCode = %d, want 550", code)
+	}
+
+	// Wrapped through PermanentError.
+	wrapped := &PermanentError{Err: fmt.Errorf("RCPT TO: %w", smtpErr)}
+	if code := SMTPCode(wrapped); code != 550 {
+		t.Errorf("SMTPCode through PermanentError = %d, want 550", code)
+	}
+
+	// Double-wrapped.
+	doubleWrapped := fmt.Errorf("deliver: %w", wrapped)
+	if code := SMTPCode(doubleWrapped); code != 550 {
+		t.Errorf("SMTPCode double-wrapped = %d, want 550", code)
+	}
+}
+
 func TestDeliverAll_TransactionLimit(t *testing.T) {
 	addr, be, stop := startTestServer(t)
 	defer stop()

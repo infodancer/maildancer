@@ -30,6 +30,16 @@ func IsPermanent(err error) bool {
 	return errors.As(err, &pe)
 }
 
+// SMTPCode extracts the SMTP reply code from an error chain.
+// Returns 0 if no SMTP error is found (e.g., connection failures).
+func SMTPCode(err error) int {
+	var smtpErr *gosmtp.SMTPError
+	if errors.As(err, &smtpErr) {
+		return smtpErr.Code
+	}
+	return 0
+}
+
 // classifyError wraps SMTP 5xx errors as PermanentError. All other errors
 // (4xx, dial failures, I/O errors) are returned unchanged (temporary).
 func classifyError(err error) error {

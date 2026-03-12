@@ -110,7 +110,9 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 
 	// Create auth router (centralizes domain-aware auth routing).
-	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
+	authRouter := domain.NewAuthRouter(domainProvider, authAgent).
+		WithRateLimit(domain.DefaultRateLimitConfig())
+	s.closers = append(s.closers, authRouter)
 
 	// Create session-manager client if configured. When enabled, it takes over
 	// authentication and mailbox operations from the domain auth router.

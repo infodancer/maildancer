@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 
 	"github.com/infodancer/maildancer/msgstore"
@@ -46,6 +47,9 @@ func handleConnection(ctx context.Context, conn *server.Connection, hostname str
 
 	// Create session
 	sess := NewSession(hostname, listenerMode, tlsConfig, conn.IsTLS())
+	if host, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+		sess.SetClientIP(host)
+	}
 	defer sess.Cleanup()
 
 	logger.Info("starting POP3 session",

@@ -2,12 +2,14 @@ package pop3
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/emersion/go-sasl"
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/auth/domain"
+	autherrors "github.com/infodancer/maildancer/auth/errors"
 	"github.com/infodancer/maildancer/msgstore"
 )
 
@@ -178,6 +180,11 @@ func (p *passCommand) executeSessionManager(ctx context.Context, sess *Session, 
 
 // executeLegacy authenticates via the domain auth router.
 func (p *passCommand) executeLegacy(ctx context.Context, sess *Session, conn ConnectionLogger, username, password string) (Response, error) {
+	// Pass client IP for rate limiting.
+	if ip := sess.ClientIP(); ip != "" {
+		ctx = domain.WithClientIP(ctx, ip)
+	}
+
 	// Authenticate via the router (handles domain splitting internally)
 	result, err := p.auth.AuthenticateWithDomain(ctx, username, password)
 	if err != nil {
@@ -185,6 +192,9 @@ func (p *passCommand) executeLegacy(ctx context.Context, sess *Session, conn Con
 			"username", username,
 			"error", err.Error(),
 		)
+		if errors.Is(err, autherrors.ErrRateLimited) {
+			return Response{OK: false, Message: "Too many failed authentication attempts, try again later"}, nil
+		}
 		return Response{OK: false, Message: "Authentication failed"}, nil
 	}
 
@@ -364,6 +374,11 @@ func (a *authCommand) saslSessionManager(ctx context.Context, sess *Session, con
 
 // saslLegacy handles SASL PLAIN via the domain auth router.
 func (a *authCommand) saslLegacy(ctx context.Context, sess *Session, conn ConnectionLogger, mechanism, username, password string) error {
+	// Pass client IP for rate limiting.
+	if ip := sess.ClientIP(); ip != "" {
+		ctx = domain.WithClientIP(ctx, ip)
+	}
+
 	result, err := a.auth.AuthenticateWithDomain(ctx, username, password)
 	if err != nil {
 		conn.Logger().Info("SASL authentication failed",

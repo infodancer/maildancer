@@ -75,6 +75,7 @@ type Session struct {
 	insecureAuth bool // true when no TLS is configured (allows plaintext auth)
 
 	// Authentication state
+	clientIP    string // Client IP for rate limiting
 	username    string
 	authSession *auth.AuthSession
 
@@ -146,6 +147,16 @@ func (s *Session) CanSTLS() bool {
 // TLSConfig returns the TLS configuration for STARTTLS.
 func (s *Session) TLSConfig() *tls.Config {
 	return s.tlsConfig
+}
+
+// SetClientIP stores the client's IP address for rate limiting.
+func (s *Session) SetClientIP(ip string) {
+	s.clientIP = ip
+}
+
+// ClientIP returns the client's IP address.
+func (s *Session) ClientIP() string {
+	return s.clientIP
 }
 
 // SetUsername stores the username from the USER command.

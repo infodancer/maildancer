@@ -6,7 +6,7 @@ require (
 	github.com/alicebob/miniredis/v2 v2.37.0
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-message v0.18.2
-	github.com/infodancer/maildancer/auth v0.1.11
+	github.com/infodancer/maildancer/auth v0.1.14
 	github.com/infodancer/maildancer/internal/mail-session v0.1.2
 	github.com/infodancer/maildancer/msgstore v0.2.3
 	github.com/infodancer/maildancer/internal/session-manager v0.1.0

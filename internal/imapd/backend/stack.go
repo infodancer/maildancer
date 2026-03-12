@@ -91,7 +91,9 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 
 	// Create auth router (centralizes domain-aware auth routing).
-	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
+	authRouter := domain.NewAuthRouter(domainProvider, authAgent).
+		WithRateLimit(domain.DefaultRateLimitConfig())
+	s.closers = append(s.closers, authRouter)
 
 	// Open message store if configured.
 	var store msgstore.MsgStore

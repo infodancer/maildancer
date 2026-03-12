@@ -4,9 +4,11 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/infodancer/maildancer/auth/domain"
+	autherrors "github.com/infodancer/maildancer/auth/errors"
 	"github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/logging"
@@ -121,10 +124,25 @@ func (s *Session) loginSessionManager(username, password string) error {
 // loginLegacy authenticates via the domain.AuthRouter (legacy path).
 func (s *Session) loginLegacy(username, password string) error {
 	ctx := context.Background()
+
+	// Pass client IP to the auth router for rate limiting.
+	if s.conn != nil {
+		if host, _, err := net.SplitHostPort(s.conn.NetConn().RemoteAddr().String()); err == nil {
+			ctx = domain.WithClientIP(ctx, host)
+		}
+	}
+
 	result, err := s.authRouter.AuthenticateWithDomain(ctx, username, password)
 	if err != nil {
 		s.logger.Info("login failed", "username", username, "error", err)
 		s.collector.AuthAttempt(extractDomain(username), false)
+		if errors.Is(err, autherrors.ErrRateLimited) {
+			return &imap.Error{
+				Type: imap.StatusResponseTypeNo,
+				Code: imap.ResponseCodeAuthenticationFailed,
+				Text: "Too many failed authentication attempts, try again later",
+			}
+		}
 		return &imap.Error{
 			Type: imap.StatusResponseTypeNo,
 			Code: imap.ResponseCodeAuthenticationFailed,

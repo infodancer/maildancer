@@ -134,7 +134,9 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 
 	// Create auth router (centralizes domain-aware auth routing).
-	authRouter := domain.NewAuthRouter(domainProvider, authAgent)
+	authRouter := domain.NewAuthRouter(domainProvider, authAgent).
+		WithRateLimit(domain.DefaultRateLimitConfig())
+	s.closers = append(s.closers, authRouter)
 
 	// Build temp dir path: on the same filesystem as the mail store so
 	// temp files can be renamed atomically into the maildir.

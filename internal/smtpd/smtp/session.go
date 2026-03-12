@@ -133,6 +133,11 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 		return sasl.NewPlainServer(func(identity, username, password string) error {
 			ctx := context.Background()
 
+			// Pass client IP for rate limiting.
+			if s.clientIP != "" {
+				ctx = domain.WithClientIP(ctx, s.clientIP)
+			}
+
 			// AuthRouter handles domain splitting for user@domain usernames
 			session, err := s.backend.authRouter.Authenticate(ctx, username, password)
 			if err != nil {
@@ -144,6 +149,14 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 				s.logger.Debug("authentication failed",
 					slog.String("username", username),
 					slog.String("error", err.Error()))
+
+				if err == autherrors.ErrRateLimited {
+					return &smtp.SMTPError{
+						Code:         421,
+						EnhancedCode: smtp.EnhancedCode{4, 7, 0},
+						Message:      "Too many failed authentication attempts, try again later",
+					}
+				}
 
 				if err == autherrors.ErrAuthFailed || err == autherrors.ErrUserNotFound {
 					return &smtp.SMTPError{

@@ -6,16 +6,23 @@
 //
 //	mail-remote [flags] <body-file> <envelope-file> [envelope-file ...]
 //
-// Flags:
+// Protocol (when invoked by queue-manager):
+//
+//	stdin:  JSON outbound config {"strategy","smarthost","smarthost_user","password"}
+//	stdout: JSON delivery results [{"envelope","status","smtp_code","diagnostic"},...]
+//	stderr: structured logging (slog)
+//
+// When stdin is a terminal (manual invocation), no config is read from stdin.
+// Use --smarthost and --smarthost-user flags instead, with MAIL_REMOTE_PASSWORD
+// env var for the password.
+//
+// Flags (manual overrides — take precedence over stdin config):
 //
 //	--config path         Path to shared TOML config file (reads [mail-remote] section).
-//	--smarthost host:port Relay all mail via this SMTP smarthost (STARTTLS).
-//	--smarthost-user user SMTP AUTH username. Password from MAIL_REMOTE_PASSWORD env var.
-//	--hostname fqdn       EHLO hostname for direct MX delivery (required without --smarthost).
+//	--smarthost host:port Relay via SMTP smarthost (overrides stdin config).
+//	--smarthost-user user SMTP AUTH username (overrides stdin config).
+//	--hostname fqdn       EHLO hostname for direct MX delivery (required without smarthost).
 //	--final               Signal that this is the final delivery attempt (try all transports).
-//
-// CLI flags override TOML config values. Environment variables override TOML but
-// are overridden by CLI flags. Precedence: flags > env > TOML > defaults.
 //
 // Exit codes:
 //
@@ -24,7 +31,7 @@
 //	75: One or more envelopes failed with a temporary error (EX_TEMPFAIL; retry later).
 //	69: One or more envelopes failed with a permanent error (EX_UNAVAILABLE; no retry).
 //
-// Without --smarthost, mail-remote performs DNS-based delivery (MX → SMTP;
+// Without a smarthost, mail-remote performs DNS-based delivery (MX → SMTP;
 // A/AAAA → SMTP). Future: SRV → new-protocol (SDMP).
 package main
 
@@ -33,6 +40,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"time"
@@ -53,6 +61,16 @@ type recipientResult struct {
 	Diagnostic string `json:"diagnostic"` // SMTP reply text or error string
 }
 
+// outboundConfig is the JSON structure read from stdin when invoked by
+// queue-manager. It carries all smarthost settings including the password,
+// avoiding environment variables (visible in /proc/pid/environ).
+type outboundConfig struct {
+	Strategy  string `json:"strategy"`  // "direct" | "smarthost"
+	Smarthost string `json:"smarthost"` // host:port
+	Username  string `json:"smarthost_user"`
+	Password  string `json:"password"`
+}
+
 // Exit codes follow sysexits.h conventions used by qmail and Postfix.
 const (
 	exOK          = 0
@@ -63,6 +81,29 @@ const (
 
 func main() {
 	os.Exit(run())
+}
+
+// readStdinConfig reads JSON outbound config from stdin if it's a pipe.
+// Returns nil if stdin is a terminal or empty.
+func readStdinConfig() *outboundConfig {
+	fi, err := os.Stdin.Stat()
+	if err != nil {
+		return nil
+	}
+	// Only read if stdin is a pipe (not a terminal).
+	if fi.Mode()&os.ModeCharDevice != 0 {
+		return nil
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	var cfg outboundConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		slog.Warn("failed to parse outbound config from stdin", "error", err)
+		return nil
+	}
+	return &cfg
 }
 
 func run() int {
@@ -91,7 +132,22 @@ func run() int {
 	}
 	cfg = config.ApplyEnv(cfg)
 
-	// CLI flags override config.
+	// Read outbound config from stdin (pipe from queue-manager).
+	stdinCfg := readStdinConfig()
+
+	// Apply stdin config as baseline, then let CLI flags override.
+	password := ""
+	if stdinCfg != nil {
+		if stdinCfg.Smarthost != "" {
+			cfg.Smarthost.Addr = stdinCfg.Smarthost
+		}
+		if stdinCfg.Username != "" {
+			cfg.Smarthost.User = stdinCfg.Username
+		}
+		password = stdinCfg.Password
+	}
+
+	// CLI flags override stdin config.
 	if *smarthostAddr != "" {
 		cfg.Smarthost.Addr = *smarthostAddr
 	}
@@ -100,6 +156,11 @@ func run() int {
 	}
 	if *hostname != "" {
 		cfg.Hostname = *hostname
+	}
+
+	// Env var password as fallback for manual invocation.
+	if password == "" {
+		password = os.Getenv("MAIL_REMOTE_PASSWORD")
 	}
 
 	bodyPath := args[0]
@@ -126,7 +187,11 @@ func run() int {
 
 	var results map[string]error
 	if cfg.Smarthost.Addr != "" {
-		sh := smtp.SmarthostFromEnv(cfg.Smarthost.Addr, cfg.Smarthost.User)
+		sh := smtp.Smarthost{
+			Addr:     cfg.Smarthost.Addr,
+			Username: cfg.Smarthost.User,
+			Password: password,
+		}
 		results = smtp.DeliverViaSmarthost(context.Background(), sh, bodyPath, envs, cfg.Smarthost.MaxTransactionsPerConn)
 	} else {
 		if cfg.Hostname == "" {

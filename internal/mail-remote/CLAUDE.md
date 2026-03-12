@@ -26,10 +26,21 @@ mail-remote [flags] <body-file> <envelope-file> [envelope-file ...]
 | Flag | Description |
 |------|-------------|
 | `--smarthost host:port` | Relay via SMTP smarthost (STARTTLS). |
-| `--smarthost-user user` | SMTP AUTH username. Password from `MAIL_REMOTE_PASSWORD` env var. |
+| `--smarthost-user user` | SMTP AUTH username (manual override; stdin config preferred). |
 
 DNS-based delivery (SRV → new-protocol; MX → SMTP; A → SMTP) is not yet
 implemented. `--smarthost` is required until it is.
+
+## stdio Protocol
+
+When invoked by queue-manager:
+
+- **stdin**: JSON outbound config `{"strategy","smarthost","smarthost_user","password"}`
+- **stdout**: JSON delivery results `[{"envelope","status","smtp_code","diagnostic"},...]`
+- **stderr**: structured logging (slog)
+
+When stdin is a terminal (manual invocation), no config is read from stdin.
+CLI flags and `MAIL_REMOTE_PASSWORD` env var are used instead.
 
 ## Exit Codes
 

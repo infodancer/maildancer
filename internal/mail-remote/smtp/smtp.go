@@ -83,11 +83,13 @@ type Smarthost struct {
 	Addr string
 	// Username is the SMTP AUTH username. Empty disables AUTH.
 	Username string
-	// Password is the SMTP AUTH password. Typically from MAIL_REMOTE_PASSWORD env var.
+	// Password is the SMTP AUTH password. Prefer passing via --outbound-fd;
+	// falls back to MAIL_REMOTE_PASSWORD env var.
 	Password string
 }
 
 // SmarthostFromEnv builds a Smarthost using the MAIL_REMOTE_PASSWORD environment variable.
+// Deprecated: prefer --outbound-fd for secure credential passing.
 func SmarthostFromEnv(addr, username string) Smarthost {
 	return Smarthost{
 		Addr:     addr,

@@ -1,6 +1,7 @@
 package envelope_test
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
@@ -21,12 +22,24 @@ func writeEnvFile(t *testing.T, content string) string {
 	return f.Name()
 }
 
+func writeJSONEnv(t *testing.T, env map[string]interface{}) string {
+	t.Helper()
+	data, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeEnvFile(t, string(data))
+}
+
 func TestParse_Valid(t *testing.T) {
-	path := writeEnvFile(t, `TTL 2099-01-01T00:00:00Z
-SENDER bounces+alice=gmail.com@example.com
-RECIPIENT alice@gmail.com
-MSGID abc123
-`)
+	path := writeJSONEnv(t, map[string]interface{}{
+		"ttl":       "2099-01-01T00:00:00Z",
+		"created":   "2026-01-01T00:00:00Z",
+		"sender":    "bounces+alice=gmail.com@example.com",
+		"recipient": "alice@gmail.com",
+		"msgid":     "abc123",
+		"origin":    "user@example.com",
+	})
 	env, err := envelope.Parse(path)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -40,6 +53,12 @@ MSGID abc123
 	if env.MsgID != "abc123" {
 		t.Errorf("MsgID = %q", env.MsgID)
 	}
+	if env.Origin != "user@example.com" {
+		t.Errorf("Origin = %q", env.Origin)
+	}
+	if env.Created.IsZero() {
+		t.Error("Created should not be zero")
+	}
 	if env.Expired() {
 		t.Error("should not be expired")
 	}
@@ -47,7 +66,12 @@ MSGID abc123
 
 func TestParse_Expired(t *testing.T) {
 	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
-	path := writeEnvFile(t, "TTL "+past+"\nSENDER a@b.com\nRECIPIENT c@d.com\nMSGID x\n")
+	path := writeJSONEnv(t, map[string]interface{}{
+		"ttl":       past,
+		"sender":    "a@b.com",
+		"recipient": "c@d.com",
+		"msgid":     "x",
+	})
 	env, err := envelope.Parse(path)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -58,14 +82,29 @@ func TestParse_Expired(t *testing.T) {
 }
 
 func TestParse_MissingField(t *testing.T) {
-	path := writeEnvFile(t, "TTL 2099-01-01T00:00:00Z\nSENDER a@b.com\n")
+	path := writeJSONEnv(t, map[string]interface{}{
+		"ttl":    "2099-01-01T00:00:00Z",
+		"sender": "a@b.com",
+	})
 	if _, err := envelope.Parse(path); err == nil {
 		t.Error("expected error for missing fields")
 	}
 }
 
+func TestParse_InvalidJSON(t *testing.T) {
+	path := writeEnvFile(t, "not valid json")
+	if _, err := envelope.Parse(path); err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}
+
 func TestRecipientDomain(t *testing.T) {
-	path := writeEnvFile(t, "TTL 2099-01-01T00:00:00Z\nSENDER a@b.com\nRECIPIENT alice@gmail.com\nMSGID x\n")
+	path := writeJSONEnv(t, map[string]interface{}{
+		"ttl":       "2099-01-01T00:00:00Z",
+		"sender":    "a@b.com",
+		"recipient": "alice@gmail.com",
+		"msgid":     "x",
+	})
 	env, err := envelope.Parse(path)
 	if err != nil {
 		t.Fatal(err)

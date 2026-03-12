@@ -2,6 +2,7 @@ package smtp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -111,13 +112,22 @@ func overrideDialFunc(t *testing.T) {
 	t.Cleanup(func() { dialFunc = orig })
 }
 
-// makeEnvFile writes an envelope file and returns a parsed *envelope.Envelope.
+// makeEnvFile writes a JSON envelope file and returns a parsed *envelope.Envelope.
 func makeEnvFile(t *testing.T, dir, filename, sender, recipient, msgid string) *envelope.Envelope {
 	t.Helper()
-	ttl := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
-	content := "TTL " + ttl + "\nSENDER " + sender + "\nRECIPIENT " + recipient + "\nMSGID " + msgid + "\n"
+	ttl := time.Now().Add(24 * time.Hour).UTC()
+	data, err := json.Marshal(map[string]interface{}{
+		"ttl":       ttl,
+		"created":   time.Now().UTC(),
+		"sender":    sender,
+		"recipient": recipient,
+		"msgid":     msgid,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, filename)
-	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	env, err := envelope.Parse(path)

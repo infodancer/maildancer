@@ -1,16 +1,20 @@
-// Package envelope parses the plain-text envelope files written by smtpd
+// Package envelope parses the JSON envelope files written by smtpd
 // into the mail queue.
 //
-// Envelope file format (one field per line, order not required):
+// Envelope file format (JSON):
 //
-//	TTL 2026-03-07T10:00:00Z
-//	SENDER bounces+alice=gmail.com@origin.example.com
-//	RECIPIENT alice@gmail.com
-//	MSGID abc123def456789
+//	{
+//	  "ttl": "2026-03-07T10:00:00Z",
+//	  "created": "2026-02-28T10:00:00Z",
+//	  "sender": "bounces+alice=gmail.com@origin.example.com",
+//	  "recipient": "alice@gmail.com",
+//	  "msgid": "abc123def456789@example.com",
+//	  "origin": "user@example.com"
+//	}
 package envelope
 
 import (
-	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -20,20 +24,26 @@ import (
 // Envelope holds the parsed contents of a single queue envelope file.
 type Envelope struct {
 	// Path is the filesystem path to this envelope file.
-	Path string
+	Path string `json:"-"`
 
 	// TTL is the absolute expiry time. After this time, one last delivery
 	// attempt is made via SMTP and the envelope is removed regardless.
-	TTL time.Time
+	TTL time.Time `json:"ttl"`
+
+	// Created is the queue-inject timestamp.
+	Created time.Time `json:"created"`
 
 	// Sender is the VERP-encoded MAIL FROM address for this recipient.
-	Sender string
+	Sender string `json:"sender"`
 
 	// Recipient is the RCPT TO address.
-	Recipient string
+	Recipient string `json:"recipient"`
 
 	// MsgID is the message body identifier, used to locate the body file.
-	MsgID string
+	MsgID string `json:"msgid"`
+
+	// Origin is the authenticated submitter's address before VERP rewriting.
+	Origin string `json:"origin"`
 }
 
 // RecipientDomain returns the domain part of the Recipient address.
@@ -52,43 +62,14 @@ func (e *Envelope) Expired() bool {
 
 // Parse reads and parses an envelope file from path.
 func Parse(path string) (*Envelope, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open envelope %s: %w", path, err)
 	}
-	defer func() { _ = f.Close() }()
 
 	env := &Envelope{Path: path}
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		key, value, ok := strings.Cut(line, " ")
-		if !ok {
-			return nil, fmt.Errorf("envelope %s: malformed line %q", path, line)
-		}
-		value = strings.TrimSpace(value)
-		switch strings.ToUpper(key) {
-		case "TTL":
-			t, err := time.Parse(time.RFC3339, value)
-			if err != nil {
-				return nil, fmt.Errorf("envelope %s: invalid TTL %q: %w", path, value, err)
-			}
-			env.TTL = t
-		case "SENDER":
-			env.Sender = value
-		case "RECIPIENT":
-			env.Recipient = value
-		case "MSGID":
-			env.MsgID = value
-		default:
-			// Unknown fields are silently ignored for forward compatibility.
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading envelope %s: %w", path, err)
+	if err := json.Unmarshal(data, env); err != nil {
+		return nil, fmt.Errorf("envelope %s: %w", path, err)
 	}
 
 	if err := env.validate(); err != nil {
@@ -99,16 +80,16 @@ func Parse(path string) (*Envelope, error) {
 
 func (e *Envelope) validate() error {
 	if e.TTL.IsZero() {
-		return fmt.Errorf("envelope %s: missing TTL", e.Path)
+		return fmt.Errorf("envelope %s: missing ttl", e.Path)
 	}
 	if e.Sender == "" {
-		return fmt.Errorf("envelope %s: missing SENDER", e.Path)
+		return fmt.Errorf("envelope %s: missing sender", e.Path)
 	}
 	if e.Recipient == "" {
-		return fmt.Errorf("envelope %s: missing RECIPIENT", e.Path)
+		return fmt.Errorf("envelope %s: missing recipient", e.Path)
 	}
 	if e.MsgID == "" {
-		return fmt.Errorf("envelope %s: missing MSGID", e.Path)
+		return fmt.Errorf("envelope %s: missing msgid", e.Path)
 	}
 	return nil
 }

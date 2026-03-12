@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -217,7 +218,7 @@ func TestProcessDomainDir_InvokesMailRemote(t *testing.T) {
 		t.Fatal(err)
 	}
 	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
-	if err := os.WriteFile(envFile, []byte("MSGID "+msgid+"\n"), 0600); err != nil {
+	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -273,7 +274,7 @@ func TestProcessDomainDir_SkipsNotReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	envFile := filepath.Join(envDir, "bob@"+msgid+".0")
-	if err := os.WriteFile(envFile, []byte("MSGID "+msgid+"\n"), 0600); err != nil {
+	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	// mtime is now — not ready; no need to chtimes
@@ -297,7 +298,7 @@ func TestParseTTL_Valid(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, "test.env")
 	ttl := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
-	content := "TTL " + ttl.Format(time.RFC3339) + "\nSENDER x@y.com\nRECIPIENT a@b.com\nMSGID abc123\n"
+	content := fmt.Sprintf(`{"ttl":"%s","sender":"x@y.com","recipient":"a@b.com","msgid":"abc123"}`, ttl.Format(time.RFC3339))
 	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +315,7 @@ func TestParseTTL_Valid(t *testing.T) {
 func TestParseTTL_Missing(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, "test.env")
-	if err := os.WriteFile(envPath, []byte("SENDER x@y.com\nRECIPIENT a@b.com\nMSGID abc123\n"), 0600); err != nil {
+	if err := os.WriteFile(envPath, []byte(`{"sender":"x@y.com","recipient":"a@b.com","msgid":"abc123"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -330,7 +331,7 @@ func TestParseTTL_Missing(t *testing.T) {
 func TestParseTTL_Invalid(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, "test.env")
-	if err := os.WriteFile(envPath, []byte("TTL not-a-date\n"), 0600); err != nil {
+	if err := os.WriteFile(envPath, []byte("not valid json"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -362,7 +363,7 @@ func TestProcessDomainDir_ExpiredEnvelopesDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	expiredTTL := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
-	envContent := "TTL " + expiredTTL + "\nSENDER bounce@example.com\nRECIPIENT alice@gmail.com\nMSGID " + msgid + "\n"
+	envContent := fmt.Sprintf(`{"ttl":"%s","sender":"bounce@example.com","recipient":"alice@gmail.com","msgid":"%s"}`, expiredTTL, msgid)
 	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
 	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
 		t.Fatal(err)
@@ -421,7 +422,7 @@ func TestProcessDomainDir_MixedBatch(t *testing.T) {
 	// Expired envelope for alice.
 	expiredTTL := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
 	aliceEnv := filepath.Join(envDir, "alice@"+msgid+".0")
-	if err := os.WriteFile(aliceEnv, []byte("TTL "+expiredTTL+"\nSENDER bounce@example.com\nRECIPIENT alice@gmail.com\nMSGID "+msgid+"\n"), 0600); err != nil {
+	if err := os.WriteFile(aliceEnv, []byte(fmt.Sprintf(`{"ttl":"%s","sender":"bounce@example.com","recipient":"alice@gmail.com","msgid":"%s"}`, expiredTTL, msgid)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-10 * time.Minute)
@@ -431,7 +432,7 @@ func TestProcessDomainDir_MixedBatch(t *testing.T) {
 
 	// Active envelope for bob (no TTL → not expired, old mtime → ready).
 	bobEnv := filepath.Join(envDir, "bob@"+msgid+".1")
-	if err := os.WriteFile(bobEnv, []byte("MSGID "+msgid+"\n"), 0600); err != nil {
+	if err := os.WriteFile(bobEnv, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chtimes(bobEnv, old, old); err != nil {
@@ -546,7 +547,7 @@ func TestCleanOrphanBodies_PreservesActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
-	if err := os.WriteFile(envFile, []byte("MSGID "+msgid+"\n"), 0600); err != nil {
+	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -676,7 +677,7 @@ func TestProcessDomainDir_ClaimedSkippedByConcurrentScan(t *testing.T) {
 
 	// Create an envelope already in .delivering state (simulating in-flight).
 	claimedFile := filepath.Join(envDir, "alice@"+msgid+".0"+deliveringSuffix)
-	if err := os.WriteFile(claimedFile, []byte("MSGID "+msgid+"\n"), 0600); err != nil {
+	if err := os.WriteFile(claimedFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-10 * time.Minute)
@@ -716,13 +717,13 @@ func TestRecoverStaleDeliveries(t *testing.T) {
 	// Create a stale .delivering file.
 	staleOriginal := filepath.Join(envDir, "alice@stale1234.0")
 	staleClaimed := staleOriginal + deliveringSuffix
-	if err := os.WriteFile(staleClaimed, []byte("MSGID stale1234\n"), 0600); err != nil {
+	if err := os.WriteFile(staleClaimed, []byte(`{"msgid":"stale1234"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 
 	// Also a normal envelope that shouldn't be touched.
 	normalEnv := filepath.Join(envDir, "bob@normal5678.0")
-	if err := os.WriteFile(normalEnv, []byte("MSGID normal5678\n"), 0600); err != nil {
+	if err := os.WriteFile(normalEnv, []byte(`{"msgid":"normal5678"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 

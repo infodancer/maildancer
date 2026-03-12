@@ -23,6 +23,26 @@ type DomainRateLimit struct {
 	Burst           int // 0 = inherit default
 }
 
+// DSNConfig controls DSN bounce message generation.
+type DSNConfig struct {
+	Enabled        bool   // whether to generate DSNs on permanent failure (default: true)
+	BounceTemplate string // path to custom template; empty = embedded default
+}
+
+// SessionManagerConfig holds connection details for the session-manager gRPC endpoint.
+type SessionManagerConfig struct {
+	Socket string // Unix domain socket path
+}
+
+// QueueManagerConfig holds all queue-manager configuration from the TOML file.
+type QueueManagerConfig struct {
+	Hostname         string
+	DomainConfigPath string // base directory for per-domain config files
+	RateLimit        RateLimitConfig
+	DSN              DSNConfig
+	SessionManager   SessionManagerConfig
+}
+
 // DefaultRateLimit returns sensible default rate limit settings.
 func DefaultRateLimit() RateLimitConfig {
 	return RateLimitConfig{
@@ -38,7 +58,20 @@ type fileConfig struct {
 }
 
 type tomlQueueManager struct {
-	RateLimit tomlRateLimit `toml:"rate-limit"`
+	Hostname         string             `toml:"hostname"`
+	DomainConfigPath string             `toml:"domain_config_path"`
+	RateLimit        tomlRateLimit      `toml:"rate-limit"`
+	DSN              tomlDSN            `toml:"dsn"`
+	SessionManager   tomlSessionManager `toml:"session-manager"`
+}
+
+type tomlSessionManager struct {
+	Socket string `toml:"socket"`
+}
+
+type tomlDSN struct {
+	Enabled        *bool  `toml:"enabled"`
+	BounceTemplate string `toml:"bounce_template"`
 }
 
 type tomlRateLimit struct {
@@ -52,11 +85,14 @@ type tomlDomainLimit struct {
 	Burst           *int `toml:"burst"`
 }
 
-// LoadRateLimit reads rate limit configuration from a shared TOML config file.
-// Returns defaults if the file does not exist or contains no
-// [queue-manager.rate-limit] section.
-func LoadRateLimit(path string) (RateLimitConfig, error) {
-	cfg := DefaultRateLimit()
+// Load reads the full queue-manager configuration from a shared TOML config
+// file. Returns defaults if the file does not exist or contains no
+// [queue-manager] section.
+func Load(path string) (QueueManagerConfig, error) {
+	cfg := QueueManagerConfig{
+		RateLimit: DefaultRateLimit(),
+		DSN:       DSNConfig{Enabled: true},
+	}
 	if path == "" {
 		return cfg, nil
 	}
@@ -74,15 +110,19 @@ func LoadRateLimit(path string) (RateLimitConfig, error) {
 		return cfg, fmt.Errorf("parsing config: %w", err)
 	}
 
+	cfg.Hostname = fc.QueueManager.Hostname
+	cfg.DomainConfigPath = fc.QueueManager.DomainConfigPath
+
+	// Rate limit.
 	rl := fc.QueueManager.RateLimit
 	if rl.MessagesPerHour != nil {
-		cfg.MessagesPerHour = *rl.MessagesPerHour
+		cfg.RateLimit.MessagesPerHour = *rl.MessagesPerHour
 	}
 	if rl.Burst != nil {
-		cfg.Burst = *rl.Burst
+		cfg.RateLimit.Burst = *rl.Burst
 	}
 	if len(rl.Domains) > 0 {
-		cfg.Domains = make(map[string]DomainRateLimit, len(rl.Domains))
+		cfg.RateLimit.Domains = make(map[string]DomainRateLimit, len(rl.Domains))
 		for domain, dl := range rl.Domains {
 			d := DomainRateLimit{}
 			if dl.MessagesPerHour != nil {
@@ -91,9 +131,27 @@ func LoadRateLimit(path string) (RateLimitConfig, error) {
 			if dl.Burst != nil {
 				d.Burst = *dl.Burst
 			}
-			cfg.Domains[domain] = d
+			cfg.RateLimit.Domains[domain] = d
 		}
 	}
 
+	// DSN.
+	dsn := fc.QueueManager.DSN
+	if dsn.Enabled != nil {
+		cfg.DSN.Enabled = *dsn.Enabled
+	}
+	cfg.DSN.BounceTemplate = dsn.BounceTemplate
+
+	// Session-manager.
+	cfg.SessionManager.Socket = fc.QueueManager.SessionManager.Socket
+
 	return cfg, nil
+}
+
+// LoadRateLimit reads rate limit configuration from a shared TOML config file.
+// Returns defaults if the file does not exist or contains no
+// [queue-manager.rate-limit] section.
+func LoadRateLimit(path string) (RateLimitConfig, error) {
+	cfg, err := Load(path)
+	return cfg.RateLimit, err
 }

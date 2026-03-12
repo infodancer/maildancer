@@ -11,10 +11,12 @@
 //	--queue            path    Root of the mail queue directory (required).
 //	--binary           path    Path to the mail-remote binary (default: mail-remote in PATH).
 //	--config           path    Shared TOML config file (passed to mail-remote as --config).
-//	--smarthost        h:port  Pass --smarthost to mail-remote for all deliveries.
-//	--smarthost-user   u       Pass --smarthost-user to mail-remote.
+//	--smarthost        h:port  Global fallback smarthost (used when no per-domain config found).
+//	--smarthost-user   u       Global fallback smarthost user.
+//	--domain-config    path    Base directory for per-domain config files (enables per-domain outbound routing).
 //	--interval         dur     How often to scan the queue (default: 1m).
 //	--message-ttl      dur     Default message TTL for backoff calculation (default: 168h).
+//	--hostname         name    Reporting MTA hostname for DSN headers (overrides TOML; default: os.Hostname).
 //	--rate-limit       n       Default messages per hour per domain; 0 = unlimited (overrides TOML).
 //	--rate-limit-burst n       Default burst per domain (overrides TOML).
 //	--once                     Scan once and exit (useful for cron / testing).
@@ -44,8 +46,10 @@ func run() error {
 	configPath := flag.String("config", "", "shared TOML config file (passed to mail-remote as --config)")
 	smarthostAddr := flag.String("smarthost", "", "SMTP smarthost address (host:port)")
 	smarthostUser := flag.String("smarthost-user", "", "SMTP AUTH username for smarthost")
+	domainConfig := flag.String("domain-config", "", "base directory for per-domain config files (enables per-domain outbound routing)")
 	interval := flag.Duration("interval", time.Minute, "queue scan interval")
 	messageTTL := flag.Duration("message-ttl", 7*24*time.Hour, "default message TTL (for backoff calculation)")
+	hostname := flag.String("hostname", "", "reporting MTA hostname for DSN headers (overrides TOML)")
 	rateLimitMPH := flag.Int("rate-limit", 0, "default messages per hour per domain; 0 = unlimited (overrides TOML)")
 	rateLimitBurst := flag.Int("rate-limit-burst", 0, "default burst per domain (overrides TOML)")
 	once := flag.Bool("once", false, "scan once and exit")
@@ -55,39 +59,65 @@ func run() error {
 		return fmt.Errorf("--queue is required")
 	}
 
-	// Load rate limit config from the shared TOML file.
-	rlCfg, err := config.LoadRateLimit(*configPath)
+	// Load config from the shared TOML file.
+	fileCfg, err := config.Load(*configPath)
 	if err != nil {
-		return fmt.Errorf("loading rate limit config: %w", err)
+		return fmt.Errorf("loading config: %w", err)
 	}
 
 	// CLI flags override TOML values when explicitly set.
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
+		case "hostname":
+			fileCfg.Hostname = *hostname
 		case "rate-limit":
-			rlCfg.MessagesPerHour = *rateLimitMPH
+			fileCfg.RateLimit.MessagesPerHour = *rateLimitMPH
 		case "rate-limit-burst":
-			rlCfg.Burst = *rateLimitBurst
+			fileCfg.RateLimit.Burst = *rateLimitBurst
+		case "domain-config":
+			fileCfg.DomainConfigPath = *domainConfig
 		}
 	})
 
-	slog.Info("rate limit config",
-		"messages_per_hour", rlCfg.MessagesPerHour,
-		"burst", rlCfg.Burst,
-		"domain_overrides", len(rlCfg.Domains))
-
-	cfg := scheduler.Config{
-		QueueDir:      *queueDir,
-		Binary:        *binary,
-		ConfigPath:    *configPath,
-		SmarthostAddr: *smarthostAddr,
-		SmarthostUser: *smarthostUser,
-		Interval:      *interval,
-		MessageTTL:    *messageTTL,
-		RateLimit:     rlCfg,
+	// Fall back to os.Hostname if not configured.
+	if fileCfg.Hostname == "" {
+		h, err := os.Hostname()
+		if err != nil {
+			slog.Warn("could not determine hostname", "error", err)
+			h = "localhost"
+		}
+		fileCfg.Hostname = h
 	}
 
-	sched := scheduler.New(cfg)
+	slog.Info("queue-manager config",
+		"hostname", fileCfg.Hostname,
+		"domain_config_path", fileCfg.DomainConfigPath,
+		"dsn_enabled", fileCfg.DSN.Enabled,
+		"session_manager_socket", fileCfg.SessionManager.Socket,
+		"rate_limit_mph", fileCfg.RateLimit.MessagesPerHour,
+		"rate_limit_burst", fileCfg.RateLimit.Burst,
+		"rate_limit_domains", len(fileCfg.RateLimit.Domains))
+
+	cfg := scheduler.Config{
+		QueueDir:         *queueDir,
+		Binary:           *binary,
+		ConfigPath:       *configPath,
+		SmarthostAddr:    *smarthostAddr,
+		SmarthostUser:    *smarthostUser,
+		DomainConfigPath: fileCfg.DomainConfigPath,
+		Interval:         *interval,
+		MessageTTL:       *messageTTL,
+		Hostname:         fileCfg.Hostname,
+		RateLimit:        fileCfg.RateLimit,
+		DSN:              fileCfg.DSN,
+		SessionManager:   fileCfg.SessionManager,
+	}
+
+	sched, err := scheduler.New(cfg)
+	if err != nil {
+		return fmt.Errorf("creating scheduler: %w", err)
+	}
+	defer func() { _ = sched.Close() }()
 
 	if *once {
 		return sched.RunOnce()

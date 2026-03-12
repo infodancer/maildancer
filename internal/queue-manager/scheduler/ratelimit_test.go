@@ -261,7 +261,7 @@ func TestProcessDomainDir_RateLimited(t *testing.T) {
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
 
 	// Rate limit: burst=1, so a group of 2 envelopes should be deferred.
-	s := New(Config{
+	s := mustNew(t, Config{
 		QueueDir: dir,
 		Binary:   fakeBin,
 		Interval: time.Minute,
@@ -319,7 +319,7 @@ func TestProcessDomainDir_RateLimitAllowsSmallBatch(t *testing.T) {
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
 
 	// Rate limit: burst=1, group size=1 → should be allowed.
-	s := New(Config{
+	s := mustNew(t, Config{
 		QueueDir: dir,
 		Binary:   fakeBin,
 		Interval: time.Minute,
@@ -376,7 +376,7 @@ func TestProcessDomainDir_RateLimitPerDomainUnlimited(t *testing.T) {
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
 
 	// Default burst=1 (would block), but gmail.com is unlimited.
-	s := New(Config{
+	s := mustNew(t, Config{
 		QueueDir: dir,
 		Binary:   fakeBin,
 		Interval: time.Minute,

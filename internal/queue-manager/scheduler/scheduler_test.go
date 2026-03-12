@@ -1,14 +1,32 @@
 package scheduler
 
 import (
+	"bytes"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	"github.com/infodancer/maildancer/internal/queue-manager/config"
+	"github.com/infodancer/maildancer/internal/queue-manager/delivery"
+	"google.golang.org/grpc"
 )
+
+// mustNew is a test helper that creates a Scheduler and fails the test on error.
+func mustNew(t *testing.T, cfg Config) *Scheduler {
+	t.Helper()
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
 
 // --- extractMsgID ---
 
@@ -56,7 +74,7 @@ func TestIsReady_OldEnough(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(Config{QueueDir: t.TempDir(), Binary: "mail-remote", Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: t.TempDir(), Binary: "mail-remote", Interval: time.Minute})
 	if !s.isReady(f.Name(), time.Time{}) {
 		t.Error("expected isReady=true for file 10 minutes old")
 	}
@@ -70,14 +88,14 @@ func TestIsReady_TooRecent(t *testing.T) {
 	_ = f.Close()
 
 	// mtime is effectively now — not ready.
-	s := New(Config{QueueDir: t.TempDir(), Binary: "mail-remote", Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: t.TempDir(), Binary: "mail-remote", Interval: time.Minute})
 	if s.isReady(f.Name(), time.Time{}) {
 		t.Error("expected isReady=false for just-created file")
 	}
 }
 
 func TestIsReady_MissingFile(t *testing.T) {
-	s := New(Config{QueueDir: t.TempDir(), Binary: "mail-remote", Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: t.TempDir(), Binary: "mail-remote", Interval: time.Minute})
 	if s.isReady("/nonexistent/path/file", time.Time{}) {
 		t.Error("expected isReady=false for missing file")
 	}
@@ -86,7 +104,7 @@ func TestIsReady_MissingFile(t *testing.T) {
 func TestIsReady_BackoffIncreasesWithAge(t *testing.T) {
 	dir := t.TempDir()
 	msgTTL := 7 * 24 * time.Hour
-	s := New(Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute, MessageTTL: msgTTL})
+	s := mustNew(t, Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute, MessageTTL: msgTTL})
 
 	// Create an envelope file with mtime 6 minutes ago.
 	f, err := os.CreateTemp(dir, "env-*")
@@ -169,7 +187,7 @@ func TestResolveBody(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
 	got, err := s.resolveBody("ignored-env-path", msgid)
 	if err != nil {
 		t.Fatalf("resolveBody: %v", err)
@@ -181,7 +199,7 @@ func TestResolveBody(t *testing.T) {
 
 func TestResolveBody_Missing(t *testing.T) {
 	dir := t.TempDir()
-	s := New(Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
 	_, err := s.resolveBody("ignored", "nonexistent123")
 	if err == nil {
 		t.Error("expected error for missing body")
@@ -232,7 +250,7 @@ func TestProcessDomainDir_InvokesMailRemote(t *testing.T) {
 	recordFile := filepath.Join(t.TempDir(), "args.txt")
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
 
-	s := New(Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
 	if err := s.processDomainDir(envDir); err != nil {
 		t.Fatalf("processDomainDir: %v", err)
 	}
@@ -282,7 +300,7 @@ func TestProcessDomainDir_SkipsNotReady(t *testing.T) {
 	recordFile := filepath.Join(t.TempDir(), "args.txt")
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
 
-	s := New(Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
 	if err := s.processDomainDir(envDir); err != nil {
 		t.Fatalf("processDomainDir: %v", err)
 	}
@@ -292,52 +310,58 @@ func TestProcessDomainDir_SkipsNotReady(t *testing.T) {
 	}
 }
 
-// --- parseTTL ---
+// --- parseEnvelope ---
 
-func TestParseTTL_Valid(t *testing.T) {
+func TestParseEnvelope_Valid(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, "test.env")
 	ttl := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
-	content := fmt.Sprintf(`{"ttl":"%s","sender":"x@y.com","recipient":"a@b.com","msgid":"abc123"}`, ttl.Format(time.RFC3339))
+	content := fmt.Sprintf(`{"ttl":"%s","sender":"x@y.com","recipient":"a@b.com","msgid":"abc123","origin":"user@example.com"}`, ttl.Format(time.RFC3339))
 	if err := os.WriteFile(envPath, []byte(content), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := parseTTL(envPath)
+	env, err := parseEnvelope(envPath)
 	if err != nil {
-		t.Fatalf("parseTTL: %v", err)
+		t.Fatalf("parseEnvelope: %v", err)
 	}
-	if !got.Equal(ttl) {
-		t.Errorf("parseTTL = %v, want %v", got, ttl)
+	if !env.TTL.Equal(ttl) {
+		t.Errorf("TTL = %v, want %v", env.TTL, ttl)
+	}
+	if env.Origin != "user@example.com" {
+		t.Errorf("Origin = %q, want %q", env.Origin, "user@example.com")
+	}
+	if env.Recipient != "a@b.com" {
+		t.Errorf("Recipient = %q, want %q", env.Recipient, "a@b.com")
 	}
 }
 
-func TestParseTTL_Missing(t *testing.T) {
+func TestParseEnvelope_MissingTTL(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, "test.env")
 	if err := os.WriteFile(envPath, []byte(`{"sender":"x@y.com","recipient":"a@b.com","msgid":"abc123"}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := parseTTL(envPath)
+	env, err := parseEnvelope(envPath)
 	if err != nil {
-		t.Fatalf("parseTTL: %v", err)
+		t.Fatalf("parseEnvelope: %v", err)
 	}
-	if !got.IsZero() {
-		t.Errorf("expected zero time for missing TTL, got %v", got)
+	if !env.TTL.IsZero() {
+		t.Errorf("expected zero TTL for missing field, got %v", env.TTL)
 	}
 }
 
-func TestParseTTL_Invalid(t *testing.T) {
+func TestParseEnvelope_Invalid(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, "test.env")
 	if err := os.WriteFile(envPath, []byte("not valid json"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err := parseTTL(envPath)
+	_, err := parseEnvelope(envPath)
 	if err == nil {
-		t.Error("expected error for invalid TTL")
+		t.Error("expected error for invalid JSON")
 	}
 }
 
@@ -377,7 +401,7 @@ func TestProcessDomainDir_ExpiredEnvelopesDeleted(t *testing.T) {
 	recordFile := filepath.Join(t.TempDir(), "args.txt")
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
 
-	s := New(Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
 	if err := s.processDomainDir(envDir); err != nil {
 		t.Fatalf("processDomainDir: %v", err)
 	}
@@ -442,7 +466,7 @@ func TestProcessDomainDir_MixedBatch(t *testing.T) {
 	recordFile := filepath.Join(t.TempDir(), "args.txt")
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
 
-	s := New(Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
 	if err := s.processDomainDir(envDir); err != nil {
 		t.Fatalf("processDomainDir: %v", err)
 	}
@@ -519,7 +543,7 @@ func TestCleanOrphanBodies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
 	s.cleanOrphanBodies(envDir)
 
 	if _, err := os.Stat(bodyPath); !os.IsNotExist(err) {
@@ -551,7 +575,7 @@ func TestCleanOrphanBodies_PreservesActive(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
 	s.cleanOrphanBodies(envDir)
 
 	if _, err := os.Stat(bodyPath); os.IsNotExist(err) {
@@ -562,7 +586,7 @@ func TestCleanOrphanBodies_PreservesActive(t *testing.T) {
 // --- RunOnce (empty queue) ---
 
 func TestRunOnce_EmptyQueue(t *testing.T) {
-	s := New(Config{
+	s := mustNew(t, Config{
 		QueueDir: t.TempDir(),
 		Binary:   "mail-remote",
 		Interval: time.Minute,
@@ -689,7 +713,7 @@ func TestProcessDomainDir_ClaimedSkippedByConcurrentScan(t *testing.T) {
 	recordFile := filepath.Join(t.TempDir(), "args.txt")
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
 
-	s := New(Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
 	// processDomainDir directly — no recovery pass, simulating concurrent scan.
 	if err := s.processDomainDir(envDir); err != nil {
 		t.Fatalf("processDomainDir: %v", err)
@@ -727,7 +751,7 @@ func TestRecoverStaleDeliveries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := New(Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
+	s := mustNew(t, Config{QueueDir: dir, Binary: "mail-remote", Interval: time.Minute})
 	s.recoverStaleDeliveries(filepath.Join(dir, "env"))
 
 	// Stale .delivering should be renamed back to original.
@@ -767,10 +791,14 @@ type result struct {
 }
 
 func main() {
-	// Record args to file for test assertions.
+	// Record args and selected env vars to file for test assertions.
 	recordFile := os.Getenv("QUEUE_MGR_RECORD_FILE")
 	if recordFile != "" {
-		args := strings.Join(os.Args[1:], "\n") + "\n---\n"
+		args := strings.Join(os.Args[1:], "\n")
+		if pw := os.Getenv("MAIL_REMOTE_PASSWORD"); pw != "" {
+			args += "\nENV:MAIL_REMOTE_PASSWORD=" + pw
+		}
+		args += "\n---\n"
 		f, _ := os.OpenFile(recordFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if f != nil {
 			_, _ = f.WriteString(args)
@@ -806,4 +834,733 @@ func main() {
 		t.Fatalf("build fake mail-remote: %v", err)
 	}
 	return binPath
+}
+
+// buildFakeMailRemotePermFail compiles a fake mail-remote that reports all
+// envelopes as perm_fail with a 550 SMTP code and exits with code 69.
+func buildFakeMailRemotePermFail(t *testing.T) string {
+	t.Helper()
+
+	src := `package main
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+)
+
+type result struct {
+	Envelope   string ` + "`json:\"envelope\"`" + `
+	Status     string ` + "`json:\"status\"`" + `
+	SMTPCode   int    ` + "`json:\"smtp_code\"`" + `
+	Diagnostic string ` + "`json:\"diagnostic\"`" + `
+}
+
+func main() {
+	var results []result
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "--") {
+			continue
+		}
+		if strings.Contains(arg, ".delivering") {
+			results = append(results, result{
+				Envelope:   arg,
+				Status:     "perm_fail",
+				SMTPCode:   550,
+				Diagnostic: "550 5.1.1 The email account does not exist.",
+			})
+			// Delete the envelope (mail-remote deletes on perm_fail).
+			_ = os.Remove(arg)
+		}
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(results)
+	os.Exit(69)
+}
+`
+	dir := t.TempDir()
+	srcFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(srcFile, []byte(src), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	binPath := filepath.Join(dir, "fake-mail-remote-permfail")
+	cmd := exec.Command("go", "build", "-o", binPath, srcFile)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("build fake mail-remote-permfail: %v", err)
+	}
+	return binPath
+}
+
+// mockDeliveryServer is a mock DeliveryService for testing DSN delivery.
+type mockDeliveryServer struct {
+	pb.UnimplementedDeliveryServiceServer
+	lastMeta *pb.DeliverMetadata
+	lastBody []byte
+}
+
+func (m *mockDeliveryServer) Deliver(stream pb.DeliveryService_DeliverServer) error {
+	var body bytes.Buffer
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			m.lastBody = body.Bytes()
+			return stream.SendAndClose(&pb.DeliverResponse{
+				Result: pb.DeliverResult_DELIVER_RESULT_DELIVERED,
+			})
+		}
+		if err != nil {
+			return err
+		}
+		switch p := req.Payload.(type) {
+		case *pb.DeliverRequest_Metadata:
+			m.lastMeta = p.Metadata
+		case *pb.DeliverRequest_Data:
+			body.Write(p.Data)
+		}
+	}
+}
+
+// --- DSN integration tests ---
+
+func TestProcessDomainDir_DSNOnPermFail(t *testing.T) {
+	fakeBin := buildFakeMailRemotePermFail(t)
+	dir := t.TempDir()
+	msgid := "dsntest1234"
+
+	// Body file with headers.
+	bodyDir := filepath.Join(dir, "msg", "com", "example")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	bodyContent := "From: user@example.com\r\nTo: alice@gmail.com\r\nSubject: Test\r\nMessage-ID: <" + msgid + "@example.com>\r\n\r\nBody text.\r\n"
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte(bodyContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Envelope with origin field.
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ttl := time.Now().Add(24 * time.Hour).UTC()
+	created := time.Now().Add(-1 * time.Hour).UTC()
+	envContent := fmt.Sprintf(`{"ttl":"%s","created":"%s","sender":"user@example.com","recipient":"alice@gmail.com","msgid":"%s","origin":"user@example.com"}`,
+		ttl.Format(time.RFC3339), created.Format(time.RFC3339), msgid)
+	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start mock delivery server.
+	mock := &mockDeliveryServer{}
+	lis, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterDeliveryServiceServer(srv, mock)
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	// Create delivery client pointing to mock server.
+	cl, err := delivery.NewClient(lis.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cl.Close() }()
+
+	// Create scheduler with DSN enabled and inject the delivery client.
+	s := mustNew(t, Config{
+		QueueDir: dir,
+		Binary:   fakeBin,
+		Interval: time.Minute,
+		Hostname: "mail.example.com",
+		DSN:      config.DSNConfig{Enabled: true},
+	})
+	s.deliverer = cl
+
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	// Verify the mock delivery server received the DSN.
+	if mock.lastMeta == nil {
+		t.Fatal("expected DSN to be delivered to mock server")
+	}
+	if mock.lastMeta.Sender != "" {
+		t.Errorf("DSN sender should be empty (null sender), got %q", mock.lastMeta.Sender)
+	}
+	if mock.lastMeta.Recipient != "user@example.com" {
+		t.Errorf("DSN recipient = %q, want user@example.com", mock.lastMeta.Recipient)
+	}
+
+	// Verify the DSN body contains expected content.
+	body := string(mock.lastBody)
+	if !strings.Contains(body, "multipart/report") {
+		t.Error("DSN body should contain multipart/report content type")
+	}
+	if !strings.Contains(body, "alice@gmail.com") {
+		t.Error("DSN body should reference the failed recipient")
+	}
+	if !strings.Contains(body, "5.1.1") {
+		t.Error("DSN body should contain enhanced status code from diagnostic")
+	}
+	if !strings.Contains(body, "MAILER-DAEMON@mail.example.com") {
+		t.Error("DSN body should be from MAILER-DAEMON@hostname")
+	}
+	// Mid-queue perm_fail: ExpiredAt should not be set (message hasn't expired).
+	if strings.Contains(body, "TTL expired") {
+		t.Error("mid-queue perm_fail DSN should not mention TTL expiry")
+	}
+}
+
+func TestProcessDomainDir_DSNSkippedWhenDisabled(t *testing.T) {
+	fakeBin := buildFakeMailRemotePermFail(t)
+	dir := t.TempDir()
+	msgid := "nodsntest"
+
+	bodyDir := filepath.Join(dir, "msg", "com", "example")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("From: a@b.com\r\n\r\nbody"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	envContent := fmt.Sprintf(`{"msgid":"%s","origin":"user@example.com","recipient":"alice@gmail.com"}`, msgid)
+	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// Start mock delivery server.
+	mock := &mockDeliveryServer{}
+	lis, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterDeliveryServiceServer(srv, mock)
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	cl, err := delivery.NewClient(lis.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cl.Close() }()
+
+	// DSN disabled — should not deliver.
+	s := mustNew(t, Config{
+		QueueDir: dir,
+		Binary:   fakeBin,
+		Interval: time.Minute,
+		Hostname: "mail.example.com",
+		DSN:      config.DSNConfig{Enabled: false},
+	})
+	s.deliverer = cl
+
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	if mock.lastMeta != nil {
+		t.Error("expected no DSN delivery when DSN is disabled")
+	}
+}
+
+func TestProcessDomainDir_DSNOnExpiredTempFail(t *testing.T) {
+	// Fake mail-remote that returns temp_fail (but envelope is expired, so
+	// the TTL expiry itself is a permanent failure deserving a DSN).
+	src := `package main
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+)
+
+type result struct {
+	Envelope   string ` + "`json:\"envelope\"`" + `
+	Status     string ` + "`json:\"status\"`" + `
+	SMTPCode   int    ` + "`json:\"smtp_code\"`" + `
+	Diagnostic string ` + "`json:\"diagnostic\"`" + `
+}
+
+func main() {
+	var results []result
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "--") {
+			continue
+		}
+		if strings.Contains(arg, ".delivering") {
+			results = append(results, result{
+				Envelope:   arg,
+				Status:     "temp_fail",
+				SMTPCode:   421,
+				Diagnostic: "421 4.7.0 Try again later",
+			})
+		}
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(results)
+	os.Exit(75)
+}
+`
+	buildDir := t.TempDir()
+	srcFile := filepath.Join(buildDir, "main.go")
+	if err := os.WriteFile(srcFile, []byte(src), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binPath := filepath.Join(buildDir, "fake-mr-tempfail")
+	cmd := exec.Command("go", "build", "-o", binPath, srcFile)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("build fake mail-remote-tempfail: %v", err)
+	}
+
+	dir := t.TempDir()
+	msgid := "expiredtempfail"
+
+	bodyDir := filepath.Join(dir, "msg", "com", "example")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("From: a@b.com\r\n\r\nbody"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// TTL in the past — expired.
+	ttl := time.Now().Add(-1 * time.Hour).UTC()
+	created := time.Now().Add(-169 * time.Hour).UTC()
+	envContent := fmt.Sprintf(`{"ttl":"%s","created":"%s","msgid":"%s","origin":"sender@example.com","recipient":"alice@gmail.com"}`,
+		ttl.Format(time.RFC3339), created.Format(time.RFC3339), msgid)
+	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockDeliveryServer{}
+	lis, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterDeliveryServiceServer(srv, mock)
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	cl, err := delivery.NewClient(lis.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cl.Close() }()
+
+	s := mustNew(t, Config{
+		QueueDir: dir,
+		Binary:   binPath,
+		Interval: time.Minute,
+		Hostname: "mail.example.com",
+		DSN:      config.DSNConfig{Enabled: true},
+	})
+	s.deliverer = cl
+
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	// Even though the SMTP result was temp_fail, the envelope is expired,
+	// so a DSN should be generated (TTL expiry = permanent failure).
+	if mock.lastMeta == nil {
+		t.Fatal("expected DSN for expired envelope with temp_fail")
+	}
+	if mock.lastMeta.Recipient != "sender@example.com" {
+		t.Errorf("DSN recipient = %q, want sender@example.com (origin)", mock.lastMeta.Recipient)
+	}
+
+	// Expired envelope: the DSN should mention TTL expiry.
+	body := string(mock.lastBody)
+	if !strings.Contains(body, "TTL expired") {
+		t.Error("expired envelope DSN should mention TTL expiry")
+	}
+
+	// Envelope should be deleted (expired).
+	if _, err := os.Stat(envFile); !os.IsNotExist(err) {
+		t.Error("expired envelope should be deleted")
+	}
+}
+
+func TestProcessDomainDir_DSNMissingOrigin(t *testing.T) {
+	fakeBin := buildFakeMailRemotePermFail(t)
+	dir := t.TempDir()
+	msgid := "noorigin"
+
+	bodyDir := filepath.Join(dir, "msg", "com", "example")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("From: a@b.com\r\n\r\nbody"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	// No origin field — pre-migration envelope.
+	envContent := fmt.Sprintf(`{"msgid":"%s","recipient":"alice@gmail.com"}`, msgid)
+	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := &mockDeliveryServer{}
+	lis, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterDeliveryServiceServer(srv, mock)
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+
+	cl, err := delivery.NewClient(lis.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cl.Close() }()
+
+	s := mustNew(t, Config{
+		QueueDir: dir,
+		Binary:   fakeBin,
+		Interval: time.Minute,
+		Hostname: "mail.example.com",
+		DSN:      config.DSNConfig{Enabled: true},
+	})
+	s.deliverer = cl
+
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	// No DSN should be delivered (missing origin).
+	if mock.lastMeta != nil {
+		t.Error("expected no DSN delivery when origin is missing")
+	}
+}
+
+// --- outbound transport routing integration tests ---
+
+// TestProcessDomainDir_SmarthostFromDomainConfig verifies that per-domain
+// outbound config passes --smarthost, --smarthost-user, and MAIL_REMOTE_PASSWORD
+// to mail-remote.
+func TestProcessDomainDir_SmarthostFromDomainConfig(t *testing.T) {
+	fakeBin := buildFakeMailRemote(t)
+	dir := t.TempDir()
+	msgid := "outbound1234"
+
+	// Body file under msg/com/sender/ (sender domain = sender.com).
+	bodyDir := filepath.Join(dir, "msg", "com", "sender")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("body data"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Envelope for alice@gmail.com (recipient domain).
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// Domain config for sender.com with smarthost.
+	domainBase := t.TempDir()
+	senderDir := filepath.Join(domainBase, "sender.com")
+	if err := os.MkdirAll(senderDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(senderDir, "config.toml"), []byte(`
+[outbound]
+strategy = "smarthost"
+smarthost = "ses.us-east-1.amazonaws.com:587"
+smarthost_user = "AKIAEXAMPLE"
+password_file = "ses-password"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(senderDir, "ses-password"), []byte("super-secret-pw\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	recordFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
+
+	s := mustNew(t, Config{
+		QueueDir:         dir,
+		Binary:           fakeBin,
+		Interval:         time.Minute,
+		DomainConfigPath: domainBase,
+	})
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	data, err := os.ReadFile(recordFile)
+	if err != nil {
+		t.Fatalf("reading record file: %v", err)
+	}
+	args := string(data)
+
+	if !strings.Contains(args, "--smarthost\nses.us-east-1.amazonaws.com:587") {
+		t.Errorf("expected --smarthost ses.us-east-1.amazonaws.com:587 in args; got:\n%s", args)
+	}
+	if !strings.Contains(args, "--smarthost-user\nAKIAEXAMPLE") {
+		t.Errorf("expected --smarthost-user AKIAEXAMPLE in args; got:\n%s", args)
+	}
+	if !strings.Contains(args, "ENV:MAIL_REMOTE_PASSWORD=super-secret-pw") {
+		t.Errorf("expected MAIL_REMOTE_PASSWORD env var in args; got:\n%s", args)
+	}
+}
+
+// TestProcessDomainDir_DirectDeliveryFromDomainConfig verifies that a domain
+// with strategy = "direct" does NOT pass --smarthost args.
+func TestProcessDomainDir_DirectDeliveryFromDomainConfig(t *testing.T) {
+	fakeBin := buildFakeMailRemote(t)
+	dir := t.TempDir()
+	msgid := "direct5678"
+
+	bodyDir := filepath.Join(dir, "msg", "net", "infodancer")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(envDir, "bob@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// Domain config for infodancer.net with strategy = "direct".
+	domainBase := t.TempDir()
+	senderDir := filepath.Join(domainBase, "infodancer.net")
+	if err := os.MkdirAll(senderDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(senderDir, "config.toml"), []byte(`
+[outbound]
+strategy = "direct"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	recordFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
+
+	s := mustNew(t, Config{
+		QueueDir:         dir,
+		Binary:           fakeBin,
+		Interval:         time.Minute,
+		DomainConfigPath: domainBase,
+		SmarthostAddr:    "global-relay:587", // should be ignored
+		SmarthostUser:    "global-user",      // should be ignored
+	})
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	data, err := os.ReadFile(recordFile)
+	if err != nil {
+		t.Fatalf("reading record file: %v", err)
+	}
+	args := string(data)
+
+	if strings.Contains(args, "--smarthost") {
+		t.Errorf("expected NO --smarthost for direct delivery; got:\n%s", args)
+	}
+	if strings.Contains(args, "MAIL_REMOTE_PASSWORD") {
+		t.Errorf("expected NO MAIL_REMOTE_PASSWORD for direct delivery; got:\n%s", args)
+	}
+}
+
+// TestProcessDomainDir_FallbackToGlobalSmarthost verifies that when no domain
+// config is found, the global smarthost CLI flags are used.
+func TestProcessDomainDir_FallbackToGlobalSmarthost(t *testing.T) {
+	fakeBin := buildFakeMailRemote(t)
+	dir := t.TempDir()
+	msgid := "fallback9999"
+
+	bodyDir := filepath.Join(dir, "msg", "com", "nocfg")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(envDir, "carol@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// Domain config base exists but has no config for nocfg.com.
+	domainBase := t.TempDir()
+
+	recordFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
+
+	s := mustNew(t, Config{
+		QueueDir:         dir,
+		Binary:           fakeBin,
+		Interval:         time.Minute,
+		DomainConfigPath: domainBase,
+		SmarthostAddr:    "global-relay:587",
+		SmarthostUser:    "global-user",
+	})
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	data, err := os.ReadFile(recordFile)
+	if err != nil {
+		t.Fatalf("reading record file: %v", err)
+	}
+	args := string(data)
+
+	if !strings.Contains(args, "--smarthost\nglobal-relay:587") {
+		t.Errorf("expected global --smarthost in args; got:\n%s", args)
+	}
+	if !strings.Contains(args, "--smarthost-user\nglobal-user") {
+		t.Errorf("expected global --smarthost-user in args; got:\n%s", args)
+	}
+}
+
+// TestProcessDomainDir_SystemDefaultOutbound verifies that the system-wide
+// default [outbound] config is used when no per-domain override exists.
+func TestProcessDomainDir_SystemDefaultOutbound(t *testing.T) {
+	fakeBin := buildFakeMailRemote(t)
+	dir := t.TempDir()
+	msgid := "sysdefault42"
+
+	bodyDir := filepath.Join(dir, "msg", "com", "newdomain")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(envDir, "dave@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// System default config with smarthost (no per-domain override).
+	// The password_file is relative to the sender domain dir, so we
+	// create the sender domain dir with the password file even though
+	// there's no per-domain config.toml override.
+	domainBase := t.TempDir()
+	if err := os.WriteFile(filepath.Join(domainBase, "config.toml"), []byte(`
+[outbound]
+strategy = "smarthost"
+smarthost = "system-relay:587"
+smarthost_user = "system-user"
+password_file = "system-pass"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	senderDir := filepath.Join(domainBase, "newdomain.com")
+	if err := os.MkdirAll(senderDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(senderDir, "system-pass"), []byte("sys-pw\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	recordFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
+
+	s := mustNew(t, Config{
+		QueueDir:         dir,
+		Binary:           fakeBin,
+		Interval:         time.Minute,
+		DomainConfigPath: domainBase,
+	})
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	data, err := os.ReadFile(recordFile)
+	if err != nil {
+		t.Fatalf("reading record file: %v", err)
+	}
+	args := string(data)
+
+	if !strings.Contains(args, "--smarthost\nsystem-relay:587") {
+		t.Errorf("expected system default --smarthost in args; got:\n%s", args)
+	}
+	if !strings.Contains(args, "--smarthost-user\nsystem-user") {
+		t.Errorf("expected system default --smarthost-user in args; got:\n%s", args)
+	}
+	if !strings.Contains(args, "ENV:MAIL_REMOTE_PASSWORD=sys-pw") {
+		t.Errorf("expected system default MAIL_REMOTE_PASSWORD in args; got:\n%s", args)
+	}
 }

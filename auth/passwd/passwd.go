@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -69,6 +70,22 @@ func NewAgent(passwdPath, keyDir string) (*Agent, error) {
 	return a, nil
 }
 
+// warnInsecurePerms logs a warning if a sensitive file is group-writable or
+// world-readable. Best-effort: errors from Stat are silently ignored.
+func warnInsecurePerms(path string) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	perm := fi.Mode().Perm()
+	if perm&0o027 != 0 {
+		slog.Warn("sensitive file has overly permissive permissions",
+			"path", path,
+			"mode", fmt.Sprintf("%04o", perm),
+			"recommended", "0600 or 0640")
+	}
+}
+
 // loadPasswd reads and parses the passwd file.
 // A missing passwd file is treated as empty (no users), not an error.
 func (a *Agent) loadPasswd() error {
@@ -80,6 +97,8 @@ func (a *Agent) loadPasswd() error {
 		return fmt.Errorf("open passwd file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
+
+	warnInsecurePerms(a.passwdPath)
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -280,6 +299,7 @@ func (a *Agent) loadKeys(username, password string) (publicKey, privateKey []byt
 
 	// Load encrypted private key
 	privKeyPath := filepath.Join(a.keyDir, username+privateKeyExt)
+	warnInsecurePerms(privKeyPath)
 	encryptedKey, err := os.ReadFile(privKeyPath)
 	if err != nil {
 		if os.IsNotExist(err) {

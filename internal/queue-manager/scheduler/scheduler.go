@@ -2,7 +2,7 @@
 package scheduler
 
 import (
-	"bufio"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/infodancer/maildancer/internal/queue-manager/config"
 )
 
 // Config holds queue-manager runtime configuration.
@@ -21,17 +23,22 @@ type Config struct {
 	SmarthostAddr string // legacy; use ConfigPath instead when possible
 	SmarthostUser string // legacy; use ConfigPath instead when possible
 	Interval      time.Duration
-	MessageTTL    time.Duration // default message TTL; used to compute message age for backoff
+	MessageTTL    time.Duration          // default message TTL; used to compute message age for backoff
+	RateLimit     config.RateLimitConfig // per-domain delivery rate limiting
 }
 
 // Scheduler scans the queue and invokes mail-remote for ready envelopes.
 type Scheduler struct {
-	cfg Config
+	cfg     Config
+	limiter *domainLimiter
 }
 
 // New creates a Scheduler with the given config.
 func New(cfg Config) *Scheduler {
-	return &Scheduler{cfg: cfg}
+	return &Scheduler{
+		cfg:     cfg,
+		limiter: newDomainLimiter(cfg.RateLimit),
+	}
 }
 
 // Run loops indefinitely, scanning the queue every cfg.Interval.
@@ -108,7 +115,16 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 		}
 	}
 
+	fqdn := domainFromPath(domainPath)
+
 	for msgid, entries := range byMsgID {
+		// Check per-domain rate limit before processing this group.
+		if s.limiter != nil && !s.limiter.allow(fqdn, len(entries)) {
+			slog.Info("rate limited, deferring delivery",
+				"domain", fqdn, "msgid", msgid, "envelopes", len(entries))
+			continue
+		}
+
 		bodyPath, err := s.resolveBody(entries[0].path, msgid)
 		if err != nil {
 			slog.Warn("could not resolve body", "msgid", msgid, "error", err)
@@ -299,27 +315,25 @@ func extractMsgID(name string) (string, bool) {
 	return rest[:dot], true
 }
 
-// parseTTL reads the TTL field from an envelope file without a full parse.
-// Returns zero time if the TTL line is missing or unparseable.
+// queueEnvelope is the minimal JSON envelope struct needed by queue-manager.
+// Only TTL is required for scheduling; additional fields will be used by DSN
+// generation when implemented.
+type queueEnvelope struct {
+	TTL time.Time `json:"ttl"`
+}
+
+// parseTTL reads the TTL field from a JSON envelope file.
+// Returns zero time if the TTL field is missing.
 func parseTTL(envPath string) (time.Time, error) {
-	f, err := os.Open(envPath)
+	data, err := os.ReadFile(envPath)
 	if err != nil {
 		return time.Time{}, err
 	}
-	defer func() { _ = f.Close() }()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "TTL ") {
-			t, err := time.Parse(time.RFC3339, strings.TrimSpace(line[4:]))
-			if err != nil {
-				return time.Time{}, fmt.Errorf("invalid TTL in %s: %w", envPath, err)
-			}
-			return t, nil
-		}
+	var env queueEnvelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		return time.Time{}, fmt.Errorf("invalid envelope %s: %w", envPath, err)
 	}
-	return time.Time{}, nil
+	return env.TTL, nil
 }
 
 // cleanOrphanBodies removes body files under msg/ that have no remaining

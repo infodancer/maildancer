@@ -196,18 +196,18 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 		info := s.messages[idx]
 		srcUID := imap.UID(idx + 1)
 
+		// Trigger rspamd learn when crossing the Junk boundary.
+		// This must happen before the move so the message can be read from
+		// the source folder.
+		if s.learner != nil && (isJunkSrc || isJunkDest) && isJunkSrc != isJunkDest {
+			s.triggerLearn(ctx, srcFolder, info.UID, isJunkDest)
+		}
+
 		if hasMover {
-			// grpcStore handles MOVE atomically, including rspamd learning.
 			if _, err := mv.MoveMessage(ctx, s.mailbox, srcFolder, info.UID, dest); err != nil {
 				return err
 			}
 		} else {
-			// Fallback: Copy + Delete. Trigger direct rspamd learn when
-			// crossing the Junk boundary and a learner is configured.
-			if s.learner != nil && (isJunkSrc || isJunkDest) && isJunkSrc != isJunkDest {
-				s.triggerLearn(ctx, srcFolder, info.UID, isJunkDest)
-			}
-
 			if _, err := s.folderStore.CopyMessage(ctx, s.mailbox, srcFolder, info.UID, dest); err != nil {
 				return err
 			}

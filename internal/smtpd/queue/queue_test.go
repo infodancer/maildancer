@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -84,22 +85,32 @@ func TestWriteCreatesFiles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read envelope %s: %v", found, err)
 		}
-		env := string(envContent)
-		// MSGID field must be full RFC 5322 form: hex@hostname
-		checkEnvelopeField(t, env, "MSGID", wantMsgID)
-		checkEnvelopeField(t, env, "RECIPIENT", rcpt)
-
-		wantSender := "bounces+" + rcptLocal + "=" + rcptDomain + "@mail.example.com"
-		checkEnvelopeField(t, env, "SENDER", wantSender)
-
-		// TTL must parse as a future RFC3339 timestamp.
-		ttlLine := extractField(env, "TTL")
-		ttl, err := time.Parse(time.RFC3339, ttlLine)
-		if err != nil {
-			t.Errorf("TTL %q not valid RFC3339: %v", ttlLine, err)
+		var env queueEnvelope
+		if err := json.Unmarshal(envContent, &env); err != nil {
+			t.Fatalf("unmarshal envelope %s: %v", found, err)
 		}
-		if !ttl.After(time.Now()) {
-			t.Errorf("TTL %v is not in the future", ttl)
+		// MSGID field must be full RFC 5322 form: hex@hostname
+		if env.MsgID != wantMsgID {
+			t.Errorf("envelope MsgID: got %q, want %q", env.MsgID, wantMsgID)
+		}
+		if env.Recipient != rcpt {
+			t.Errorf("envelope Recipient: got %q, want %q", env.Recipient, rcpt)
+		}
+		wantSender := "bounces+" + rcptLocal + "=" + rcptDomain + "@mail.example.com"
+		if env.Sender != wantSender {
+			t.Errorf("envelope Sender: got %q, want %q", env.Sender, wantSender)
+		}
+		if env.Origin != from {
+			t.Errorf("envelope Origin: got %q, want %q", env.Origin, from)
+		}
+		if env.TTL.Before(time.Now()) {
+			t.Errorf("TTL %v is not in the future", env.TTL)
+		}
+		if env.Created.After(time.Now()) {
+			t.Errorf("Created %v is in the future", env.Created)
+		}
+		if env.Created.IsZero() {
+			t.Error("Created should not be zero")
 		}
 	}
 }
@@ -201,24 +212,6 @@ func readDir(t *testing.T, dir string) []string {
 		}
 	}
 	return names
-}
-
-func checkEnvelopeField(t *testing.T, content, key, wantVal string) {
-	t.Helper()
-	val := extractField(content, key)
-	if val != wantVal {
-		t.Errorf("envelope field %s: got %q, want %q", key, val, wantVal)
-	}
-}
-
-func extractField(content, key string) string {
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimRight(line, "\r")
-		if strings.HasPrefix(line, key+" ") {
-			return strings.TrimPrefix(line, key+" ")
-		}
-	}
-	return ""
 }
 
 type errAfterNReader struct {

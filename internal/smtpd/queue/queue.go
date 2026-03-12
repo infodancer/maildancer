@@ -7,6 +7,7 @@ package queue
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,16 @@ import (
 	"strings"
 	"time"
 )
+
+// queueEnvelope is the JSON envelope written to disk for each recipient.
+type queueEnvelope struct {
+	TTL       time.Time `json:"ttl"`
+	Created   time.Time `json:"created"`
+	Sender    string    `json:"sender"`
+	Recipient string    `json:"recipient"`
+	MsgID     string    `json:"msgid"`
+	Origin    string    `json:"origin"`
+}
 
 // Config holds queue-injection parameters.
 type Config struct {
@@ -56,7 +67,8 @@ func Write(cfg Config, from string, recipients []string, body io.Reader) error {
 		return fmt.Errorf("queue: generate msgid: %w", err)
 	}
 
-	ttl := time.Now().Add(cfg.MessageTTL).UTC().Format(time.RFC3339)
+	now := time.Now().UTC()
+	ttl := now.Add(cfg.MessageTTL)
 
 	// --- body ---
 	// Prepend Message-ID header. smtpd is the originating MTA for authenticated
@@ -103,12 +115,17 @@ func Write(cfg Config, from string, recipients []string, body io.Reader) error {
 		envName := fmt.Sprintf("%s@%s.%d", rcptLocal, msgidHex, n)
 		envPath := filepath.Join(envDir, envName)
 
-		content := fmt.Sprintf("TTL %s\nSENDER %s\nRECIPIENT %s\nMSGID %s\n",
-			ttl, verpSender, rcpt, msgid)
+		env := queueEnvelope{
+			TTL:       ttl,
+			Created:   now,
+			Sender:    verpSender,
+			Recipient: rcpt,
+			MsgID:     msgid,
+			Origin:    from,
+		}
 
 		if err := atomicWrite(envDir, envPath, func(w io.Writer) error {
-			_, err := io.WriteString(w, content)
-			return err
+			return json.NewEncoder(w).Encode(env)
 		}); err != nil {
 			return fmt.Errorf("queue: write envelope for %s: %w", rcpt, err)
 		}

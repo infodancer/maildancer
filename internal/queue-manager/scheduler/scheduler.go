@@ -524,12 +524,22 @@ func (s *Scheduler) invoke(bodyPath string, envPaths []string, final bool, outbo
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
 
-	// Pass per-domain password via subprocess environment.
-	if outbound.password != "" {
-		cmd.Env = append(cmd.Env, "MAIL_REMOTE_PASSWORD="+outbound.password)
+	// Pass outbound config (including password) via stdin as JSON.
+	// Avoids environment variables which are visible in /proc/pid/environ.
+	stdinCfg := struct {
+		Strategy      string `json:"strategy"`
+		Smarthost     string `json:"smarthost,omitempty"`
+		SmarthostUser string `json:"smarthost_user,omitempty"`
+		Password      string `json:"password,omitempty"`
+	}{
+		Strategy:      outbound.Strategy,
+		Smarthost:     outbound.Smarthost,
+		SmarthostUser: outbound.SmarthostUser,
+		Password:      outbound.password,
 	}
+	stdinJSON, _ := json.Marshal(stdinCfg)
+	cmd.Stdin = bytes.NewReader(stdinJSON)
 
 	start := time.Now()
 	slog.Info("invoking mail-remote", "body", bodyPath, "envelopes", len(envPaths), "final", final)
@@ -574,12 +584,7 @@ func (s *Scheduler) buildArgs(bodyPath string, envPaths []string, final bool, ou
 	if s.cfg.ConfigPath != "" {
 		args = append(args, "--config", s.cfg.ConfigPath)
 	}
-	if outbound.Strategy == "smarthost" && outbound.Smarthost != "" {
-		args = append(args, "--smarthost", outbound.Smarthost)
-		if outbound.SmarthostUser != "" {
-			args = append(args, "--smarthost-user", outbound.SmarthostUser)
-		}
-	}
+	// Outbound config (smarthost, password) is passed via stdin JSON.
 	if final {
 		args = append(args, "--final")
 	}

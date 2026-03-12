@@ -779,6 +779,7 @@ func buildFakeMailRemote(t *testing.T) string {
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
 )
@@ -790,13 +791,33 @@ type result struct {
 	Diagnostic string ` + "`json:\"diagnostic\"`" + `
 }
 
+type outboundCfg struct {
+	Strategy      string ` + "`json:\"strategy\"`" + `
+	Smarthost     string ` + "`json:\"smarthost\"`" + `
+	SmarthostUser string ` + "`json:\"smarthost_user\"`" + `
+	Password      string ` + "`json:\"password\"`" + `
+}
+
 func main() {
-	// Record args and selected env vars to file for test assertions.
+	// Read outbound config from stdin (JSON from queue-manager).
+	var ofc outboundCfg
+	data, _ := io.ReadAll(os.Stdin)
+	if len(data) > 0 {
+		_ = json.Unmarshal(data, &ofc)
+	}
+
+	// Record args and outbound config to file for test assertions.
 	recordFile := os.Getenv("QUEUE_MGR_RECORD_FILE")
 	if recordFile != "" {
 		args := strings.Join(os.Args[1:], "\n")
-		if pw := os.Getenv("MAIL_REMOTE_PASSWORD"); pw != "" {
-			args += "\nENV:MAIL_REMOTE_PASSWORD=" + pw
+		if ofc.Smarthost != "" {
+			args += "\nOUTBOUND_SMARTHOST=" + ofc.Smarthost
+		}
+		if ofc.SmarthostUser != "" {
+			args += "\nOUTBOUND_USER=" + ofc.SmarthostUser
+		}
+		if ofc.Password != "" {
+			args += "\nOUTBOUND_PASSWORD=" + ofc.Password
 		}
 		args += "\n---\n"
 		f, _ := os.OpenFile(recordFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
@@ -1276,7 +1297,7 @@ func TestProcessDomainDir_DSNMissingOrigin(t *testing.T) {
 // --- outbound transport routing integration tests ---
 
 // TestProcessDomainDir_SmarthostFromDomainConfig verifies that per-domain
-// outbound config passes --smarthost, --smarthost-user, and MAIL_REMOTE_PASSWORD
+// outbound config passes smarthost, user, and password via stdin JSON
 // to mail-remote.
 func TestProcessDomainDir_SmarthostFromDomainConfig(t *testing.T) {
 	fakeBin := buildFakeMailRemote(t)
@@ -1344,14 +1365,14 @@ password_file = "ses-password"
 	}
 	args := string(data)
 
-	if !strings.Contains(args, "--smarthost\nses.us-east-1.amazonaws.com:587") {
-		t.Errorf("expected --smarthost ses.us-east-1.amazonaws.com:587 in args; got:\n%s", args)
+	if !strings.Contains(args, "OUTBOUND_SMARTHOST=ses.us-east-1.amazonaws.com:587") {
+		t.Errorf("expected OUTBOUND_SMARTHOST in record; got:\n%s", args)
 	}
-	if !strings.Contains(args, "--smarthost-user\nAKIAEXAMPLE") {
-		t.Errorf("expected --smarthost-user AKIAEXAMPLE in args; got:\n%s", args)
+	if !strings.Contains(args, "OUTBOUND_USER=AKIAEXAMPLE") {
+		t.Errorf("expected OUTBOUND_USER in record; got:\n%s", args)
 	}
-	if !strings.Contains(args, "ENV:MAIL_REMOTE_PASSWORD=super-secret-pw") {
-		t.Errorf("expected MAIL_REMOTE_PASSWORD env var in args; got:\n%s", args)
+	if !strings.Contains(args, "OUTBOUND_PASSWORD=super-secret-pw") {
+		t.Errorf("expected OUTBOUND_PASSWORD in record; got:\n%s", args)
 	}
 }
 
@@ -1417,11 +1438,11 @@ strategy = "direct"
 	}
 	args := string(data)
 
-	if strings.Contains(args, "--smarthost") {
-		t.Errorf("expected NO --smarthost for direct delivery; got:\n%s", args)
+	if strings.Contains(args, "OUTBOUND_SMARTHOST") {
+		t.Errorf("expected NO OUTBOUND_SMARTHOST for direct delivery; got:\n%s", args)
 	}
-	if strings.Contains(args, "MAIL_REMOTE_PASSWORD") {
-		t.Errorf("expected NO MAIL_REMOTE_PASSWORD for direct delivery; got:\n%s", args)
+	if strings.Contains(args, "OUTBOUND_PASSWORD") {
+		t.Errorf("expected NO OUTBOUND_PASSWORD for direct delivery; got:\n%s", args)
 	}
 }
 
@@ -1477,11 +1498,11 @@ func TestProcessDomainDir_FallbackToGlobalSmarthost(t *testing.T) {
 	}
 	args := string(data)
 
-	if !strings.Contains(args, "--smarthost\nglobal-relay:587") {
-		t.Errorf("expected global --smarthost in args; got:\n%s", args)
+	if !strings.Contains(args, "OUTBOUND_SMARTHOST=global-relay:587") {
+		t.Errorf("expected OUTBOUND_SMARTHOST=global-relay:587 in record; got:\n%s", args)
 	}
-	if !strings.Contains(args, "--smarthost-user\nglobal-user") {
-		t.Errorf("expected global --smarthost-user in args; got:\n%s", args)
+	if !strings.Contains(args, "OUTBOUND_USER=global-user") {
+		t.Errorf("expected OUTBOUND_USER=global-user in record; got:\n%s", args)
 	}
 }
 
@@ -1554,13 +1575,13 @@ password_file = "system-pass"
 	}
 	args := string(data)
 
-	if !strings.Contains(args, "--smarthost\nsystem-relay:587") {
-		t.Errorf("expected system default --smarthost in args; got:\n%s", args)
+	if !strings.Contains(args, "OUTBOUND_SMARTHOST=system-relay:587") {
+		t.Errorf("expected OUTBOUND_SMARTHOST=system-relay:587 in record; got:\n%s", args)
 	}
-	if !strings.Contains(args, "--smarthost-user\nsystem-user") {
-		t.Errorf("expected system default --smarthost-user in args; got:\n%s", args)
+	if !strings.Contains(args, "OUTBOUND_USER=system-user") {
+		t.Errorf("expected OUTBOUND_USER=system-user in record; got:\n%s", args)
 	}
-	if !strings.Contains(args, "ENV:MAIL_REMOTE_PASSWORD=sys-pw") {
-		t.Errorf("expected system default MAIL_REMOTE_PASSWORD in args; got:\n%s", args)
+	if !strings.Contains(args, "OUTBOUND_PASSWORD=sys-pw") {
+		t.Errorf("expected OUTBOUND_PASSWORD=sys-pw in record; got:\n%s", args)
 	}
 }

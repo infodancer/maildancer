@@ -754,22 +754,43 @@ func buildFakeMailRemote(t *testing.T) string {
 	src := `package main
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 )
 
+type result struct {
+	Envelope   string ` + "`json:\"envelope\"`" + `
+	Status     string ` + "`json:\"status\"`" + `
+	SMTPCode   int    ` + "`json:\"smtp_code\"`" + `
+	Diagnostic string ` + "`json:\"diagnostic\"`" + `
+}
+
 func main() {
+	// Record args to file for test assertions.
 	recordFile := os.Getenv("QUEUE_MGR_RECORD_FILE")
-	if recordFile == "" {
-		os.Exit(0)
+	if recordFile != "" {
+		args := strings.Join(os.Args[1:], "\n") + "\n---\n"
+		f, _ := os.OpenFile(recordFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if f != nil {
+			_, _ = f.WriteString(args)
+			_ = f.Close()
+		}
 	}
-	args := strings.Join(os.Args[1:], "\n") + "\n---\n"
-	f, err := os.OpenFile(recordFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		os.Exit(1)
+
+	// Write JSON results to stdout (envelope paths start after flags and body).
+	var results []result
+	for _, arg := range os.Args[1:] {
+		if strings.HasPrefix(arg, "--") {
+			continue
+		}
+		if strings.Contains(arg, ".delivering") {
+			results = append(results, result{
+				Envelope: arg, Status: "delivered", SMTPCode: 250,
+			})
+		}
 	}
-	_, _ = f.WriteString(args)
-	_ = f.Close()
+	_ = json.NewEncoder(os.Stdout).Encode(results)
 }
 `
 	dir := t.TempDir()

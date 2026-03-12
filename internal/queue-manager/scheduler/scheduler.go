@@ -2,6 +2,7 @@
 package scheduler
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,15 @@ import (
 
 	"github.com/infodancer/maildancer/internal/queue-manager/config"
 )
+
+// deliveryResult is the per-recipient outcome reported by mail-remote on stdout.
+// The struct mirrors mail-remote's recipientResult JSON output.
+type deliveryResult struct {
+	Envelope   string `json:"envelope"`
+	Status     string `json:"status"`     // "delivered", "perm_fail", "temp_fail"
+	SMTPCode   int    `json:"smtp_code"`  // SMTP reply code; 0 if no SMTP response
+	Diagnostic string `json:"diagnostic"` // SMTP reply text or error string
+}
 
 // Config holds queue-manager runtime configuration.
 type Config struct {
@@ -117,11 +127,14 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 
 	fqdn := domainFromPath(domainPath)
 
+	var domainDelivered, domainPermFail, domainTempFail, domainDeferred int
+
 	for msgid, entries := range byMsgID {
 		// Check per-domain rate limit before processing this group.
 		if s.limiter != nil && !s.limiter.allow(fqdn, len(entries)) {
 			slog.Info("rate limited, deferring delivery",
 				"domain", fqdn, "msgid", msgid, "envelopes", len(entries))
+			domainDeferred += len(entries)
 			continue
 		}
 
@@ -164,7 +177,8 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 		var activePaths []string
 		for _, ce := range claimed {
 			if ce.expired {
-				s.invoke(bodyPath, []string{ce.claimed}, true)
+				results := s.invoke(bodyPath, []string{ce.claimed}, true)
+				tallyResults(results, &domainDelivered, &domainPermFail, &domainTempFail)
 				slog.Info("removing expired envelope after final attempt", "path", ce.claimed)
 				if rmErr := os.Remove(ce.claimed); rmErr != nil && !os.IsNotExist(rmErr) {
 					slog.Warn("could not remove expired envelope", "path", ce.claimed, "error", rmErr)
@@ -175,7 +189,8 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 		}
 
 		if len(activePaths) > 0 {
-			s.invoke(bodyPath, activePaths, false)
+			results := s.invoke(bodyPath, activePaths, false)
+			tallyResults(results, &domainDelivered, &domainPermFail, &domainTempFail)
 		}
 
 		// Unclaim surviving envelopes (temp failures — mail-remote touched
@@ -190,9 +205,33 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 		}
 	}
 
+	total := domainDelivered + domainPermFail + domainTempFail + domainDeferred
+	if total > 0 {
+		slog.Info("domain summary",
+			"domain", fqdn,
+			"delivered", domainDelivered,
+			"perm_fail", domainPermFail,
+			"temp_fail", domainTempFail,
+			"deferred", domainDeferred)
+	}
+
 	// Clean up orphan body files: bodies whose msgid has no remaining envelopes.
 	s.cleanOrphanBodies(domainPath)
 	return nil
+}
+
+// tallyResults counts delivery outcomes from invoke results.
+func tallyResults(results []deliveryResult, delivered, permFail, tempFail *int) {
+	for _, r := range results {
+		switch r.Status {
+		case "delivered":
+			*delivered++
+		case "perm_fail":
+			*permFail++
+		case "temp_fail":
+			*tempFail++
+		}
+	}
 }
 
 // isReady returns true if the envelope mtime is old enough for the next attempt.
@@ -261,21 +300,53 @@ func (s *Scheduler) resolveBody(envPath, msgid string) (string, error) {
 	return matches[0], nil
 }
 
-// invoke calls mail-remote with the body and envelope paths.
+// invoke calls mail-remote with the body and envelope paths, captures
+// per-recipient delivery results from stdout, and logs each outcome.
 // If final is true, passes --final to signal this is the last delivery attempt.
-func (s *Scheduler) invoke(bodyPath string, envPaths []string, final bool) {
+func (s *Scheduler) invoke(bodyPath string, envPaths []string, final bool) []deliveryResult {
 	args := s.buildArgs(bodyPath, envPaths, final)
 	cmd := exec.Command(s.cfg.Binary, args...)
-	cmd.Stdout = os.Stdout
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 
-	slog.Info("invoking mail-remote", "body", bodyPath, "envelopes", len(envPaths))
-	if err := cmd.Run(); err != nil {
-		// mail-remote exits non-zero on temp/perm failure; it handles
-		// mtime updates for failed envelopes internally.
-		slog.Warn("mail-remote exited with error", "error", err)
+	start := time.Now()
+	slog.Info("invoking mail-remote", "body", bodyPath, "envelopes", len(envPaths), "final", final)
+	err := cmd.Run()
+	duration := time.Since(start)
+
+	if err != nil {
+		slog.Warn("mail-remote exited with error", "error", err, "duration", duration)
 	}
+
+	var results []deliveryResult
+	if stdout.Len() > 0 {
+		if jsonErr := json.Unmarshal(stdout.Bytes(), &results); jsonErr != nil {
+			slog.Warn("could not parse mail-remote results", "error", jsonErr)
+		}
+	}
+
+	for _, r := range results {
+		switch r.Status {
+		case "delivered":
+			slog.Info("delivery result",
+				"envelope", r.Envelope, "status", r.Status,
+				"smtp_code", r.SMTPCode, "duration", duration)
+		case "perm_fail":
+			slog.Error("delivery result",
+				"envelope", r.Envelope, "status", r.Status,
+				"smtp_code", r.SMTPCode, "diagnostic", r.Diagnostic,
+				"duration", duration)
+		case "temp_fail":
+			slog.Warn("delivery result",
+				"envelope", r.Envelope, "status", r.Status,
+				"smtp_code", r.SMTPCode, "diagnostic", r.Diagnostic,
+				"duration", duration)
+		}
+	}
+
+	return results
 }
 
 func (s *Scheduler) buildArgs(bodyPath string, envPaths []string, final bool) []string {

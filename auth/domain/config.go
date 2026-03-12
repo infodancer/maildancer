@@ -12,6 +12,7 @@ type DomainConfig struct {
 	Auth     DomainAuthConfig     `toml:"auth"`
 	MsgStore DomainMsgStoreConfig `toml:"msgstore"`
 	DKIM     DKIMConfig           `toml:"dkim"`
+	Outbound OutboundConfig       `toml:"outbound"`
 
 	// Gid is the OS group ID under which mail-session runs for this domain.
 	// 0 means not configured.
@@ -70,6 +71,25 @@ type DKIMConfig struct {
 	PrivateKeyPath string `toml:"private_key"`
 }
 
+// OutboundConfig holds per-domain outbound delivery transport settings.
+// Used by queue-manager to determine how to deliver mail from this domain.
+type OutboundConfig struct {
+	// Strategy is the delivery method: "direct" for MX delivery, "smarthost" for relay.
+	// Default is "direct".
+	Strategy string `toml:"strategy"`
+
+	// Smarthost is the relay address in host:port form.
+	// Required when Strategy is "smarthost".
+	Smarthost string `toml:"smarthost"`
+
+	// SmarthostUser is the SMTP AUTH username for the smarthost.
+	SmarthostUser string `toml:"smarthost_user"`
+
+	// PasswordFile is the path to a file containing the SMTP AUTH password.
+	// Relative paths resolve from the domain directory.
+	PasswordFile string `toml:"password_file"`
+}
+
 // mergeConfig returns a new DomainConfig with base values overridden by
 // non-zero values from override. Fields absent in override retain the base value.
 func mergeConfig(base, override DomainConfig) DomainConfig {
@@ -109,6 +129,18 @@ func mergeConfig(base, override DomainConfig) DomainConfig {
 	}
 	if override.DKIM.PrivateKeyPath != "" {
 		result.DKIM.PrivateKeyPath = override.DKIM.PrivateKeyPath
+	}
+	if override.Outbound.Strategy != "" {
+		result.Outbound.Strategy = override.Outbound.Strategy
+	}
+	if override.Outbound.Smarthost != "" {
+		result.Outbound.Smarthost = override.Outbound.Smarthost
+	}
+	if override.Outbound.SmarthostUser != "" {
+		result.Outbound.SmarthostUser = override.Outbound.SmarthostUser
+	}
+	if override.Outbound.PasswordFile != "" {
+		result.Outbound.PasswordFile = override.Outbound.PasswordFile
 	}
 	return result
 }

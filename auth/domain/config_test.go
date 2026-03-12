@@ -48,6 +48,79 @@ func TestMergeConfig_RecipientRejection(t *testing.T) {
 	}
 }
 
+func TestDomainConfig_OutboundTOML(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	content := `
+[outbound]
+strategy = "smarthost"
+smarthost = "ses.us-east-1.amazonaws.com:587"
+smarthost_user = "AKIAEXAMPLE"
+password_file = "ses-password"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadDomainConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadDomainConfig: %v", err)
+	}
+	if cfg.Outbound.Strategy != "smarthost" {
+		t.Errorf("Strategy = %q, want smarthost", cfg.Outbound.Strategy)
+	}
+	if cfg.Outbound.Smarthost != "ses.us-east-1.amazonaws.com:587" {
+		t.Errorf("Smarthost = %q", cfg.Outbound.Smarthost)
+	}
+	if cfg.Outbound.SmarthostUser != "AKIAEXAMPLE" {
+		t.Errorf("SmarthostUser = %q", cfg.Outbound.SmarthostUser)
+	}
+	if cfg.Outbound.PasswordFile != "ses-password" {
+		t.Errorf("PasswordFile = %q", cfg.Outbound.PasswordFile)
+	}
+}
+
+func TestMergeConfig_Outbound(t *testing.T) {
+	base := DomainConfig{
+		Outbound: OutboundConfig{
+			Strategy:      "smarthost",
+			Smarthost:     "default-relay:587",
+			SmarthostUser: "default-user",
+			PasswordFile:  "default-pass",
+		},
+	}
+	override := DomainConfig{
+		Outbound: OutboundConfig{
+			Smarthost:     "custom-relay:465",
+			SmarthostUser: "custom-user",
+		},
+	}
+
+	result := mergeConfig(base, override)
+	if result.Outbound.Strategy != "smarthost" {
+		t.Errorf("Strategy = %q, want smarthost (retained from base)", result.Outbound.Strategy)
+	}
+	if result.Outbound.Smarthost != "custom-relay:465" {
+		t.Errorf("Smarthost = %q, want custom-relay:465", result.Outbound.Smarthost)
+	}
+	if result.Outbound.SmarthostUser != "custom-user" {
+		t.Errorf("SmarthostUser = %q, want custom-user", result.Outbound.SmarthostUser)
+	}
+	if result.Outbound.PasswordFile != "default-pass" {
+		t.Errorf("PasswordFile = %q, want default-pass (retained from base)", result.Outbound.PasswordFile)
+	}
+
+	// Empty override should not overwrite base.
+	result = mergeConfig(base, DomainConfig{})
+	if result.Outbound.Strategy != "smarthost" {
+		t.Errorf("Strategy = %q, want smarthost (retained)", result.Outbound.Strategy)
+	}
+	if result.Outbound.Smarthost != "default-relay:587" {
+		t.Errorf("Smarthost = %q, want default-relay:587 (retained)", result.Outbound.Smarthost)
+	}
+}
+
 func TestMergeConfig_Gid(t *testing.T) {
 	base := DomainConfig{Gid: 1000}
 	override := DomainConfig{Gid: 2001}

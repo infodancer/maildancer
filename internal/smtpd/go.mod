@@ -7,12 +7,13 @@ require (
 	github.com/emersion/go-msgauth v0.7.0
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.24.0
-	github.com/infodancer/maildancer/auth v0.1.13-0.20260306224503-f73c2235cec2
+	github.com/infodancer/maildancer/auth v0.1.14
 	github.com/infodancer/maildancer/internal/mail-session v0.1.1
 	github.com/infodancer/maildancer/msgstore v0.2.4
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
+	google.golang.org/grpc v1.79.2
 )
 
 require (
@@ -43,6 +44,5 @@ require (
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
-	google.golang.org/grpc v1.79.2 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )

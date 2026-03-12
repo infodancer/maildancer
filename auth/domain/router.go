@@ -2,7 +2,9 @@ package domain
 
 import (
 	"context"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/infodancer/maildancer/auth"
 	autherrors "github.com/infodancer/maildancer/auth/errors"
@@ -29,17 +31,44 @@ type AuthResult struct {
 // Lifecycle: AuthRouter does not own the domain provider or fallback agent.
 // The caller is responsible for closing them independently.
 type AuthRouter struct {
-	provider DomainProvider
-	fallback auth.AuthenticationAgent
+	provider    DomainProvider
+	fallback    auth.AuthenticationAgent
+	rateLimiter *authRateLimiter
+	cleanupDone chan struct{} // closed to stop the cleanup goroutine
 }
 
-// NewAuthRouter creates a new AuthRouter. Both provider and fallback may be nil.
+// NewAuthRouter creates a new AuthRouter with no rate limiting.
+// Both provider and fallback may be nil.
 // If provider is nil, all requests go to the fallback.
 // If fallback is nil, only domain-based authentication is available.
+// Use WithRateLimit to enable rate limiting.
 func NewAuthRouter(provider DomainProvider, fallback auth.AuthenticationAgent) *AuthRouter {
 	return &AuthRouter{
 		provider: provider,
 		fallback: fallback,
+	}
+}
+
+// WithRateLimit enables authentication rate limiting on the router.
+// Starts a background cleanup goroutine; call Close() to stop it.
+func (r *AuthRouter) WithRateLimit(cfg RateLimitConfig) *AuthRouter {
+	r.rateLimiter = newAuthRateLimiter(cfg)
+	r.cleanupDone = make(chan struct{})
+	go r.cleanupLoop()
+	return r
+}
+
+// cleanupLoop periodically removes expired rate limit entries.
+func (r *AuthRouter) cleanupLoop() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			r.rateLimiter.cleanup()
+		case <-r.cleanupDone:
+			return
+		}
 	}
 }
 
@@ -77,7 +106,36 @@ func (r *AuthRouter) Authenticate(ctx context.Context, username, password string
 // AuthenticateWithDomain validates credentials and returns both the auth
 // session and the resolved domain. Use this when the caller needs access
 // to domain-specific resources (e.g., MessageStore for pop3d/imapd).
+//
+// Rate limiting: if WithRateLimit has been called, failed attempts are tracked
+// by client IP (from context, see WithClientIP), username, and (IP, username)
+// pair. Exceeding any threshold returns errors.ErrRateLimited.
 func (r *AuthRouter) AuthenticateWithDomain(ctx context.Context, username, password string) (*AuthResult, error) {
+	clientIP := clientIPFromContext(ctx)
+
+	// Check rate limits before attempting authentication.
+	if r.rateLimiter != nil && r.rateLimiter.isLimited(clientIP, username) {
+		slog.Warn("auth rate limited", "username", username, "ip", clientIP)
+		return nil, autherrors.ErrRateLimited
+	}
+
+	result, err := r.authenticateInternal(ctx, username, password)
+	if err != nil {
+		if r.rateLimiter != nil {
+			r.rateLimiter.recordFailure(clientIP, username)
+		}
+		return nil, err
+	}
+
+	// Clear the (IP, username) pair on success.
+	if r.rateLimiter != nil {
+		r.rateLimiter.recordSuccess(clientIP, username)
+	}
+	return result, nil
+}
+
+// authenticateInternal performs the actual credential check without rate limiting.
+func (r *AuthRouter) authenticateInternal(ctx context.Context, username, password string) (*AuthResult, error) {
 	localPart, domainName := SplitUsername(username)
 	base, extension := ParseLocalPart(localPart)
 
@@ -88,12 +146,6 @@ func (r *AuthRouter) AuthenticateWithDomain(ctx context.Context, username, passw
 			if err != nil {
 				return nil, err
 			}
-			// Set Mailbox to the canonical fully-qualified address (base@domain),
-			// subaddress already stripped. Auth agents receive only the localpart
-			// and may set Mailbox to that value or leave it empty; we normalise
-			// here so that pop3d/imapd always pass a consistent address to the
-			// message store. The store is responsible for stripping the domain
-			// component — keeping address handling in one place.
 			if session.User != nil {
 				session.User.Mailbox = base + "@" + domainName
 			}
@@ -102,8 +154,6 @@ func (r *AuthRouter) AuthenticateWithDomain(ctx context.Context, username, passw
 	}
 
 	if r.fallback != nil {
-		// Fallback receives the full username but with the extension stripped
-		// from the local part: "base@domain" or just "base" for bare usernames.
 		fallbackUser := username
 		if extension != "" {
 			if domainName != "" {
@@ -151,8 +201,12 @@ func (r *AuthRouter) UserExists(ctx context.Context, username string) (bool, err
 	return false, nil
 }
 
-// Close is a no-op. AuthRouter does not own the domain provider or fallback
-// agent; the caller manages their lifecycles independently.
+// Close stops the rate limit cleanup goroutine (if running). AuthRouter does
+// not own the domain provider or fallback agent; the caller manages their
+// lifecycles independently.
 func (r *AuthRouter) Close() error {
+	if r.cleanupDone != nil {
+		close(r.cleanupDone)
+	}
 	return nil
 }

@@ -10,6 +10,11 @@ var (
 
 	// ErrUserNotFound indicates the requested user does not exist.
 	ErrUserNotFound = errors.New("user not found")
+
+	// ErrRateLimited indicates too many failed authentication attempts.
+	// Callers should return a temporary failure (e.g., SMTP 421) rather
+	// than a credentials-invalid response.
+	ErrRateLimited = errors.New("too many failed authentication attempts")
 )
 
 // Authentication agent errors.

@@ -34,7 +34,7 @@ func TestTokenBucket_AllowWithinBurst(t *testing.T) {
 
 func TestTokenBucket_Refill(t *testing.T) {
 	b := &tokenBucket{
-		rate:     3600.0 / 3600.0, // 1 per second
+		rate:     1.0, // 1 per second (3600/3600)
 		burst:    5,
 		tokens:   0,
 		lastTime: time.Now().Add(-3 * time.Second), // 3 seconds ago
@@ -47,7 +47,7 @@ func TestTokenBucket_Refill(t *testing.T) {
 
 func TestTokenBucket_BurstCap(t *testing.T) {
 	b := &tokenBucket{
-		rate:     3600.0 / 3600.0, // 1 per second
+		rate:     1.0, // 1 per second (3600/3600)
 		burst:    5,
 		tokens:   0,
 		lastTime: time.Now().Add(-10 * time.Second), // 10 seconds ago, but burst caps at 5
@@ -63,7 +63,7 @@ func TestTokenBucket_BurstCap(t *testing.T) {
 
 func TestTokenBucket_ExceedsBurst(t *testing.T) {
 	b := &tokenBucket{
-		rate:     3600.0 / 3600.0,
+		rate:     1.0, // 3600/3600
 		burst:    3,
 		tokens:   3,
 		lastTime: time.Now(),

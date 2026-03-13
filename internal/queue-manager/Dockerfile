@@ -21,4 +21,4 @@ COPY --from=builder /build/queue-manager /queue-manager
 COPY --from=builder /bin/mail-remote /mail-remote
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 ENTRYPOINT ["/queue-manager"]
-CMD ["--config", "/etc/infodancer/config.toml", "--queue", "/var/spool/queue", "--binary", "/mail-remote"]
+CMD ["--config", "/etc/infodancer/config.toml", "--queue", "/var/spool/mail-queue", "--binary", "/mail-remote"]

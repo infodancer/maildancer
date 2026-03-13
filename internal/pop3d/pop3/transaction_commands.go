@@ -254,7 +254,7 @@ func (u *uidlCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 		messages := sess.AllMessages()
 		lines := make([]string, len(messages))
 		for i, m := range messages {
-			lines[i] = fmt.Sprintf("%d %s", m.MsgNum, m.Info.UID)
+			lines[i] = fmt.Sprintf("%d %d", m.MsgNum, m.Info.UID)
 		}
 		return Response{
 			OK:      true,
@@ -281,7 +281,7 @@ func (u *uidlCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 		return Response{OK: false, Message: "Failed to retrieve message"}, nil
 	}
 
-	return Response{OK: true, Message: fmt.Sprintf("%d %s", msgNum, msg.UID)}, nil
+	return Response{OK: true, Message: fmt.Sprintf("%d %d", msgNum, msg.UID)}, nil
 }
 
 // topCommand implements the TOP command (RFC 2449).

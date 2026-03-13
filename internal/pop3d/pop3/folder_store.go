@@ -20,11 +20,11 @@ func (a *folderMessageStore) List(ctx context.Context, mailbox string) ([]msgsto
 	return a.fs.ListInFolder(ctx, mailbox, a.folder)
 }
 
-func (a *folderMessageStore) Retrieve(ctx context.Context, mailbox, uid string) (io.ReadCloser, error) {
+func (a *folderMessageStore) Retrieve(ctx context.Context, mailbox string, uid uint32) (io.ReadCloser, error) {
 	return a.fs.RetrieveFromFolder(ctx, mailbox, a.folder, uid)
 }
 
-func (a *folderMessageStore) Delete(ctx context.Context, mailbox, uid string) error {
+func (a *folderMessageStore) Delete(ctx context.Context, mailbox string, uid uint32) error {
 	return a.fs.DeleteInFolder(ctx, mailbox, a.folder, uid)
 }
 
@@ -35,4 +35,3 @@ func (a *folderMessageStore) Expunge(ctx context.Context, mailbox string) error 
 func (a *folderMessageStore) Stat(ctx context.Context, mailbox string) (int, int64, error) {
 	return a.fs.StatFolder(ctx, mailbox, a.folder)
 }
-

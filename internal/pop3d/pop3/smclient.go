@@ -116,7 +116,7 @@ func (c *SessionManagerClient) StatMailbox(ctx context.Context, token, folder st
 
 // FetchMessage retrieves a message by UID. The returned ReadCloser assembles
 // the server-streamed chunks into a contiguous byte stream.
-func (c *SessionManagerClient) FetchMessage(ctx context.Context, token, folder, uid string) (io.ReadCloser, error) {
+func (c *SessionManagerClient) FetchMessage(ctx context.Context, token, folder string, uid uint32) (io.ReadCloser, error) {
 	stream, err := c.mailbox.Fetch(tokenCtx(ctx, token), &pb.FetchRequest{
 		Folder: folder,
 		Uid:    uid,
@@ -140,7 +140,7 @@ func (c *SessionManagerClient) FetchMessage(ctx context.Context, token, folder, 
 }
 
 // DeleteMessage marks a message for POP3-style deletion.
-func (c *SessionManagerClient) DeleteMessage(ctx context.Context, token, uid string) error {
+func (c *SessionManagerClient) DeleteMessage(ctx context.Context, token string, uid uint32) error {
 	_, err := c.mailbox.Delete(tokenCtx(ctx, token), &pb.DeleteRequest{Uid: uid})
 	return err
 }

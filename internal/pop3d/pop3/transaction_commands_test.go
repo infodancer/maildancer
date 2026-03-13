@@ -13,28 +13,28 @@ import (
 
 // mockMessageStore is a test double for MessageStore.
 type mockMessageStore struct {
-	messages   []msgstore.MessageInfo
-	content    map[string]string // UID -> content
-	deleted    map[string]bool
-	listErr    error
+	messages    []msgstore.MessageInfo
+	content     map[uint32]string // UID -> content
+	deleted     map[uint32]bool
+	listErr     error
 	retrieveErr error
-	deleteErr  error
-	expungeErr error
+	deleteErr   error
+	expungeErr  error
 }
 
 func newMockMessageStore() *mockMessageStore {
 	return &mockMessageStore{
 		messages: []msgstore.MessageInfo{
-			{UID: "msg1", Size: 100},
-			{UID: "msg2", Size: 200},
-			{UID: "msg3", Size: 300},
+			{UID: 1, Size: 100},
+			{UID: 2, Size: 200},
+			{UID: 3, Size: 300},
 		},
-		content: map[string]string{
-			"msg1": "Subject: Test 1\r\n\r\nBody line 1\r\nBody line 2\r\n",
-			"msg2": "Subject: Test 2\r\n\r\nBody of message 2\r\n",
-			"msg3": "Subject: Test 3\r\nFrom: test@example.com\r\n\r\nLine 1\r\nLine 2\r\nLine 3\r\n",
+		content: map[uint32]string{
+			1: "Subject: Test 1\r\n\r\nBody line 1\r\nBody line 2\r\n",
+			2: "Subject: Test 2\r\n\r\nBody of message 2\r\n",
+			3: "Subject: Test 3\r\nFrom: test@example.com\r\n\r\nLine 1\r\nLine 2\r\nLine 3\r\n",
 		},
-		deleted: make(map[string]bool),
+		deleted: make(map[uint32]bool),
 	}
 }
 
@@ -45,7 +45,7 @@ func (m *mockMessageStore) List(ctx context.Context, mailbox string) ([]msgstore
 	return m.messages, nil
 }
 
-func (m *mockMessageStore) Retrieve(ctx context.Context, mailbox string, uid string) (io.ReadCloser, error) {
+func (m *mockMessageStore) Retrieve(ctx context.Context, mailbox string, uid uint32) (io.ReadCloser, error) {
 	if m.retrieveErr != nil {
 		return nil, m.retrieveErr
 	}
@@ -56,7 +56,7 @@ func (m *mockMessageStore) Retrieve(ctx context.Context, mailbox string, uid str
 	return io.NopCloser(strings.NewReader(content)), nil
 }
 
-func (m *mockMessageStore) Delete(ctx context.Context, mailbox string, uid string) error {
+func (m *mockMessageStore) Delete(ctx context.Context, mailbox string, uid uint32) error {
 	if m.deleteErr != nil {
 		return m.deleteErr
 	}
@@ -75,7 +75,6 @@ func (m *mockMessageStore) Stat(ctx context.Context, mailbox string) (int, int64
 	}
 	return len(m.messages), total, nil
 }
-
 
 // Helper to create a session in TRANSACTION state with messages loaded
 func newTransactionSession(store msgstore.MessageStore) *Session {
@@ -145,12 +144,12 @@ func TestStatCommand(t *testing.T) {
 
 func TestListCommand(t *testing.T) {
 	tests := []struct {
-		name         string
-		sess         *Session
-		args         []string
-		wantOK       bool
-		wantMessage  string
-		wantLines    int
+		name        string
+		sess        *Session
+		args        []string
+		wantOK      bool
+		wantMessage string
+		wantLines   int
 	}{
 		{
 			name:        "LIST in AUTHORIZATION state fails",
@@ -160,12 +159,12 @@ func TestListCommand(t *testing.T) {
 			wantMessage: "Command not valid in this state",
 		},
 		{
-			name:         "LIST all messages succeeds",
-			sess:         newTransactionSession(newMockMessageStore()),
-			args:         []string{},
-			wantOK:       true,
-			wantMessage:  "3 messages (600 octets)",
-			wantLines:    3,
+			name:        "LIST all messages succeeds",
+			sess:        newTransactionSession(newMockMessageStore()),
+			args:        []string{},
+			wantOK:      true,
+			wantMessage: "3 messages (600 octets)",
+			wantLines:   3,
 		},
 		{
 			name:        "LIST specific message succeeds",
@@ -497,12 +496,12 @@ func TestNoopCommand(t *testing.T) {
 
 func TestUidlCommand(t *testing.T) {
 	tests := []struct {
-		name         string
-		sess         *Session
-		args         []string
-		wantOK       bool
-		wantMessage  string
-		wantLines    int
+		name        string
+		sess        *Session
+		args        []string
+		wantOK      bool
+		wantMessage string
+		wantLines   int
 	}{
 		{
 			name:        "UIDL in AUTHORIZATION state fails",
@@ -512,19 +511,19 @@ func TestUidlCommand(t *testing.T) {
 			wantMessage: "Command not valid in this state",
 		},
 		{
-			name:         "UIDL all messages succeeds",
-			sess:         newTransactionSession(newMockMessageStore()),
-			args:         []string{},
-			wantOK:       true,
-			wantMessage:  "",
-			wantLines:    3,
+			name:        "UIDL all messages succeeds",
+			sess:        newTransactionSession(newMockMessageStore()),
+			args:        []string{},
+			wantOK:      true,
+			wantMessage: "",
+			wantLines:   3,
 		},
 		{
 			name:        "UIDL specific message succeeds",
 			sess:        newTransactionSession(newMockMessageStore()),
 			args:        []string{"1"},
 			wantOK:      true,
-			wantMessage: "1 msg1",
+			wantMessage: "1 1",
 		},
 		{
 			name:        "UIDL invalid message fails",

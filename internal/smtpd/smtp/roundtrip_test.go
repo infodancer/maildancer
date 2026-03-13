@@ -27,8 +27,8 @@ import (
 	"github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir" // register maildir backend
-	smtpserver "github.com/infodancer/maildancer/internal/smtpd/smtp"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
+	smtpserver "github.com/infodancer/maildancer/internal/smtpd/smtp"
 )
 
 // testEnv holds the infrastructure for a round-trip SMTP integration test.
@@ -240,7 +240,7 @@ func (env *testEnv) listMessages(t *testing.T, username string) []msgstore.Messa
 	return msgs
 }
 
-func (env *testEnv) retrieveMessage(t *testing.T, username, uid string) string {
+func (env *testEnv) retrieveMessage(t *testing.T, username string, uid uint32) string {
 	t.Helper()
 	cfg := msgstore.StoreConfig{
 		Type:     "maildir",
@@ -256,7 +256,7 @@ func (env *testEnv) retrieveMessage(t *testing.T, username, uid string) string {
 	}
 	rc, err := store.Retrieve(context.Background(), username, uid)
 	if err != nil {
-		t.Fatalf("retrieve message %s/%s: %v", username, uid, err)
+		t.Fatalf("retrieve message %s/%d: %v", username, uid, err)
 	}
 	defer func() { _ = rc.Close() }()
 	var sb strings.Builder

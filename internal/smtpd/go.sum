@@ -44,6 +44,8 @@ github.com/infodancer/maildancer/internal/mail-session v0.1.1 h1:Y34cn/Wo53+tQov
 github.com/infodancer/maildancer/internal/mail-session v0.1.1/go.mod h1:W+Io4Xdc+DmfkyrHv2/w47QSXFtUKM0rAiKbiO1VKZs=
 github.com/infodancer/maildancer/msgstore v0.2.4 h1:Rs/57J2iYJYbfu9+WprrjkryBohB2y/pjlEHECVfdlM=
 github.com/infodancer/maildancer/msgstore v0.2.4/go.mod h1:rW0pT8rguFR8OPbFoQyA7gk1X39at2q8YNmFFNnrx24=
+github.com/infodancer/maildancer/msgstore v0.2.5-0.20260313075010-ceed9cfc0b22 h1:KoxGxSdncW3nulz+wF2iZTrdv/z6FYX2GhCHIZtiIE4=
+github.com/infodancer/maildancer/msgstore v0.2.5-0.20260313075010-ceed9cfc0b22/go.mod h1:rW0pT8rguFR8OPbFoQyA7gk1X39at2q8YNmFFNnrx24=
 github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
 github.com/klauspost/cpuid/v2 v2.0.9 h1:lgaqFMSdTdQYdZ04uHyN2d/eKdOMyi2YLSvlQIBFYa4=

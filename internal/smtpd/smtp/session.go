@@ -187,7 +187,8 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 				s.backend.collector.AuthAttempt(domain, true)
 			}
 
-			s.logger.Debug("authentication successful", slog.String("username", s.authUser))
+			s.logger = s.logger.With(slog.String("auth_user", s.authUser))
+			s.logger.Info("authentication successful")
 			return nil
 		}), nil
 
@@ -228,7 +229,8 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 				s.backend.collector.AuthAttempt(domain, true)
 			}
 
-			s.logger.Debug("OAuth authentication successful", slog.String("username", s.authUser))
+			s.logger = s.logger.With(slog.String("auth_user", s.authUser))
+			s.logger.Info("OAuth authentication successful")
 			return nil
 		}), nil
 
@@ -247,7 +249,7 @@ func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 		s.backend.collector.CommandProcessed("MAIL")
 	}
 
-	s.logger.Debug("MAIL FROM", slog.String("from", from))
+	s.logger.Info("MAIL FROM", slog.String("from", from))
 	return nil
 }
 
@@ -292,7 +294,7 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 			if s.backend.collector != nil {
 				s.backend.collector.CommandProcessed("RCPT")
 			}
-			s.logger.Debug("RCPT TO (remote, queued)", slog.String("to", to))
+			s.logger.Info("RCPT TO (remote)", slog.String("from", s.from), slog.String("to", to))
 			return nil
 		}
 
@@ -359,7 +361,7 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 		s.backend.collector.CommandProcessed("RCPT")
 	}
 
-	s.logger.Debug("RCPT TO", slog.String("to", to))
+	s.logger.Info("RCPT TO (local)", slog.String("from", s.from), slog.String("to", to))
 	return nil
 }
 
@@ -632,7 +634,10 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		if deliverErr != nil {
-			s.logger.Debug("local delivery failed", slog.String("error", deliverErr.Error()))
+			s.logger.Warn("local delivery failed",
+				slog.String("from", s.from),
+				slog.String("to", s.recipients[0]),
+				slog.String("error", deliverErr.Error()))
 
 			if s.backend.collector != nil {
 				recipientDomain := sessionExtractRecipientDomain(s.recipients)
@@ -660,9 +665,10 @@ func (s *Session) Data(r io.Reader) error {
 			s.backend.collector.MessageReceived(recipientDomain, counter.n)
 		}
 
-		s.logger.Debug("local delivery complete",
-			slog.Int64("size", counter.n),
-			slog.Int("recipients", len(s.recipients)))
+		s.logger.Info("local delivery complete",
+			slog.String("from", s.from),
+			slog.String("to", s.recipients[0]),
+			slog.Int64("size", counter.n))
 	}
 
 	// Remote delivery: enqueue via session-manager's OutboundService.
@@ -677,8 +683,12 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		ctx := context.Background()
-		if _, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, tmp.reader()); err != nil {
-			s.logger.Debug("queue write failed", slog.String("error", err.Error()))
+		msgID, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, tmp.reader())
+		if err != nil {
+			s.logger.Warn("enqueue failed",
+				slog.String("from", s.from),
+				slog.Any("to", s.remoteRecipients),
+				slog.String("error", err.Error()))
 
 			if s.backend.collector != nil {
 				recipientDomain := sessionExtractRecipientDomain(s.remoteRecipients)
@@ -697,9 +707,11 @@ func (s *Session) Data(r io.Reader) error {
 			s.backend.collector.MessageReceived(recipientDomain, counter.n)
 		}
 
-		s.logger.Debug("queued for remote delivery",
-			slog.Int64("size", counter.n),
-			slog.Int("recipients", len(s.remoteRecipients)))
+		s.logger.Info("enqueued for remote delivery",
+			slog.String("msg_id", msgID),
+			slog.String("from", s.from),
+			slog.Any("to", s.remoteRecipients),
+			slog.Int64("size", counter.n))
 	}
 
 	return nil

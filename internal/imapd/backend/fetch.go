@@ -24,7 +24,7 @@ func (s *Session) Fetch(w *imapserver.FetchWriter, numSet imap.NumSet, options *
 		}
 		info := s.messages[idx]
 		seqNum := uint32(idx + 1)
-		uid := imap.UID(idx + 1)
+		uid := imap.UID(info.UID)
 
 		if err := s.fetchMessage(ctx, w, info, seqNum, uid, options); err != nil {
 			return err

@@ -27,7 +27,7 @@ func (s *Session) Search(kind imapserver.NumKind, criteria *imap.SearchCriteria,
 
 	for i, msg := range s.messages {
 		seqNum := uint32(i + 1)
-		uid := imap.UID(i + 1)
+		uid := imap.UID(msg.UID)
 
 		if !s.matchesCriteria(ctx, msg, seqNum, uid, criteria) {
 			continue

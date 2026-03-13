@@ -120,7 +120,7 @@ func (c *SessionManagerClient) StatMailbox(ctx context.Context, token, folder st
 }
 
 // FetchMessage retrieves a message by UID via server-streaming.
-func (c *SessionManagerClient) FetchMessage(ctx context.Context, token, folder, uid string) (io.ReadCloser, error) {
+func (c *SessionManagerClient) FetchMessage(ctx context.Context, token, folder string, uid uint32) (io.ReadCloser, error) {
 	stream, err := c.mailbox.Fetch(smTokenCtx(ctx, token), &pb.FetchRequest{
 		Folder: folder,
 		Uid:    uid,
@@ -144,7 +144,7 @@ func (c *SessionManagerClient) FetchMessage(ctx context.Context, token, folder, 
 }
 
 // SetFlags replaces the complete flag set on a message.
-func (c *SessionManagerClient) SetFlags(ctx context.Context, token, folder, uid string, flags []string) error {
+func (c *SessionManagerClient) SetFlags(ctx context.Context, token, folder string, uid uint32, flags []string) error {
 	_, err := c.mailbox.SetFlags(smTokenCtx(ctx, token), &pb.SetFlagsRequest{
 		Folder: folder,
 		Uid:    uid,
@@ -154,7 +154,7 @@ func (c *SessionManagerClient) SetFlags(ctx context.Context, token, folder, uid 
 }
 
 // DeleteMessage marks a message with \Deleted flag in a folder.
-func (c *SessionManagerClient) DeleteMessage(ctx context.Context, token, folder, uid string) error {
+func (c *SessionManagerClient) DeleteMessage(ctx context.Context, token, folder string, uid uint32) error {
 	_, err := c.mailbox.SetFlags(smTokenCtx(ctx, token), &pb.SetFlagsRequest{
 		Folder: folder,
 		Uid:    uid,
@@ -170,41 +170,41 @@ func (c *SessionManagerClient) ExpungeMailbox(ctx context.Context, token, folder
 }
 
 // CopyMessage copies a message between folders.
-func (c *SessionManagerClient) CopyMessage(ctx context.Context, token, srcFolder, uid, destFolder string) (string, error) {
+func (c *SessionManagerClient) CopyMessage(ctx context.Context, token, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	resp, err := c.mailbox.Copy(smTokenCtx(ctx, token), &pb.CopyRequest{
 		Folder:     srcFolder,
 		Uid:        uid,
 		DestFolder: destFolder,
 	})
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	return resp.NewUid, nil
 }
 
 // MoveMessage atomically moves a message between folders.
-func (c *SessionManagerClient) MoveMessage(ctx context.Context, token, srcFolder, uid, destFolder string) (string, error) {
+func (c *SessionManagerClient) MoveMessage(ctx context.Context, token, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	resp, err := c.mailbox.Move(smTokenCtx(ctx, token), &pb.MoveRequest{
 		Uid:        uid,
 		SrcFolder:  srcFolder,
 		DestFolder: destFolder,
 	})
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	return resp.NewUid, nil
 }
 
 // AppendMessage stores a message in a folder with explicit flags and date via client-streaming.
-func (c *SessionManagerClient) AppendMessage(ctx context.Context, token, folder string, r io.Reader, flags []string, date time.Time) (string, error) {
+func (c *SessionManagerClient) AppendMessage(ctx context.Context, token, folder string, r io.Reader, flags []string, date time.Time) (uint32, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return "", fmt.Errorf("read message: %w", err)
+		return 0, fmt.Errorf("read message: %w", err)
 	}
 
 	stream, err := c.mailbox.Append(smTokenCtx(ctx, token))
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	// Send metadata.
@@ -217,7 +217,7 @@ func (c *SessionManagerClient) AppendMessage(ctx context.Context, token, folder 
 			},
 		},
 	}); err != nil {
-		return "", err
+		return 0, err
 	}
 
 	// Send body in 64KB chunks.
@@ -229,14 +229,14 @@ func (c *SessionManagerClient) AppendMessage(ctx context.Context, token, folder 
 		if err := stream.Send(&pb.AppendRequest{
 			Payload: &pb.AppendRequest_Data{Data: data[off:end]},
 		}); err != nil {
-			return "", err
+			return 0, err
 		}
 		off = end
 	}
 
 	resp, err := stream.CloseAndRecv()
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	return resp.GetUid(), nil
 }
@@ -248,6 +248,15 @@ func (c *SessionManagerClient) UIDValidity(ctx context.Context, token, folder st
 		return 0, err
 	}
 	return resp.UidValidity, nil
+}
+
+// UIDNext returns the next UID that will be assigned in a folder.
+func (c *SessionManagerClient) UIDNext(ctx context.Context, token, folder string) (uint32, error) {
+	resp, err := c.mailbox.UIDValidity(smTokenCtx(ctx, token), &pb.UIDValidityRequest{Folder: folder})
+	if err != nil {
+		return 0, err
+	}
+	return resp.UidNext, nil
 }
 
 // RescanFolder re-reads a folder and returns only new messages since the last List or Rescan.

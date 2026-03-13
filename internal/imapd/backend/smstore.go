@@ -38,11 +38,11 @@ func (s *sessionManagerStore) List(ctx context.Context, _ string) ([]msgstore.Me
 	return s.ListInFolder(ctx, "", "INBOX")
 }
 
-func (s *sessionManagerStore) Retrieve(ctx context.Context, _ string, uid string) (io.ReadCloser, error) {
+func (s *sessionManagerStore) Retrieve(ctx context.Context, _ string, uid uint32) (io.ReadCloser, error) {
 	return s.RetrieveFromFolder(ctx, "", "INBOX", uid)
 }
 
-func (s *sessionManagerStore) Delete(ctx context.Context, _ string, uid string) error {
+func (s *sessionManagerStore) Delete(ctx context.Context, _ string, uid uint32) error {
 	return s.client.DeleteMessage(ctx, s.token, "INBOX", uid)
 }
 
@@ -97,11 +97,11 @@ func (s *sessionManagerStore) StatFolder(ctx context.Context, _ string, folder s
 	return int(count), totalBytes, nil
 }
 
-func (s *sessionManagerStore) RetrieveFromFolder(ctx context.Context, _ string, folder string, uid string) (io.ReadCloser, error) {
+func (s *sessionManagerStore) RetrieveFromFolder(ctx context.Context, _ string, folder string, uid uint32) (io.ReadCloser, error) {
 	return s.client.FetchMessage(ctx, s.token, folder, uid)
 }
 
-func (s *sessionManagerStore) DeleteInFolder(ctx context.Context, _ string, folder string, uid string) error {
+func (s *sessionManagerStore) DeleteInFolder(ctx context.Context, _ string, folder string, uid uint32) error {
 	return s.client.DeleteMessage(ctx, s.token, folder, uid)
 }
 
@@ -118,15 +118,15 @@ func (s *sessionManagerStore) RenameFolder(ctx context.Context, _ string, oldNam
 	return s.client.RenameFolder(ctx, s.token, oldName, newName)
 }
 
-func (s *sessionManagerStore) AppendToFolder(ctx context.Context, _ string, folder string, r io.Reader, flags []string, date time.Time) (string, error) {
+func (s *sessionManagerStore) AppendToFolder(ctx context.Context, _ string, folder string, r io.Reader, flags []string, date time.Time) (uint32, error) {
 	return s.client.AppendMessage(ctx, s.token, folder, r, flags, date)
 }
 
-func (s *sessionManagerStore) SetFlagsInFolder(ctx context.Context, _ string, folder string, uid string, flags []string) error {
+func (s *sessionManagerStore) SetFlagsInFolder(ctx context.Context, _ string, folder string, uid uint32, flags []string) error {
 	return s.client.SetFlags(ctx, s.token, folder, uid, flags)
 }
 
-func (s *sessionManagerStore) CopyMessage(ctx context.Context, _ string, srcFolder string, uid string, destFolder string) (string, error) {
+func (s *sessionManagerStore) CopyMessage(ctx context.Context, _ string, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	return s.client.CopyMessage(ctx, s.token, srcFolder, uid, destFolder)
 }
 
@@ -134,9 +134,13 @@ func (s *sessionManagerStore) UIDValidity(ctx context.Context, _ string, folder 
 	return s.client.UIDValidity(ctx, s.token, folder)
 }
 
+func (s *sessionManagerStore) UIDNext(ctx context.Context, _ string, folder string) (uint32, error) {
+	return s.client.UIDNext(ctx, s.token, folder)
+}
+
 // --- mover ---
 
-func (s *sessionManagerStore) MoveMessage(ctx context.Context, _ string, srcFolder string, uid string, destFolder string) (string, error) {
+func (s *sessionManagerStore) MoveMessage(ctx context.Context, _ string, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	return s.client.MoveMessage(ctx, s.token, srcFolder, uid, destFolder)
 }
 

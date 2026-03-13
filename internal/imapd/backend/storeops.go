@@ -19,7 +19,7 @@ func (s *Session) Expunge(w *imapserver.ExpungeWriter, uids *imap.UIDSet) error 
 	var anyExpunged bool
 	for i := len(s.messages) - 1; i >= 0; i-- {
 		info := s.messages[i]
-		uid := imap.UID(i + 1)
+		uid := imap.UID(info.UID)
 
 		if uids != nil && !uids.Contains(uid) {
 			continue
@@ -53,6 +53,7 @@ func (s *Session) Expunge(w *imapserver.ExpungeWriter, uids *imap.UIDSet) error 
 			return err
 		}
 		s.messages = msgs
+		s.buildUIDIndex()
 	}
 
 	return nil
@@ -72,7 +73,7 @@ func (s *Session) Store(w *imapserver.FetchWriter, numSet imap.NumSet, flags *im
 		}
 		info := s.messages[idx]
 		seqNum := uint32(idx + 1)
-		uid := imap.UID(idx + 1)
+		uid := imap.UID(info.UID)
 
 		newFlags := applyStoreFlagsStr(info.Flags, flags)
 		if err := s.folderStore.SetFlagsInFolder(ctx, s.mailbox, s.selectedMailbox, info.UID, newFlags); err != nil {
@@ -112,8 +113,6 @@ func (s *Session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) 
 	}
 
 	ctx := context.Background()
-	destMsgs, _ := s.listMessages(ctx, dest)
-	nextDestUID := imap.UID(len(destMsgs) + 1)
 
 	srcFolder := s.selectedMailbox
 	junkFolder := s.junkFolderName()
@@ -129,19 +128,19 @@ func (s *Session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) 
 			continue
 		}
 		info := s.messages[idx]
-		srcUID := imap.UID(idx + 1)
+		srcUID := imap.UID(info.UID)
 
 		if s.learner != nil && (isJunkSrc || isJunkDest) && isJunkSrc != isJunkDest {
 			s.triggerLearn(ctx, srcFolder, info.UID, isJunkDest)
 		}
 
-		if _, err := s.folderStore.CopyMessage(ctx, s.mailbox, s.selectedMailbox, info.UID, dest); err != nil {
+		newUID, err := s.folderStore.CopyMessage(ctx, s.mailbox, s.selectedMailbox, info.UID, dest)
+		if err != nil {
 			return nil, err
 		}
 
 		srcUIDs.AddNum(srcUID)
-		destUIDs.AddNum(nextDestUID)
-		nextDestUID++
+		destUIDs.AddNum(imap.UID(newUID))
 	}
 
 	return &imap.CopyData{
@@ -154,7 +153,7 @@ func (s *Session) Copy(numSet imap.NumSet, dest string) (*imap.CopyData, error) 
 // mover is satisfied by grpcStore (via embedded client.Client.MoveMessage).
 // The method signature matches client.Client.MoveMessage exactly.
 type mover interface {
-	MoveMessage(ctx context.Context, mailbox, srcFolder, uid, destFolder string) (string, error)
+	MoveMessage(ctx context.Context, mailbox, srcFolder string, uid uint32, destFolder string) (uint32, error)
 }
 
 // Move implements imapserver.SessionMove (RFC 6851). Advertising IMAP MOVE
@@ -176,9 +175,6 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 	ctx := context.Background()
 	mv, hasMover := s.folderStore.(mover)
 
-	destMsgs, _ := s.listMessages(ctx, dest)
-	nextDestUID := imap.UID(len(destMsgs) + 1)
-
 	indices := s.resolveNumSet(numSet)
 	sort.Ints(indices)
 
@@ -194,7 +190,7 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 			continue
 		}
 		info := s.messages[idx]
-		srcUID := imap.UID(idx + 1)
+		srcUID := imap.UID(info.UID)
 
 		// Trigger rspamd learn when crossing the Junk boundary.
 		// This must happen before the move so the message can be read from
@@ -203,12 +199,17 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 			s.triggerLearn(ctx, srcFolder, info.UID, isJunkDest)
 		}
 
+		var newUID uint32
 		if hasMover {
-			if _, err := mv.MoveMessage(ctx, s.mailbox, srcFolder, info.UID, dest); err != nil {
+			var err error
+			newUID, err = mv.MoveMessage(ctx, s.mailbox, srcFolder, info.UID, dest)
+			if err != nil {
 				return err
 			}
 		} else {
-			if _, err := s.folderStore.CopyMessage(ctx, s.mailbox, srcFolder, info.UID, dest); err != nil {
+			var err error
+			newUID, err = s.folderStore.CopyMessage(ctx, s.mailbox, srcFolder, info.UID, dest)
+			if err != nil {
 				return err
 			}
 			if err := s.deleteMessage(ctx, srcFolder, info.UID); err != nil {
@@ -217,8 +218,7 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 		}
 
 		srcUIDs.AddNum(srcUID)
-		destUIDs.AddNum(nextDestUID)
-		nextDestUID++
+		destUIDs.AddNum(imap.UID(newUID))
 	}
 
 	// Fallback path needs an explicit expunge; mover already expunged atomically.
@@ -258,13 +258,14 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 		return err
 	}
 	s.messages = msgs
+	s.buildUIDIndex()
 
 	return nil
 }
 
 // triggerLearn reads a message from the source folder and sends it to rspamd
 // for Bayes training. Errors are logged but do not fail the MOVE operation.
-func (s *Session) triggerLearn(ctx context.Context, srcFolder, uid string, toJunk bool) {
+func (s *Session) triggerLearn(ctx context.Context, srcFolder string, uid uint32, toJunk bool) {
 	rc, err := s.retrieveMessage(ctx, srcFolder, uid)
 	if err != nil {
 		s.logger.Warn("spam learn: failed to retrieve message",

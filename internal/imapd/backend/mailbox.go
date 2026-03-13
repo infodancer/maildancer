@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"hash/fnv"
 	"io"
 	"strings"
 	"time"
@@ -24,7 +23,7 @@ func (s *Session) listMessages(ctx context.Context, mailbox string) ([]msgstore.
 }
 
 // retrieveMessage returns the content of a message by its msgstore UID.
-func (s *Session) retrieveMessage(ctx context.Context, mailbox string, uid string) (io.ReadCloser, error) {
+func (s *Session) retrieveMessage(ctx context.Context, mailbox string, uid uint32) (io.ReadCloser, error) {
 	if strings.EqualFold(mailbox, "INBOX") {
 		return s.store.Retrieve(ctx, s.mailbox, uid)
 	}
@@ -35,7 +34,7 @@ func (s *Session) retrieveMessage(ctx context.Context, mailbox string, uid strin
 }
 
 // deleteMessage marks a message for deletion (pending Expunge).
-func (s *Session) deleteMessage(ctx context.Context, mailbox string, uid string) error {
+func (s *Session) deleteMessage(ctx context.Context, mailbox string, uid uint32) error {
 	if strings.EqualFold(mailbox, "INBOX") {
 		return s.store.Delete(ctx, s.mailbox, uid)
 	}
@@ -56,22 +55,30 @@ func (s *Session) expungeMailbox(ctx context.Context, mailbox string) error {
 	return s.folderStore.ExpungeFolder(ctx, s.mailbox, mailbox)
 }
 
-// getUIDValidity returns the UIDValidity for a mailbox via folderStore, with
-// an fnv32a hash of the name as fallback.
+// getUIDValidity returns the UIDValidity for a mailbox via folderStore.
 func (s *Session) getUIDValidity(ctx context.Context, mailbox string) uint32 {
 	if s.folderStore != nil {
 		v, err := s.folderStore.UIDValidity(ctx, s.mailbox, mailbox)
-		if err == nil {
+		if err == nil && v != 0 {
 			return v
 		}
 	}
-	h := fnv.New32a()
-	h.Write([]byte(mailbox))
-	v := h.Sum32()
-	if v == 0 {
-		return 1
+	return 1
+}
+
+// getUIDNext returns the next UID that will be assigned in the mailbox.
+func (s *Session) getUIDNext(ctx context.Context, mailbox string) imap.UID {
+	if s.folderStore != nil {
+		v, err := s.folderStore.UIDNext(ctx, s.mailbox, mailbox)
+		if err == nil && v != 0 {
+			return imap.UID(v)
+		}
 	}
-	return v
+	// Fallback: one past the highest UID in the current message list.
+	if len(s.messages) > 0 {
+		return imap.UID(s.messages[len(s.messages)-1].UID + 1)
+	}
+	return 1
 }
 
 // Select opens a mailbox.
@@ -87,6 +94,7 @@ func (s *Session) Select(mailbox string, options *imap.SelectOptions) (*imap.Sel
 	s.selectedMailbox = mailbox
 	s.messages = msgs
 	s.readOnly = options != nil && options.ReadOnly
+	s.buildUIDIndex()
 
 	tracker := imapserver.NewMailboxTracker(uint32(len(msgs)))
 	s.tracker = tracker
@@ -110,7 +118,7 @@ func (s *Session) Select(mailbox string, options *imap.SelectOptions) (*imap.Sel
 		NumRecent:         0,
 		FirstUnseenSeqNum: firstUnseen,
 		UIDValidity:       s.getUIDValidity(ctx, mailbox),
-		UIDNext:           imap.UID(len(msgs) + 1),
+		UIDNext:           s.getUIDNext(ctx, mailbox),
 	}, nil
 }
 
@@ -200,7 +208,7 @@ func (s *Session) Status(mailbox string, options *imap.StatusOptions) (*imap.Sta
 		data.NumMessages = &n
 	}
 	if options.UIDNext {
-		data.UIDNext = imap.UID(len(msgs) + 1)
+		data.UIDNext = s.getUIDNext(ctx, mailbox)
 	}
 	if options.UIDValidity {
 		data.UIDValidity = s.getUIDValidity(ctx, mailbox)
@@ -244,20 +252,15 @@ func (s *Session) Append(mailbox string, r imap.LiteralReader, options *imap.App
 		}
 	}
 
-	_, err := s.folderStore.AppendToFolder(ctx, s.mailbox, mailbox, r, flags, internalDate)
+	newUID, err := s.folderStore.AppendToFolder(ctx, s.mailbox, mailbox, r, flags, internalDate)
 	if err != nil {
 		return nil, err
 	}
 
 	s.collector.MessageStored(s.userDomain)
 
-	msgs, err := s.listMessages(ctx, mailbox)
-	if err != nil {
-		return nil, err
-	}
-
 	return &imap.AppendData{
 		UIDValidity: s.getUIDValidity(ctx, mailbox),
-		UID:         imap.UID(len(msgs)),
+		UID:         imap.UID(newUID),
 	}, nil
 }

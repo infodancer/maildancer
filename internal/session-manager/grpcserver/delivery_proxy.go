@@ -3,6 +3,7 @@ package grpcserver
 import (
 	"fmt"
 	"io"
+	"log/slog"
 
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
@@ -32,9 +33,16 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 		return fmt.Errorf("first chunk must contain delivery metadata")
 	}
 
+	slog.Info("delivery request",
+		"to", meta.Recipient,
+		"from", meta.Sender)
+
 	// Spawn oneshot mail-session for this recipient.
 	deliveryCl, cleanup, err := p.mgr.DeliverySession(stream.Context(), meta.Recipient)
 	if err != nil {
+		slog.Warn("delivery session failed",
+			"to", meta.Recipient,
+			"error", err)
 		return err
 	}
 	defer cleanup()
@@ -56,8 +64,15 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 		if err == io.EOF {
 			resp, err := upstream.CloseAndRecv()
 			if err != nil {
+				slog.Warn("delivery failed",
+					"to", meta.Recipient,
+					"from", meta.Sender,
+					"error", err)
 				return err
 			}
+			slog.Info("delivery complete",
+				"to", meta.Recipient,
+				"from", meta.Sender)
 			return stream.SendAndClose(resp)
 		}
 		if err != nil {

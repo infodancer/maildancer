@@ -58,6 +58,8 @@ func (s *outboundServer) Enqueue(stream pb.OutboundService_EnqueueServer) error 
 		}
 	}
 
+	bodySize := body.Len()
+
 	// Configure DKIM signing for this sender domain.
 	cfg := s.queueCfg
 	senderDomain := extractSenderDomain(meta.Sender)
@@ -70,18 +72,30 @@ func (s *outboundServer) Enqueue(stream pb.OutboundService_EnqueueServer) error 
 		cfg.DKIMSign = func(domain string, msg io.Reader) (io.Reader, error) {
 			return queue.SignDKIM(domain, selector, key, msg)
 		}
+		slog.Info("DKIM signing enabled",
+			"domain", senderDomain,
+			"selector", selector,
+			"from", meta.Sender)
+	} else if err == nil {
+		slog.Debug("no DKIM key configured",
+			"domain", senderDomain)
 	}
 
 	// Write to queue.
 	msgID, err := queue.Write(cfg, meta.Sender, meta.Recipients, &body)
 	if err != nil {
+		slog.Warn("queue write failed",
+			"from", meta.Sender,
+			"to", meta.Recipients,
+			"error", err)
 		return fmt.Errorf("queue write: %w", err)
 	}
 
 	slog.Info("message enqueued",
-		"msgid", msgID,
-		"sender", meta.Sender,
-		"recipients", meta.Recipients)
+		"msg_id", msgID,
+		"from", meta.Sender,
+		"to", meta.Recipients,
+		"size", bodySize)
 
 	return stream.SendAndClose(&pb.EnqueueResponse{
 		MessageId: msgID,

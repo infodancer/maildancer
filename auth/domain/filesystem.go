@@ -142,36 +142,71 @@ func (p *FilesystemDomainProvider) GetDomain(name string) *Domain {
 }
 
 // loadDomain loads a domain configuration and creates the domain agents.
-// If defaults are set, they serve as the base; per-domain config.toml overrides them.
+// Config is merged in priority order (lowest to highest):
+//  1. Programmatic defaults (WithDefaults)
+//  2. System config.toml ({basePath}/config.toml)
+//  3. domains.toml per-domain overrides
+//  4. Per-domain config.toml
+//  5. Postmaster GID (authoritative, applied post-merge)
 func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath string) (*Domain, error) {
-	var cfg *DomainConfig
+	// Build config layers (lowest to highest priority).
+	var layers []map[string]any
 
-	// Start with defaults if set
+	// 1. Programmatic defaults (from WithDefaults).
 	if p.defaults != nil {
-		base := *p.defaults
-		cfg = &base
+		m, err := toTOMLMap(*p.defaults)
+		if err != nil {
+			return nil, fmt.Errorf("marshal defaults: %w", err)
+		}
+		layers = append(layers, m)
 	}
 
-	// Load per-domain config.toml if it exists, merging on top of defaults.
-	// Capture the raw override before merging so we can inspect Forwards separately.
-	var domainOverride *DomainConfig
+	// 2. System config.toml ({basePath}/config.toml).
+	if p.baseDefaults != nil {
+		m, err := toTOMLMap(*p.baseDefaults)
+		if err != nil {
+			return nil, fmt.Errorf("marshal base defaults: %w", err)
+		}
+		layers = append(layers, m)
+	}
+
+	// 3. domains.toml per-domain overrides.
+	if override, ok := p.domainOverrides[name]; ok {
+		m, err := toTOMLMap(override)
+		if err != nil {
+			return nil, fmt.Errorf("marshal domain overrides: %w", err)
+		}
+		layers = append(layers, m)
+	}
+
+	// 4. Per-domain config.toml (highest priority for config values).
+	var perDomainMap map[string]any
 	if _, err := os.Stat(configPath); err == nil {
-		override, err := LoadDomainConfig(configPath)
+		m, err := loadTOMLMap(configPath)
 		if err != nil {
 			return nil, fmt.Errorf("load config: %w", err)
 		}
-		domainOverride = override
-		if cfg != nil {
-			merged := mergeConfig(*cfg, *override)
-			cfg = &merged
-		} else {
-			cfg = override
-		}
-	} else if cfg == nil {
+		perDomainMap = m
+		layers = append(layers, m)
+	} else if p.defaults == nil {
 		return nil, fmt.Errorf("no config.toml and no defaults set for domain %s", name)
 	}
 
-	// Create auth agent (absolute paths used as-is, relative paths joined with domainPath)
+	// Merge all layers into final config.
+	var cfg DomainConfig
+	if err := mergeConfigLayers(&cfg, layers...); err != nil {
+		return nil, fmt.Errorf("merge config: %w", err)
+	}
+
+	// Postmaster GID is authoritative — applied after all config merges so that
+	// neither system defaults nor domain-admin config.toml can override it.
+	if p.postmaster != nil {
+		if entry, ok := p.postmaster[name]; ok && entry.GID != 0 {
+			cfg.Gid = entry.GID
+		}
+	}
+
+	// Create auth agent (absolute paths used as-is, relative paths joined with domainPath).
 	authCfg := auth.AuthAgentConfig{
 		Type:              cfg.Auth.Type,
 		CredentialBackend: resolvePath(domainPath, cfg.Auth.CredentialBackend),
@@ -181,21 +216,6 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 	authAgent, err := auth.OpenAuthAgent(authCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create auth agent: %w", err)
-	}
-
-	// Apply domains.toml per-domain overrides (system postmaster, lower priority
-	// than per-domain config.toml which was already merged above).
-	if override, ok := p.domainOverrides[name]; ok {
-		merged := mergeConfig(override, *cfg) // cfg wins over override
-		cfg = &merged
-	}
-
-	// Postmaster GID is authoritative — applied after all config merges so that
-	// neither system defaults nor domain-admin config.toml can override it.
-	if p.postmaster != nil {
-		if entry, ok := p.postmaster[name]; ok && entry.GID != 0 {
-			cfg.Gid = entry.GID
-		}
 	}
 
 	// Create message store. The data path comes from (highest priority first):
@@ -234,9 +254,9 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 	// full ownership: the system default is suppressed. This lets a domain admin
 	// disable the global catchall by setting forwards = {}.
 	var domainFwd, defaultFwd *forwards.ForwardMap
-	if domainOverride != nil && domainOverride.Forwards != nil {
+	if perDomainMap != nil && perDomainMap["forwards"] != nil {
 		// Domain explicitly declared [forwards] — use it, suppress system default.
-		domainFwd = forwards.FromMap(domainOverride.Forwards)
+		domainFwd = forwards.FromMap(cfg.Forwards)
 		defaultFwd = forwards.FromMap(nil)
 	} else {
 		// Domain did not declare [forwards] — fall through to system default.
@@ -279,6 +299,7 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		MessageStore:       store,
 		MaxMessageSize:     cfg.MaxMessageSize,
 		RecipientRejection: cfg.RecipientRejection,
+		Limits:             cfg.Limits,
 	}
 
 	// Load DKIM signing key if configured.

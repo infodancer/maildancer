@@ -3,15 +3,21 @@
 FROM golang:1.26-alpine AS builder
 RUN apk add --no-cache git
 
-# Build mail-remote first (separate module)
+# Build mail-remote first (separate private module)
 WORKDIR /mail-remote
-RUN git clone --depth 1 https://github.com/infodancer/maildancer/internal/mail-remote.git .
+RUN --mount=type=secret,id=github_token \
+    git config --global url."https://x-access-token:$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/" && \
+    git clone --depth 1 https://github.com/infodancer/maildancer/internal/mail-remote.git . && \
+    git config --global --remove-section url."https://x-access-token:$(cat /run/secrets/github_token)@github.com/"
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/mail-remote ./cmd/mail-remote
 
 # Build queue-manager
 WORKDIR /build
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=secret,id=github_token \
+    git config --global url."https://x-access-token:$(cat /run/secrets/github_token)@github.com/".insteadOf "https://github.com/" && \
+    go mod download && \
+    git config --global --remove-section url."https://x-access-token:$(cat /run/secrets/github_token)@github.com/"
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o queue-manager ./cmd/queue-manager
 

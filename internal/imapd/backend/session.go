@@ -538,8 +538,15 @@ func (s *Session) resolveNumSet(numSet imap.NumSet) []int {
 	case imap.SeqSet:
 		nums, ok := ns.Nums()
 		if !ok {
+			// Dynamic range (contains "*"). Check each sequence number
+			// against the set. Per RFC 9051 §2.3.1.1, ranges containing
+			// "*" always include the last message in the mailbox.
+			maxIdx := len(s.messages) - 1
 			for i := range s.messages {
-				indices = append(indices, i)
+				seq := uint32(i + 1)
+				if ns.Contains(seq) || i == maxIdx {
+					indices = append(indices, i)
+				}
 			}
 			return indices
 		}
@@ -549,8 +556,15 @@ func (s *Session) resolveNumSet(numSet imap.NumSet) []int {
 	case imap.UIDSet:
 		uids, ok := ns.Nums()
 		if !ok {
+			// Dynamic range (contains "*"). Check each message's UID
+			// against the set. Per RFC 9051 §2.3.1.1, ranges containing
+			// "*" always include the last message in the mailbox.
+			maxIdx := len(s.messages) - 1
 			for i := range s.messages {
-				indices = append(indices, i)
+				uid := imap.UID(i + 1)
+				if ns.Contains(uid) || i == maxIdx {
+					indices = append(indices, i)
+				}
 			}
 			return indices
 		}

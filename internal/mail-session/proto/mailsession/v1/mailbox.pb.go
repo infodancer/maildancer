@@ -25,7 +25,7 @@ const (
 type MessageInfo struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// UID is the msgstore-assigned unique identifier.
-	Uid string `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid uint32 `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
 	// Size is the message size in bytes.
 	Size int64 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
 	// Flags is the set of IMAP flags (e.g. \Seen, \Deleted, \Flagged).
@@ -64,11 +64,11 @@ func (*MessageInfo) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *MessageInfo) GetUid() string {
+func (x *MessageInfo) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 func (x *MessageInfo) GetSize() int64 {
@@ -272,7 +272,7 @@ func (x *StatResponse) GetTotalBytes() int64 {
 type FetchRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Folder        string                 `protobuf:"bytes,1,opt,name=folder,proto3" json:"folder,omitempty"`
-	Uid           string                 `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid           uint32                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -314,11 +314,11 @@ func (x *FetchRequest) GetFolder() string {
 	return ""
 }
 
-func (x *FetchRequest) GetUid() string {
+func (x *FetchRequest) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 type FetchResponse struct {
@@ -369,7 +369,7 @@ func (x *FetchResponse) GetData() []byte {
 type FetchHeadersRequest struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Folder string                 `protobuf:"bytes,1,opt,name=folder,proto3" json:"folder,omitempty"`
-	Uid    string                 `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid    uint32                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"`
 	// Number of body lines to include after headers. 0 = headers only.
 	BodyLines     int32 `protobuf:"varint,3,opt,name=body_lines,json=bodyLines,proto3" json:"body_lines,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -413,11 +413,11 @@ func (x *FetchHeadersRequest) GetFolder() string {
 	return ""
 }
 
-func (x *FetchHeadersRequest) GetUid() string {
+func (x *FetchHeadersRequest) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 func (x *FetchHeadersRequest) GetBodyLines() int32 {
@@ -619,7 +619,7 @@ func (x *AppendMetadata) GetDate() string {
 type AppendResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The UID assigned to the newly stored message.
-	Uid           string `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid           uint32 `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -654,17 +654,17 @@ func (*AppendResponse) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *AppendResponse) GetUid() string {
+func (x *AppendResponse) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 type CopyRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Folder        string                 `protobuf:"bytes,1,opt,name=folder,proto3" json:"folder,omitempty"`
-	Uid           string                 `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid           uint32                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"`
 	DestFolder    string                 `protobuf:"bytes,3,opt,name=dest_folder,json=destFolder,proto3" json:"dest_folder,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -707,11 +707,11 @@ func (x *CopyRequest) GetFolder() string {
 	return ""
 }
 
-func (x *CopyRequest) GetUid() string {
+func (x *CopyRequest) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 func (x *CopyRequest) GetDestFolder() string {
@@ -723,7 +723,7 @@ func (x *CopyRequest) GetDestFolder() string {
 
 type CopyResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	NewUid        string                 `protobuf:"bytes,1,opt,name=new_uid,json=newUid,proto3" json:"new_uid,omitempty"`
+	NewUid        uint32                 `protobuf:"varint,1,opt,name=new_uid,json=newUid,proto3" json:"new_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -758,16 +758,16 @@ func (*CopyResponse) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *CopyResponse) GetNewUid() string {
+func (x *CopyResponse) GetNewUid() uint32 {
 	if x != nil {
 		return x.NewUid
 	}
-	return ""
+	return 0
 }
 
 type MoveRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uid           string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid           uint32                 `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
 	SrcFolder     string                 `protobuf:"bytes,2,opt,name=src_folder,json=srcFolder,proto3" json:"src_folder,omitempty"`
 	DestFolder    string                 `protobuf:"bytes,3,opt,name=dest_folder,json=destFolder,proto3" json:"dest_folder,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -804,11 +804,11 @@ func (*MoveRequest) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *MoveRequest) GetUid() string {
+func (x *MoveRequest) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 func (x *MoveRequest) GetSrcFolder() string {
@@ -827,7 +827,7 @@ func (x *MoveRequest) GetDestFolder() string {
 
 type MoveResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	NewUid        string                 `protobuf:"bytes,1,opt,name=new_uid,json=newUid,proto3" json:"new_uid,omitempty"`
+	NewUid        uint32                 `protobuf:"varint,1,opt,name=new_uid,json=newUid,proto3" json:"new_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -862,17 +862,17 @@ func (*MoveResponse) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{15}
 }
 
-func (x *MoveResponse) GetNewUid() string {
+func (x *MoveResponse) GetNewUid() uint32 {
 	if x != nil {
 		return x.NewUid
 	}
-	return ""
+	return 0
 }
 
 type SetFlagsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Folder        string                 `protobuf:"bytes,1,opt,name=folder,proto3" json:"folder,omitempty"`
-	Uid           string                 `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid           uint32                 `protobuf:"varint,2,opt,name=uid,proto3" json:"uid,omitempty"`
 	Flags         []string               `protobuf:"bytes,3,rep,name=flags,proto3" json:"flags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -915,11 +915,11 @@ func (x *SetFlagsRequest) GetFolder() string {
 	return ""
 }
 
-func (x *SetFlagsRequest) GetUid() string {
+func (x *SetFlagsRequest) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 func (x *SetFlagsRequest) GetFlags() []string {
@@ -1012,7 +1012,7 @@ func (x *ExpungeRequest) GetFolder() string {
 type ExpungeResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// UIDs of messages that were permanently removed.
-	ExpelledUids  []string `protobuf:"bytes,1,rep,name=expelled_uids,json=expelledUids,proto3" json:"expelled_uids,omitempty"`
+	ExpelledUids  []uint32 `protobuf:"varint,1,rep,packed,name=expelled_uids,json=expelledUids,proto3" json:"expelled_uids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1047,7 +1047,7 @@ func (*ExpungeResponse) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{19}
 }
 
-func (x *ExpungeResponse) GetExpelledUids() []string {
+func (x *ExpungeResponse) GetExpelledUids() []uint32 {
 	if x != nil {
 		return x.ExpelledUids
 	}
@@ -1190,6 +1190,7 @@ func (x *UIDValidityRequest) GetFolder() string {
 type UIDValidityResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	UidValidity   uint32                 `protobuf:"varint,1,opt,name=uid_validity,json=uidValidity,proto3" json:"uid_validity,omitempty"`
+	UidNext       uint32                 `protobuf:"varint,2,opt,name=uid_next,json=uidNext,proto3" json:"uid_next,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1231,9 +1232,16 @@ func (x *UIDValidityResponse) GetUidValidity() uint32 {
 	return 0
 }
 
+func (x *UIDValidityResponse) GetUidNext() uint32 {
+	if x != nil {
+		return x.UidNext
+	}
+	return 0
+}
+
 type DeleteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uid           string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid           uint32                 `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1268,11 +1276,11 @@ func (*DeleteRequest) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{24}
 }
 
-func (x *DeleteRequest) GetUid() string {
+func (x *DeleteRequest) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 type DeleteResponse struct {
@@ -1313,7 +1321,7 @@ func (*DeleteResponse) Descriptor() ([]byte, []int) {
 
 type UndeleteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uid           string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid           uint32                 `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1348,11 +1356,11 @@ func (*UndeleteRequest) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{26}
 }
 
-func (x *UndeleteRequest) GetUid() string {
+func (x *UndeleteRequest) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 type UndeleteResponse struct {
@@ -1469,7 +1477,7 @@ const file_mailsession_v1_mailbox_proto_rawDesc = "" +
 	"\n" +
 	"\x1cmailsession/v1/mailbox.proto\x12\x0emailsession.v1\"I\n" +
 	"\vMessageInfo\x12\x10\n" +
-	"\x03uid\x18\x01 \x01(\tR\x03uid\x12\x12\n" +
+	"\x03uid\x18\x01 \x01(\rR\x03uid\x12\x12\n" +
 	"\x04size\x18\x02 \x01(\x03R\x04size\x12\x14\n" +
 	"\x05flags\x18\x03 \x03(\tR\x05flags\"%\n" +
 	"\vListRequest\x12\x16\n" +
@@ -1484,12 +1492,12 @@ const file_mailsession_v1_mailbox_proto_rawDesc = "" +
 	"totalBytes\"8\n" +
 	"\fFetchRequest\x12\x16\n" +
 	"\x06folder\x18\x01 \x01(\tR\x06folder\x12\x10\n" +
-	"\x03uid\x18\x02 \x01(\tR\x03uid\"#\n" +
+	"\x03uid\x18\x02 \x01(\rR\x03uid\"#\n" +
 	"\rFetchResponse\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"^\n" +
 	"\x13FetchHeadersRequest\x12\x16\n" +
 	"\x06folder\x18\x01 \x01(\tR\x06folder\x12\x10\n" +
-	"\x03uid\x18\x02 \x01(\tR\x03uid\x12\x1d\n" +
+	"\x03uid\x18\x02 \x01(\rR\x03uid\x12\x1d\n" +
 	"\n" +
 	"body_lines\x18\x03 \x01(\x05R\tbodyLines\"0\n" +
 	"\x14FetchHeadersResponse\x12\x18\n" +
@@ -1503,44 +1511,45 @@ const file_mailsession_v1_mailbox_proto_rawDesc = "" +
 	"\x05flags\x18\x02 \x03(\tR\x05flags\x12\x12\n" +
 	"\x04date\x18\x03 \x01(\tR\x04date\"\"\n" +
 	"\x0eAppendResponse\x12\x10\n" +
-	"\x03uid\x18\x01 \x01(\tR\x03uid\"X\n" +
+	"\x03uid\x18\x01 \x01(\rR\x03uid\"X\n" +
 	"\vCopyRequest\x12\x16\n" +
 	"\x06folder\x18\x01 \x01(\tR\x06folder\x12\x10\n" +
-	"\x03uid\x18\x02 \x01(\tR\x03uid\x12\x1f\n" +
+	"\x03uid\x18\x02 \x01(\rR\x03uid\x12\x1f\n" +
 	"\vdest_folder\x18\x03 \x01(\tR\n" +
 	"destFolder\"'\n" +
 	"\fCopyResponse\x12\x17\n" +
-	"\anew_uid\x18\x01 \x01(\tR\x06newUid\"_\n" +
+	"\anew_uid\x18\x01 \x01(\rR\x06newUid\"_\n" +
 	"\vMoveRequest\x12\x10\n" +
-	"\x03uid\x18\x01 \x01(\tR\x03uid\x12\x1d\n" +
+	"\x03uid\x18\x01 \x01(\rR\x03uid\x12\x1d\n" +
 	"\n" +
 	"src_folder\x18\x02 \x01(\tR\tsrcFolder\x12\x1f\n" +
 	"\vdest_folder\x18\x03 \x01(\tR\n" +
 	"destFolder\"'\n" +
 	"\fMoveResponse\x12\x17\n" +
-	"\anew_uid\x18\x01 \x01(\tR\x06newUid\"Q\n" +
+	"\anew_uid\x18\x01 \x01(\rR\x06newUid\"Q\n" +
 	"\x0fSetFlagsRequest\x12\x16\n" +
 	"\x06folder\x18\x01 \x01(\tR\x06folder\x12\x10\n" +
-	"\x03uid\x18\x02 \x01(\tR\x03uid\x12\x14\n" +
+	"\x03uid\x18\x02 \x01(\rR\x03uid\x12\x14\n" +
 	"\x05flags\x18\x03 \x03(\tR\x05flags\"\x12\n" +
 	"\x10SetFlagsResponse\"(\n" +
 	"\x0eExpungeRequest\x12\x16\n" +
 	"\x06folder\x18\x01 \x01(\tR\x06folder\"6\n" +
 	"\x0fExpungeResponse\x12#\n" +
-	"\rexpelled_uids\x18\x01 \x03(\tR\fexpelledUids\"'\n" +
+	"\rexpelled_uids\x18\x01 \x03(\rR\fexpelledUids\"'\n" +
 	"\rRescanRequest\x12\x16\n" +
 	"\x06folder\x18\x01 \x01(\tR\x06folder\"P\n" +
 	"\x0eRescanResponse\x12>\n" +
 	"\fnew_messages\x18\x01 \x03(\v2\x1b.mailsession.v1.MessageInfoR\vnewMessages\",\n" +
 	"\x12UIDValidityRequest\x12\x16\n" +
-	"\x06folder\x18\x01 \x01(\tR\x06folder\"8\n" +
+	"\x06folder\x18\x01 \x01(\tR\x06folder\"S\n" +
 	"\x13UIDValidityResponse\x12!\n" +
-	"\fuid_validity\x18\x01 \x01(\rR\vuidValidity\"!\n" +
+	"\fuid_validity\x18\x01 \x01(\rR\vuidValidity\x12\x19\n" +
+	"\buid_next\x18\x02 \x01(\rR\auidNext\"!\n" +
 	"\rDeleteRequest\x12\x10\n" +
-	"\x03uid\x18\x01 \x01(\tR\x03uid\"\x10\n" +
+	"\x03uid\x18\x01 \x01(\rR\x03uid\"\x10\n" +
 	"\x0eDeleteResponse\"#\n" +
 	"\x0fUndeleteRequest\x12\x10\n" +
-	"\x03uid\x18\x01 \x01(\tR\x03uid\"\x12\n" +
+	"\x03uid\x18\x01 \x01(\rR\x03uid\"\x12\n" +
 	"\x10UndeleteResponse\"\x0f\n" +
 	"\rCommitRequest\"\x10\n" +
 	"\x0eCommitResponse2\xa7\b\n" +

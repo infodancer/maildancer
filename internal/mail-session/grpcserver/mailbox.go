@@ -79,7 +79,7 @@ func (m *MailboxServer) Fetch(req *pb.FetchRequest, stream pb.MailboxService_Fet
 
 	rc, err := m.srv.sess.Retrieve(ctx, req.GetUid())
 	if err != nil {
-		return status.Errorf(codes.NotFound, "retrieve %q: %v", req.GetUid(), err)
+		return status.Errorf(codes.NotFound, "retrieve %d: %v", req.GetUid(), err)
 	}
 	defer func() { _ = rc.Close() }()
 
@@ -115,7 +115,7 @@ func (m *MailboxServer) FetchHeaders(ctx context.Context, req *pb.FetchHeadersRe
 
 	rc, err := m.srv.sess.Retrieve(ctx, req.GetUid())
 	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "retrieve %q: %v", req.GetUid(), err)
+		return nil, status.Errorf(codes.NotFound, "retrieve %d: %v", req.GetUid(), err)
 	}
 	data, err := io.ReadAll(rc)
 	_ = rc.Close()
@@ -272,7 +272,11 @@ func (m *MailboxServer) UIDValidity(ctx context.Context, req *pb.UIDValidityRequ
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "uid validity: %v", err)
 	}
-	return &pb.UIDValidityResponse{UidValidity: v}, nil
+	next, err := m.srv.sess.UIDNext(ctx, req.GetFolder())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "uid next: %v", err)
+	}
+	return &pb.UIDValidityResponse{UidValidity: v, UidNext: next}, nil
 }
 
 func (m *MailboxServer) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb.DeleteResponse, error) {

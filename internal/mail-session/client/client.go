@@ -58,12 +58,12 @@ func (c *Client) List(ctx context.Context, _ string) ([]msgstore.MessageInfo, er
 }
 
 // Retrieve returns the full message content by UID.
-func (c *Client) Retrieve(ctx context.Context, _ string, uid string) (io.ReadCloser, error) {
+func (c *Client) Retrieve(ctx context.Context, _ string, uid uint32) (io.ReadCloser, error) {
 	return c.RetrieveFromFolder(ctx, "", "INBOX", uid)
 }
 
 // Delete marks a message for POP3-style deletion.
-func (c *Client) Delete(ctx context.Context, _ string, uid string) error {
+func (c *Client) Delete(ctx context.Context, _ string, uid uint32) error {
 	_, err := c.mailbox.Delete(ctx, &pb.DeleteRequest{Uid: uid})
 	return err
 }
@@ -133,7 +133,7 @@ func (c *Client) StatFolder(ctx context.Context, _ string, folder string) (int, 
 }
 
 // RetrieveFromFolder returns the full message content from a folder.
-func (c *Client) RetrieveFromFolder(ctx context.Context, _ string, folder string, uid string) (io.ReadCloser, error) {
+func (c *Client) RetrieveFromFolder(ctx context.Context, _ string, folder string, uid uint32) (io.ReadCloser, error) {
 	stream, err := c.mailbox.Fetch(ctx, &pb.FetchRequest{Folder: folder, Uid: uid})
 	if err != nil {
 		return nil, err
@@ -154,7 +154,7 @@ func (c *Client) RetrieveFromFolder(ctx context.Context, _ string, folder string
 }
 
 // DeleteInFolder marks a message in a folder for deletion via IMAP \Deleted flag.
-func (c *Client) DeleteInFolder(ctx context.Context, _ string, folder string, uid string) error {
+func (c *Client) DeleteInFolder(ctx context.Context, _ string, folder string, uid uint32) error {
 	_, err := c.mailbox.SetFlags(ctx, &pb.SetFlagsRequest{
 		Folder: folder,
 		Uid:    uid,
@@ -221,15 +221,15 @@ func (c *Client) RenameFolder(ctx context.Context, _ string, oldName string, new
 }
 
 // AppendToFolder stores a message in a folder with explicit flags and date.
-func (c *Client) AppendToFolder(ctx context.Context, _ string, folder string, r io.Reader, flags []string, date time.Time) (string, error) {
+func (c *Client) AppendToFolder(ctx context.Context, _ string, folder string, r io.Reader, flags []string, date time.Time) (uint32, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return "", fmt.Errorf("read message: %w", err)
+		return 0, fmt.Errorf("read message: %w", err)
 	}
 
 	stream, err := c.mailbox.Append(ctx)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	if err := stream.Send(&pb.AppendRequest{
@@ -241,7 +241,7 @@ func (c *Client) AppendToFolder(ctx context.Context, _ string, folder string, r 
 			},
 		},
 	}); err != nil {
-		return "", err
+		return 0, err
 	}
 
 	for off := 0; off < len(data); {
@@ -252,20 +252,20 @@ func (c *Client) AppendToFolder(ctx context.Context, _ string, folder string, r 
 		if err := stream.Send(&pb.AppendRequest{
 			Payload: &pb.AppendRequest_Data{Data: data[off:end]},
 		}); err != nil {
-			return "", err
+			return 0, err
 		}
 		off = end
 	}
 
 	resp, err := stream.CloseAndRecv()
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	return resp.GetUid(), nil
 }
 
 // SetFlagsInFolder replaces the complete flag set on a message.
-func (c *Client) SetFlagsInFolder(ctx context.Context, _ string, folder string, uid string, flags []string) error {
+func (c *Client) SetFlagsInFolder(ctx context.Context, _ string, folder string, uid uint32, flags []string) error {
 	_, err := c.mailbox.SetFlags(ctx, &pb.SetFlagsRequest{
 		Folder: folder,
 		Uid:    uid,
@@ -275,14 +275,14 @@ func (c *Client) SetFlagsInFolder(ctx context.Context, _ string, folder string, 
 }
 
 // CopyMessage copies a message between folders.
-func (c *Client) CopyMessage(ctx context.Context, _ string, srcFolder string, uid string, destFolder string) (string, error) {
+func (c *Client) CopyMessage(ctx context.Context, _ string, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	resp, err := c.mailbox.Copy(ctx, &pb.CopyRequest{
 		Folder:     srcFolder,
 		Uid:        uid,
 		DestFolder: destFolder,
 	})
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	return resp.GetNewUid(), nil
 }
@@ -296,16 +296,25 @@ func (c *Client) UIDValidity(ctx context.Context, _ string, folder string) (uint
 	return resp.GetUidValidity(), nil
 }
 
+// UIDNext returns the next UID that will be assigned in the folder.
+func (c *Client) UIDNext(ctx context.Context, _ string, folder string) (uint32, error) {
+	resp, err := c.mailbox.UIDValidity(ctx, &pb.UIDValidityRequest{Folder: folder})
+	if err != nil {
+		return 0, err
+	}
+	return resp.GetUidNext(), nil
+}
+
 // MoveMessage atomically moves a message between folders.
 // The mailbox parameter is ignored — the server's mailbox was set at startup.
-func (c *Client) MoveMessage(ctx context.Context, _ string, srcFolder string, uid string, destFolder string) (string, error) {
+func (c *Client) MoveMessage(ctx context.Context, _ string, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	resp, err := c.mailbox.Move(ctx, &pb.MoveRequest{
 		Uid:        uid,
 		SrcFolder:  srcFolder,
 		DestFolder: destFolder,
 	})
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	return resp.GetNewUid(), nil
 }

@@ -24,7 +24,7 @@ type Session struct {
 	mailbox        string               // user identity set by MAILBOX; used in all store calls
 	selectedFolder string               // currently selected folder; "" = root (POP3 compat)
 	msgs           []msgstore.MessageInfo
-	deleted        map[string]struct{} // POP3 pending-deletion marks (not used in IMAP path)
+	deleted        map[uint32]struct{} // POP3 pending-deletion marks (not used in IMAP path)
 }
 
 // New returns a Session backed by the given MessageStore.
@@ -34,7 +34,7 @@ func New(store msgstore.MessageStore) *Session {
 	return &Session{
 		store:       store,
 		folderStore: fs,
-		deleted:     make(map[string]struct{}),
+		deleted:     make(map[uint32]struct{}),
 	}
 }
 
@@ -48,7 +48,7 @@ func (s *Session) Open(ctx context.Context, mailbox string) error {
 	s.mailbox = mailbox
 	s.selectedFolder = ""
 	s.msgs = msgs
-	s.deleted = make(map[string]struct{})
+	s.deleted = make(map[uint32]struct{})
 	return nil
 }
 
@@ -71,7 +71,7 @@ func (s *Session) Stat() (count int, totalBytes int64) {
 }
 
 // GetUID finds a message by UID in the cache. Returns ErrMessageNotFound if absent.
-func (s *Session) GetUID(uid string) (*msgstore.MessageInfo, error) {
+func (s *Session) GetUID(uid uint32) (*msgstore.MessageInfo, error) {
 	for i := range s.msgs {
 		if s.msgs[i].UID == uid {
 			return &s.msgs[i], nil
@@ -82,7 +82,7 @@ func (s *Session) GetUID(uid string) (*msgstore.MessageInfo, error) {
 
 // Retrieve returns the content of a message by UID from the currently selected folder.
 // Routes to the correct store method depending on selectedFolder.
-func (s *Session) Retrieve(ctx context.Context, uid string) (io.ReadCloser, error) {
+func (s *Session) Retrieve(ctx context.Context, uid uint32) (io.ReadCloser, error) {
 	if s.selectedFolder == "" || strings.EqualFold(s.selectedFolder, "INBOX") {
 		return s.store.Retrieve(ctx, s.mailbox, uid)
 	}
@@ -93,7 +93,7 @@ func (s *Session) Retrieve(ctx context.Context, uid string) (io.ReadCloser, erro
 }
 
 // Delete marks a UID for deletion (POP3 path). Returns ErrMessageNotFound or ErrAlreadyDeleted.
-func (s *Session) Delete(uid string) error {
+func (s *Session) Delete(uid uint32) error {
 	if _, err := s.GetUID(uid); err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (s *Session) Delete(uid string) error {
 }
 
 // Undelete clears a deletion mark (POP3 path). Returns ErrMessageNotFound or ErrNotDeleted.
-func (s *Session) Undelete(uid string) error {
+func (s *Session) Undelete(uid uint32) error {
 	if _, err := s.GetUID(uid); err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func (s *Session) Undelete(uid string) error {
 func (s *Session) Commit(ctx context.Context) error {
 	for uid := range s.deleted {
 		if err := s.store.Delete(ctx, s.mailbox, uid); err != nil {
-			return fmt.Errorf("delete %q: %w", uid, err)
+			return fmt.Errorf("delete %d: %w", uid, err)
 		}
 	}
 	if len(s.deleted) > 0 {
@@ -155,7 +155,7 @@ func (s *Session) Rescan(ctx context.Context) ([]msgstore.MessageInfo, error) {
 		return nil, fmt.Errorf("rescan: %w", err)
 	}
 
-	known := make(map[string]struct{}, len(s.msgs))
+	known := make(map[uint32]struct{}, len(s.msgs))
 	for _, m := range s.msgs {
 		known[m.UID] = struct{}{}
 	}
@@ -219,6 +219,14 @@ func (s *Session) UIDValidity(ctx context.Context, folder string) (uint32, error
 	return s.folderStore.UIDValidity(ctx, s.mailbox, folder)
 }
 
+// UIDNext returns the next UID that will be assigned in the named folder.
+func (s *Session) UIDNext(ctx context.Context, folder string) (uint32, error) {
+	if s.folderStore == nil {
+		return 0, fmt.Errorf("folder operations not supported")
+	}
+	return s.folderStore.UIDNext(ctx, s.mailbox, folder)
+}
+
 // CreateFolder creates a new folder within the current mailbox.
 func (s *Session) CreateFolder(ctx context.Context, name string) error {
 	if s.folderStore == nil {
@@ -245,7 +253,7 @@ func (s *Session) RenameFolder(ctx context.Context, oldName, newName string) err
 
 // SetFlags replaces the complete flag set on a message in the currently selected folder.
 // The in-memory cache is updated to reflect the change.
-func (s *Session) SetFlags(ctx context.Context, uid string, flags []string) error {
+func (s *Session) SetFlags(ctx context.Context, uid uint32, flags []string) error {
 	if s.folderStore == nil {
 		return fmt.Errorf("folder operations not supported")
 	}
@@ -269,22 +277,22 @@ func (s *Session) SetFlags(ctx context.Context, uid string, flags []string) erro
 // Expunge permanently removes all messages in the currently selected folder that
 // carry the \Deleted flag. Returns the msgstore UIDs of the expelled messages.
 // The session remains open after expunge (unlike POP3 COMMIT).
-func (s *Session) Expunge(ctx context.Context) ([]string, error) {
-	var expelled []string
+func (s *Session) Expunge(ctx context.Context) ([]uint32, error) {
+	var expelled []uint32
 
 	for _, m := range s.msgs {
 		if hasFlag(m.Flags, flagDeleted) {
 			folder := s.selectedFolder
 			if folder == "" || strings.EqualFold(folder, "INBOX") {
 				if err := s.store.Delete(ctx, s.mailbox, m.UID); err != nil {
-					return nil, fmt.Errorf("delete %q: %w", m.UID, err)
+					return nil, fmt.Errorf("delete %d: %w", m.UID, err)
 				}
 			} else {
 				if s.folderStore == nil {
 					return nil, fmt.Errorf("folder operations not supported")
 				}
 				if err := s.folderStore.DeleteInFolder(ctx, s.mailbox, folder, m.UID); err != nil {
-					return nil, fmt.Errorf("delete %q in %q: %w", m.UID, folder, err)
+					return nil, fmt.Errorf("delete %d in %q: %w", m.UID, folder, err)
 				}
 			}
 			expelled = append(expelled, m.UID)
@@ -315,22 +323,22 @@ func (s *Session) Expunge(ctx context.Context) ([]string, error) {
 
 // AppendMessage stores a new message in the named folder with the given flags and date.
 // Returns the assigned msgstore UID.
-func (s *Session) AppendMessage(ctx context.Context, folder string, data []byte, flags []string, date time.Time) (string, error) {
+func (s *Session) AppendMessage(ctx context.Context, folder string, data []byte, flags []string, date time.Time) (uint32, error) {
 	if s.folderStore == nil {
-		return "", fmt.Errorf("folder operations not supported")
+		return 0, fmt.Errorf("folder operations not supported")
 	}
 	uid, err := s.folderStore.AppendToFolder(ctx, s.mailbox, folder, strings.NewReader(string(data)), flags, date)
 	if err != nil {
-		return "", fmt.Errorf("append to %q: %w", folder, err)
+		return 0, fmt.Errorf("append to %q: %w", folder, err)
 	}
 	return uid, nil
 }
 
 // CopyMessage copies the message with the given UID from the currently selected
 // folder to destFolder. Returns the new UID in the destination.
-func (s *Session) CopyMessage(ctx context.Context, uid, destFolder string) (string, error) {
+func (s *Session) CopyMessage(ctx context.Context, uid uint32, destFolder string) (uint32, error) {
 	if s.folderStore == nil {
-		return "", fmt.Errorf("folder operations not supported")
+		return 0, fmt.Errorf("folder operations not supported")
 	}
 	folder := s.selectedFolder
 	if folder == "" {
@@ -338,7 +346,7 @@ func (s *Session) CopyMessage(ctx context.Context, uid, destFolder string) (stri
 	}
 	newUID, err := s.folderStore.CopyMessage(ctx, s.mailbox, folder, uid, destFolder)
 	if err != nil {
-		return "", fmt.Errorf("copy %q from %q to %q: %w", uid, folder, destFolder, err)
+		return 0, fmt.Errorf("copy %d from %q to %q: %w", uid, folder, destFolder, err)
 	}
 	return newUID, nil
 }
@@ -346,7 +354,7 @@ func (s *Session) CopyMessage(ctx context.Context, uid, destFolder string) (stri
 // RetrieveFrom returns the content of a message by UID from an explicit folder,
 // ignoring the currently selected folder. Used to fetch message bytes for rspamd
 // learning before a move operation changes the message's location.
-func (s *Session) RetrieveFrom(ctx context.Context, folder, uid string) (io.ReadCloser, error) {
+func (s *Session) RetrieveFrom(ctx context.Context, folder string, uid uint32) (io.ReadCloser, error) {
 	if folder == "" || strings.EqualFold(folder, "INBOX") {
 		return s.store.Retrieve(ctx, s.mailbox, uid)
 	}
@@ -359,39 +367,48 @@ func (s *Session) RetrieveFrom(ctx context.Context, folder, uid string) (io.Read
 // MoveMessage copies a message from srcFolder to destFolder, then deletes and
 // expunges it from the source. Returns the new UID in the destination.
 // srcFolder "" is treated as INBOX.
-func (s *Session) MoveMessage(ctx context.Context, uid, srcFolder, destFolder string) (string, error) {
+func (s *Session) MoveMessage(ctx context.Context, uid uint32, srcFolder, destFolder string) (uint32, error) {
 	if s.folderStore == nil {
-		return "", fmt.Errorf("folder operations not supported")
+		return 0, fmt.Errorf("folder operations not supported")
 	}
 	if srcFolder == "" {
 		srcFolder = "INBOX"
 	}
 	if strings.EqualFold(srcFolder, destFolder) {
-		return "", fmt.Errorf("source and destination folder are the same")
+		return 0, fmt.Errorf("source and destination folder are the same")
 	}
 
 	newUID, err := s.folderStore.CopyMessage(ctx, s.mailbox, srcFolder, uid, destFolder)
 	if err != nil {
-		return "", fmt.Errorf("copy %q from %q to %q: %w", uid, srcFolder, destFolder, err)
+		return 0, fmt.Errorf("copy %d from %q to %q: %w", uid, srcFolder, destFolder, err)
 	}
 
 	if strings.EqualFold(srcFolder, "INBOX") {
 		if err := s.store.Delete(ctx, s.mailbox, uid); err != nil {
-			return "", fmt.Errorf("delete %q from INBOX: %w", uid, err)
+			return 0, fmt.Errorf("delete %d from INBOX: %w", uid, err)
 		}
 		if err := s.store.Expunge(ctx, s.mailbox); err != nil {
-			return "", fmt.Errorf("expunge INBOX: %w", err)
+			return 0, fmt.Errorf("expunge INBOX: %w", err)
 		}
 	} else {
 		if err := s.folderStore.DeleteInFolder(ctx, s.mailbox, srcFolder, uid); err != nil {
-			return "", fmt.Errorf("delete %q from %q: %w", uid, srcFolder, err)
+			return 0, fmt.Errorf("delete %d from %q: %w", uid, srcFolder, err)
 		}
 		if err := s.folderStore.ExpungeFolder(ctx, s.mailbox, srcFolder); err != nil {
-			return "", fmt.Errorf("expunge %q: %w", srcFolder, err)
+			return 0, fmt.Errorf("expunge %q: %w", srcFolder, err)
 		}
 	}
 
 	return newUID, nil
+}
+
+// GetDeletedUIDs returns the UIDs currently marked for POP3 deletion.
+func (s *Session) GetDeletedUIDs() []uint32 {
+	uids := make([]uint32, 0, len(s.deleted))
+	for uid := range s.deleted {
+		uids = append(uids, uid)
+	}
+	return uids
 }
 
 // hasFlag reports whether flags contains the given flag string.

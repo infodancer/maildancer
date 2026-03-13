@@ -23,6 +23,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"github.com/infodancer/maildancer/internal/queue-manager/config"
+	"github.com/infodancer/maildancer/internal/queue-manager/metrics"
 	"github.com/infodancer/maildancer/internal/queue-manager/scheduler"
 )
 
@@ -96,7 +98,30 @@ func run() error {
 		"session_manager_socket", fileCfg.SessionManager.Socket,
 		"rate_limit_mph", fileCfg.RateLimit.MessagesPerHour,
 		"rate_limit_burst", fileCfg.RateLimit.Burst,
-		"rate_limit_domains", len(fileCfg.RateLimit.Domains))
+		"rate_limit_domains", len(fileCfg.RateLimit.Domains),
+		"metrics_enabled", fileCfg.Metrics.Enabled)
+
+	// Initialize metrics.
+	metricsCfg := metrics.Config{
+		Enabled: fileCfg.Metrics.Enabled,
+		Address: fileCfg.Metrics.Address,
+		Path:    fileCfg.Metrics.Path,
+	}
+	collector, metricsServer := metrics.New(metricsCfg)
+
+	// Start metrics server in the background.
+	metricsCtx, metricsCancel := context.WithCancel(context.Background())
+	defer metricsCancel()
+	go func() {
+		if err := metricsServer.Start(metricsCtx); err != nil {
+			slog.Error("metrics server error", "error", err)
+		}
+	}()
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = metricsServer.Shutdown(shutdownCtx)
+	}()
 
 	cfg := scheduler.Config{
 		QueueDir:         *queueDir,
@@ -111,6 +136,7 @@ func run() error {
 		RateLimit:        fileCfg.RateLimit,
 		DSN:              fileCfg.DSN,
 		SessionManager:   fileCfg.SessionManager,
+		Collector:        collector,
 	}
 
 	sched, err := scheduler.New(cfg)

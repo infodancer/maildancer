@@ -34,6 +34,13 @@ type SessionManagerConfig struct {
 	Socket string // Unix domain socket path
 }
 
+// MetricsConfig controls the Prometheus metrics HTTP server.
+type MetricsConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Address string `toml:"address"`
+	Path    string `toml:"path"`
+}
+
 // QueueManagerConfig holds all queue-manager configuration from the TOML file.
 type QueueManagerConfig struct {
 	Hostname         string
@@ -41,6 +48,7 @@ type QueueManagerConfig struct {
 	RateLimit        RateLimitConfig
 	DSN              DSNConfig
 	SessionManager   SessionManagerConfig
+	Metrics          MetricsConfig
 }
 
 // DefaultRateLimit returns sensible default rate limit settings.
@@ -63,6 +71,7 @@ type tomlQueueManager struct {
 	RateLimit        tomlRateLimit      `toml:"rate-limit"`
 	DSN              tomlDSN            `toml:"dsn"`
 	SessionManager   tomlSessionManager `toml:"session-manager"`
+	Metrics          MetricsConfig      `toml:"metrics"`
 }
 
 type tomlSessionManager struct {
@@ -144,6 +153,15 @@ func Load(path string) (QueueManagerConfig, error) {
 
 	// Session-manager.
 	cfg.SessionManager.Socket = fc.QueueManager.SessionManager.Socket
+
+	// Metrics.
+	cfg.Metrics = fc.QueueManager.Metrics
+	if cfg.Metrics.Address == "" {
+		cfg.Metrics.Address = ":9100"
+	}
+	if cfg.Metrics.Path == "" {
+		cfg.Metrics.Path = "/metrics"
+	}
 
 	return cfg, nil
 }

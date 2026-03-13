@@ -17,6 +17,7 @@ import (
 	"github.com/infodancer/maildancer/internal/queue-manager/config"
 	"github.com/infodancer/maildancer/internal/queue-manager/delivery"
 	"github.com/infodancer/maildancer/internal/queue-manager/dsn"
+	"github.com/infodancer/maildancer/internal/queue-manager/metrics"
 )
 
 // deliveryResult is the per-recipient outcome reported by mail-remote on stdout.
@@ -42,6 +43,7 @@ type Config struct {
 	RateLimit        config.RateLimitConfig      // per-domain delivery rate limiting
 	DSN              config.DSNConfig            // DSN bounce generation settings
 	SessionManager   config.SessionManagerConfig // session-manager gRPC endpoint
+	Collector        metrics.Collector           // metrics collector; nil = no-op
 }
 
 // Scheduler scans the queue and invokes mail-remote for ready envelopes.
@@ -51,14 +53,21 @@ type Scheduler struct {
 	dsnGen        *dsn.Generator   // nil if DSN disabled
 	deliverer     *delivery.Client // nil if no session-manager socket configured
 	outboundCache map[string]*OutboundConfig
+	collector     metrics.Collector
 }
 
 // New creates a Scheduler with the given config.
 func New(cfg Config) (*Scheduler, error) {
+	collector := cfg.Collector
+	if collector == nil {
+		collector = &metrics.NoopCollector{}
+	}
+
 	s := &Scheduler{
 		cfg:           cfg,
 		limiter:       newDomainLimiter(cfg.RateLimit),
 		outboundCache: make(map[string]*OutboundConfig),
+		collector:     collector,
 	}
 
 	if cfg.DSN.Enabled {
@@ -102,10 +111,18 @@ func (s *Scheduler) Run() {
 // It first recovers any envelopes left in .delivering state from a previous
 // crash, then scans for ready envelopes.
 func (s *Scheduler) RunOnce() error {
+	scanStart := time.Now()
 	s.outboundCache = make(map[string]*OutboundConfig)
 	envDir := filepath.Join(s.cfg.QueueDir, "env")
 	s.recoverStaleDeliveries(envDir)
-	return s.scanEnvDir(envDir)
+	err := s.scanEnvDir(envDir)
+	s.collector.ScanCompleted(time.Since(scanStart))
+
+	// Count total envelopes for queue depth gauge.
+	depth := s.countEnvelopes(envDir)
+	s.collector.QueueDepth(depth)
+
+	return err
 }
 
 // scanEnvDir walks env/{tld}/{domain}/ and groups ready envelopes by body.
@@ -178,6 +195,7 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 		if s.limiter != nil && !s.limiter.allow(fqdn, len(entries)) {
 			slog.Info("rate limited, deferring delivery",
 				"domain", fqdn, "msgid", msgid, "envelopes", len(entries))
+			s.collector.RateLimitHit(fqdn)
 			domainDeferred += len(entries)
 			continue
 		}
@@ -230,8 +248,12 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 		var activePaths []string
 		for _, ce := range claimed {
 			if ce.expired {
+				s.collector.DeliveryAttempted(fqdn)
+				invokeStart := time.Now()
 				results := s.invoke(bodyPath, []string{ce.claimed}, true, outbound)
+				s.collector.DeliveryDuration(fqdn, time.Since(invokeStart))
 				tallyResults(results, &domainDelivered, &domainPermFail, &domainTempFail)
+				s.recordDeliveryResults(fqdn, results)
 				// TTL expiry is a permanent failure for any non-delivered result.
 				s.generateDSNsForExpired(bodyPath, results, envByPath, fqdn)
 				slog.Info("removing expired envelope after final attempt", "path", ce.claimed)
@@ -244,8 +266,12 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 		}
 
 		if len(activePaths) > 0 {
+			s.collector.DeliveryAttempted(fqdn)
+			invokeStart := time.Now()
 			results := s.invoke(bodyPath, activePaths, false, outbound)
+			s.collector.DeliveryDuration(fqdn, time.Since(invokeStart))
 			tallyResults(results, &domainDelivered, &domainPermFail, &domainTempFail)
+			s.recordDeliveryResults(fqdn, results)
 			// Mid-queue 5xx: generate DSNs for permanent failures only.
 			s.generateDSNsForPermFail(bodyPath, results, envByPath, fqdn)
 		}
@@ -275,6 +301,13 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 	// Clean up orphan body files: bodies whose msgid has no remaining envelopes.
 	s.cleanOrphanBodies(domainPath)
 	return nil
+}
+
+// recordDeliveryResults records per-result metrics via the collector.
+func (s *Scheduler) recordDeliveryResults(domain string, results []deliveryResult) {
+	for _, r := range results {
+		s.collector.DeliveryCompleted(domain, r.Status)
+	}
 }
 
 // tallyResults counts delivery outcomes from invoke results.
@@ -356,6 +389,12 @@ func (s *Scheduler) generateAndDeliverDSN(bodyPath string, env queueEnvelope, re
 			"origin", env.Origin, "recipient", env.Recipient, "error", err)
 		return
 	}
+
+	reason := "permanent"
+	if expired {
+		reason = "expired"
+	}
+	s.collector.BounceGenerated(domain, reason)
 
 	slog.Info("DSN generated",
 		"origin", env.Origin, "failed_recipient", env.Recipient, "size", len(dsnMsg))
@@ -754,11 +793,40 @@ func (s *Scheduler) recoverStaleDeliveries(envDir string) {
 				if _, err := unclaim(claimedPath); err != nil {
 					slog.Warn("could not recover stale delivery", "path", claimedPath, "error", err)
 				} else {
+					s.collector.StaleRecovered()
 					slog.Info("recovered stale delivery", "path", claimedPath)
 				}
 			}
 		}
 	}
+}
+
+// countEnvelopes counts the total number of envelope files across all domain
+// directories, for reporting queue depth.
+func (s *Scheduler) countEnvelopes(envDir string) int {
+	count := 0
+	tlds, err := readdir(envDir)
+	if err != nil {
+		return 0
+	}
+	for _, tld := range tlds {
+		domains, err := readdir(filepath.Join(envDir, tld))
+		if err != nil {
+			continue
+		}
+		for _, domain := range domains {
+			entries, err := readdir(filepath.Join(envDir, tld, domain))
+			if err != nil {
+				continue
+			}
+			for _, name := range entries {
+				if _, ok := extractMsgID(name); ok {
+					count++
+				}
+			}
+		}
+	}
+	return count
 }
 
 func readdir(path string) ([]string, error) {

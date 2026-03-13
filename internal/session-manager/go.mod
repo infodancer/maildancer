@@ -4,8 +4,8 @@ go 1.26.1
 
 require (
 	github.com/infodancer/maildancer/auth v0.1.13
-	github.com/infodancer/maildancer/internal/mail-session v0.1.2
-	github.com/infodancer/maildancer/msgstore v0.2.2-0.20260303202932-60ef82df8079
+	github.com/infodancer/maildancer/internal/mail-session v0.1.3-0.20260313080315-2774e158a243
+	github.com/infodancer/maildancer/msgstore v0.2.5-0.20260313075010-ceed9cfc0b22
 	github.com/pelletier/go-toml/v2 v2.2.4
 	google.golang.org/grpc v1.79.2
 	google.golang.org/protobuf v1.36.11

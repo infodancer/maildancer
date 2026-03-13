@@ -317,6 +317,88 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 	})
 }
 
+func TestSession_Mail_SenderVerification(t *testing.T) {
+	logger := slog.Default()
+
+	t.Run("unauthenticated allows any sender", func(t *testing.T) {
+		session := &Session{
+			backend: &Backend{},
+			logger:  logger,
+		}
+		err := session.Mail("anyone@anywhere.com", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("authenticated allows matching domain", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "matthew@example.com",
+			logger:   logger,
+		}
+		err := session.Mail("matthew@example.com", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("authenticated allows different local part same domain", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "matthew@example.com",
+			logger:   logger,
+		}
+		err := session.Mail("noreply@example.com", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("authenticated rejects different domain", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "matthew@example.com",
+			logger:   logger,
+		}
+		err := session.Mail("matthew@otherdomain.com", nil)
+		if err == nil {
+			t.Fatal("expected error for mismatched domain")
+		}
+		smtpErr, ok := err.(*gosmtp.SMTPError)
+		if !ok {
+			t.Fatalf("expected SMTPError, got %T", err)
+		}
+		if smtpErr.Code != 553 {
+			t.Errorf("expected code 553, got %d", smtpErr.Code)
+		}
+	})
+
+	t.Run("authenticated allows bounce (empty sender)", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "matthew@example.com",
+			logger:   logger,
+		}
+		err := session.Mail("", nil)
+		if err != nil {
+			t.Fatalf("unexpected error for bounce: %v", err)
+		}
+	})
+
+	t.Run("case insensitive domain match", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "matthew@Example.COM",
+			logger:   logger,
+		}
+		err := session.Mail("matthew@example.com", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestExtractDomain(t *testing.T) {
 	tests := []struct {
 		email    string

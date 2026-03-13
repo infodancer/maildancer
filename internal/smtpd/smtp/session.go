@@ -242,8 +242,17 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 // Implements smtp.Session interface.
 func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 	// Per-sender rate limiting for authenticated submission (Redis-backed).
+	// Resolves per-domain limit from DomainConfig.Limits with global fallback.
 	if s.authUser != "" && s.backend.senderRateLimiter != nil {
-		if !s.backend.senderRateLimiter.allow(context.Background(), s.authUser) {
+		maxRate := s.backend.maxSendsPerHour
+		if senderDomain := extractDomain(s.authUser); senderDomain != "" {
+			if dp := s.backend.domainProvider; dp != nil {
+				if dom := dp.GetDomain(senderDomain); dom != nil && dom.Limits.MaxSendsPerHour > 0 {
+					maxRate = dom.Limits.MaxSendsPerHour
+				}
+			}
+		}
+		if maxRate > 0 && !s.backend.senderRateLimiter.allow(context.Background(), s.authUser, maxRate) {
 			s.logger.Warn("sender rate limit exceeded",
 				slog.String("auth_user", s.authUser))
 			return &smtp.SMTPError{

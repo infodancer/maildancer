@@ -331,7 +331,7 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 		}
 	})
 
-	t.Run("authenticated allows matching domain", func(t *testing.T) {
+	t.Run("authenticated allows exact match", func(t *testing.T) {
 		session := &Session{
 			backend:  &Backend{},
 			authUser: "matthew@example.com",
@@ -343,15 +343,22 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 		}
 	})
 
-	t.Run("authenticated allows different local part same domain", func(t *testing.T) {
+	t.Run("authenticated rejects different local part same domain", func(t *testing.T) {
 		session := &Session{
 			backend:  &Backend{},
 			authUser: "matthew@example.com",
 			logger:   logger,
 		}
 		err := session.Mail("noreply@example.com", nil)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+		if err == nil {
+			t.Fatal("expected error for different local part")
+		}
+		smtpErr, ok := err.(*gosmtp.SMTPError)
+		if !ok {
+			t.Fatalf("expected SMTPError, got %T", err)
+		}
+		if smtpErr.Code != 553 {
+			t.Errorf("expected code 553, got %d", smtpErr.Code)
 		}
 	})
 
@@ -386,13 +393,25 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 		}
 	})
 
-	t.Run("case insensitive domain match", func(t *testing.T) {
+	t.Run("case insensitive match", func(t *testing.T) {
 		session := &Session{
 			backend:  &Backend{},
-			authUser: "matthew@Example.COM",
+			authUser: "Matthew@Example.COM",
 			logger:   logger,
 		}
 		err := session.Mail("matthew@example.com", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("angle brackets stripped for comparison", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "matthew@example.com",
+			logger:   logger,
+		}
+		err := session.Mail("<matthew@example.com>", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

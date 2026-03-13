@@ -241,12 +241,14 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 // Mail handles the MAIL FROM command.
 // Implements smtp.Session interface.
 func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
-	// Sender verification: authenticated users may only send from their own domain.
-	// Bounce messages (empty sender) are exempt — they're legitimate in submission.
+	// Sender verification: authenticated users may only send as their exact
+	// authenticated address. No aliases, no other local parts on the same domain.
+	// Bounce messages (empty sender) are exempt.
 	if s.authUser != "" && from != "" {
-		fromDomain := extractDomain(from)
-		authDomain := sessionExtractAuthDomain(s.authUser)
-		if !strings.EqualFold(fromDomain, authDomain) {
+		// Normalize both addresses: strip angle brackets, lowercase.
+		normFrom := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(from, "<"), ">"))
+		normAuth := strings.ToLower(s.authUser)
+		if normFrom != normAuth {
 			s.logger.Warn("sender verification failed",
 				slog.String("auth_user", s.authUser),
 				slog.String("from", from))

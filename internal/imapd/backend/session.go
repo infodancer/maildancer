@@ -54,6 +54,7 @@ type Session struct {
 	// Selected state
 	selectedMailbox string
 	messages        []msgstore.MessageInfo
+	uidIndex        map[imap.UID]int // UID → message index, built on Select
 	tracker         *imapserver.MailboxTracker
 	sessionTracker  *imapserver.SessionTracker
 	readOnly        bool
@@ -243,6 +244,7 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 			}
 			if len(newMsgs) > 0 {
 				s.messages = append(s.messages, newMsgs...)
+				s.buildUIDIndex()
 				s.tracker.QueueNumMessages(uint32(len(s.messages)))
 				if err := s.sessionTracker.Poll(w, false); err != nil {
 					return err
@@ -450,6 +452,7 @@ func (s *Session) unselect() {
 	}
 	s.tracker = nil
 	s.messages = nil
+	s.uidIndex = nil
 	s.selectedMailbox = ""
 }
 
@@ -538,8 +541,15 @@ func (s *Session) resolveNumSet(numSet imap.NumSet) []int {
 	case imap.SeqSet:
 		nums, ok := ns.Nums()
 		if !ok {
+			// Dynamic range (contains "*"). Check each sequence number
+			// against the set. Per RFC 9051 §2.3.1.1, ranges containing
+			// "*" always include the last message in the mailbox.
+			maxIdx := len(s.messages) - 1
 			for i := range s.messages {
-				indices = append(indices, i)
+				seq := uint32(i + 1)
+				if ns.Contains(seq) || i == maxIdx {
+					indices = append(indices, i)
+				}
 			}
 			return indices
 		}
@@ -549,14 +559,32 @@ func (s *Session) resolveNumSet(numSet imap.NumSet) []int {
 	case imap.UIDSet:
 		uids, ok := ns.Nums()
 		if !ok {
-			for i := range s.messages {
-				indices = append(indices, i)
+			// Dynamic range (contains "*"). Check each message's real UID
+			// against the set. Per RFC 9051 §2.3.1.1, ranges containing
+			// "*" always include the last message in the mailbox.
+			maxIdx := len(s.messages) - 1
+			for i, msg := range s.messages {
+				uid := imap.UID(msg.UID)
+				if ns.Contains(uid) || i == maxIdx {
+					indices = append(indices, i)
+				}
 			}
 			return indices
 		}
+		// Static UIDs: look up in uidIndex map for O(1) resolution.
 		for _, u := range uids {
-			indices = append(indices, int(u)-1)
+			if idx, ok := s.uidIndex[u]; ok {
+				indices = append(indices, idx)
+			}
 		}
 	}
 	return indices
+}
+
+// buildUIDIndex populates the uidIndex map from the current message list.
+func (s *Session) buildUIDIndex() {
+	s.uidIndex = make(map[imap.UID]int, len(s.messages))
+	for i, m := range s.messages {
+		s.uidIndex[imap.UID(m.UID)] = i
+	}
 }

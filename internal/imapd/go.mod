@@ -7,9 +7,9 @@ require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-message v0.18.2
 	github.com/infodancer/maildancer/auth v0.1.14
-	github.com/infodancer/maildancer/internal/mail-session v0.1.2
-	github.com/infodancer/maildancer/msgstore v0.2.4
-	github.com/infodancer/maildancer/internal/session-manager v0.1.1
+	github.com/infodancer/maildancer/internal/mail-session v0.1.3-0.20260313080315-2774e158a243
+	github.com/infodancer/maildancer/msgstore v0.2.5-0.20260313075010-ceed9cfc0b22
+	github.com/infodancer/maildancer/internal/session-manager v0.1.2-0.20260313080955-e5678627d2f2
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0

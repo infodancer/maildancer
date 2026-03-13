@@ -56,8 +56,8 @@ func (m *mockMailboxService) List(ctx context.Context, req *pb.ListRequest) (*pb
 	m.lastToken = tokenFromCtx(ctx)
 	return &pb.ListResponse{
 		Messages: []*pb.MessageInfo{
-			{Uid: "msg1", Size: 100},
-			{Uid: "msg2", Size: 200},
+			{Uid: 1, Size: 100},
+			{Uid: 2, Size: 200},
 		},
 	}, nil
 }
@@ -74,12 +74,12 @@ func (m *mockMailboxService) UIDValidity(ctx context.Context, _ *pb.UIDValidityR
 
 func (m *mockMailboxService) Copy(ctx context.Context, _ *pb.CopyRequest) (*pb.CopyResponse, error) {
 	m.lastToken = tokenFromCtx(ctx)
-	return &pb.CopyResponse{NewUid: "copy1"}, nil
+	return &pb.CopyResponse{NewUid: 101}, nil
 }
 
 func (m *mockMailboxService) Move(ctx context.Context, _ *pb.MoveRequest) (*pb.MoveResponse, error) {
 	m.lastToken = tokenFromCtx(ctx)
-	return &pb.MoveResponse{NewUid: "moved1"}, nil
+	return &pb.MoveResponse{NewUid: 201}, nil
 }
 
 func (m *mockMailboxService) SetFlags(ctx context.Context, _ *pb.SetFlagsRequest) (*pb.SetFlagsResponse, error) {
@@ -96,7 +96,7 @@ func (m *mockMailboxService) Rescan(ctx context.Context, _ *pb.RescanRequest) (*
 	m.lastToken = tokenFromCtx(ctx)
 	return &pb.RescanResponse{
 		NewMessages: []*pb.MessageInfo{
-			{Uid: "new1", Size: 50},
+			{Uid: 99, Size: 50},
 		},
 	}, nil
 }
@@ -242,7 +242,7 @@ func TestSMClient_ListMessages(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Errorf("got %d messages, want 2", len(msgs))
 	}
-	if msgs[0].Uid != "msg1" || msgs[1].Uid != "msg2" {
+	if msgs[0].Uid != 1 || msgs[1].Uid != 2 {
 		t.Errorf("unexpected message UIDs: %v", msgs)
 	}
 }
@@ -304,20 +304,20 @@ func TestSMClient_CopyAndMove(t *testing.T) {
 
 	token, _, _ := client.Login(ctx, "user@example.com", "secret")
 
-	newUID, err := client.CopyMessage(ctx, token, "INBOX", "msg1", "Sent")
+	newUID, err := client.CopyMessage(ctx, token, "INBOX", 1, "Sent")
 	if err != nil {
 		t.Fatalf("CopyMessage: %v", err)
 	}
-	if newUID != "copy1" {
-		t.Errorf("copy UID = %q, want %q", newUID, "copy1")
+	if newUID != 101 {
+		t.Errorf("copy UID = %d, want 101", newUID)
 	}
 
-	newUID, err = client.MoveMessage(ctx, token, "INBOX", "msg1", "Junk")
+	moveUID, err := client.MoveMessage(ctx, token, "INBOX", 1, "Junk")
 	if err != nil {
 		t.Fatalf("MoveMessage: %v", err)
 	}
-	if newUID != "moved1" {
-		t.Errorf("move UID = %q, want %q", newUID, "moved1")
+	if moveUID != 201 {
+		t.Errorf("move UID = %d, want 201", moveUID)
 	}
 }
 
@@ -341,7 +341,7 @@ func TestSMClient_ExpungeAndDelete(t *testing.T) {
 
 	token, _, _ := client.Login(ctx, "user@example.com", "secret")
 
-	if err := client.DeleteMessage(ctx, token, "INBOX", "msg1"); err != nil {
+	if err := client.DeleteMessage(ctx, token, "INBOX", 1); err != nil {
 		t.Fatalf("DeleteMessage: %v", err)
 	}
 
@@ -362,8 +362,8 @@ func TestSMClient_Rescan(t *testing.T) {
 	if len(msgs) != 1 {
 		t.Errorf("got %d new messages, want 1", len(msgs))
 	}
-	if msgs[0].Uid != "new1" {
-		t.Errorf("new message UID = %q, want %q", msgs[0].Uid, "new1")
+	if msgs[0].Uid != 99 {
+		t.Errorf("new message UID = %d, want 99", msgs[0].Uid)
 	}
 }
 
@@ -492,12 +492,12 @@ func TestSMStore_MoveMessage(t *testing.T) {
 	token, _, _ := client.Login(ctx, "user@example.com", "secret")
 	store := newSessionManagerStore(client, token)
 
-	newUID, err := store.MoveMessage(ctx, "", "INBOX", "msg1", "Junk")
+	newUID, err := store.MoveMessage(ctx, "", "INBOX", 1, "Junk")
 	if err != nil {
 		t.Fatalf("MoveMessage: %v", err)
 	}
-	if newUID != "moved1" {
-		t.Errorf("MoveMessage UID = %q, want %q", newUID, "moved1")
+	if newUID != 201 {
+		t.Errorf("MoveMessage UID = %d, want 201", newUID)
 	}
 }
 

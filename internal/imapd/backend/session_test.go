@@ -280,6 +280,137 @@ func TestSearch_ByFlagUID(t *testing.T) {
 	}
 }
 
+func TestResolveNumSet_UIDDynamicRange(t *testing.T) {
+	store := newMockStore()
+	store.addInboxMessage("testuser@example.com", []string{"\\Seen"}, "msg1")
+	store.addInboxMessage("testuser@example.com", nil, "msg2")
+	store.addInboxMessage("testuser@example.com", nil, "msg3")
+	store.addInboxMessage("testuser@example.com", nil, "msg4")
+	store.addInboxMessage("testuser@example.com", nil, "msg5")
+
+	s := newTestSession(t, store)
+	_, err := s.Select("INBOX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("UID 6:* with 5 messages returns only last message", func(t *testing.T) {
+		// Simulates Thunderbird's new-mail check: UID FETCH <uidnext>:* (FLAGS)
+		// When uidnext=6 and max UID=5, should return only UID 5 per RFC 9051.
+		var uidSet imap.UIDSet
+		uidSet.AddRange(6, 0) // 6:* (0 represents *)
+		indices := s.resolveNumSet(uidSet)
+		if len(indices) != 1 {
+			t.Fatalf("expected 1 index (last message), got %d: %v", len(indices), indices)
+		}
+		if indices[0] != 4 {
+			t.Errorf("expected index 4 (last message), got %d", indices[0])
+		}
+	})
+
+	t.Run("UID 3:* returns UIDs 3-5", func(t *testing.T) {
+		var uidSet imap.UIDSet
+		uidSet.AddRange(3, 0) // 3:*
+		indices := s.resolveNumSet(uidSet)
+		if len(indices) != 3 {
+			t.Fatalf("expected 3 indices, got %d: %v", len(indices), indices)
+		}
+		// Should be indices 2, 3, 4 (UIDs 3, 4, 5)
+		for i, want := range []int{2, 3, 4} {
+			if indices[i] != want {
+				t.Errorf("indices[%d] = %d, want %d", i, indices[i], want)
+			}
+		}
+	})
+
+	t.Run("UID * returns only last message", func(t *testing.T) {
+		var uidSet imap.UIDSet
+		uidSet.AddNum(0) // bare *
+		indices := s.resolveNumSet(uidSet)
+		if len(indices) != 1 {
+			t.Fatalf("expected 1 index, got %d: %v", len(indices), indices)
+		}
+		if indices[0] != 4 {
+			t.Errorf("expected index 4, got %d", indices[0])
+		}
+	})
+
+	t.Run("UID 1:* returns all messages", func(t *testing.T) {
+		var uidSet imap.UIDSet
+		uidSet.AddRange(1, 0) // 1:*
+		indices := s.resolveNumSet(uidSet)
+		if len(indices) != 5 {
+			t.Fatalf("expected 5 indices, got %d: %v", len(indices), indices)
+		}
+	})
+
+	t.Run("static UID set still works", func(t *testing.T) {
+		var uidSet imap.UIDSet
+		uidSet.AddNum(2)
+		uidSet.AddNum(4)
+		indices := s.resolveNumSet(uidSet)
+		if len(indices) != 2 {
+			t.Fatalf("expected 2 indices, got %d: %v", len(indices), indices)
+		}
+		if indices[0] != 1 || indices[1] != 3 {
+			t.Errorf("expected [1, 3], got %v", indices)
+		}
+	})
+}
+
+func TestResolveNumSet_SeqDynamicRange(t *testing.T) {
+	store := newMockStore()
+	store.addInboxMessage("testuser@example.com", nil, "msg1")
+	store.addInboxMessage("testuser@example.com", nil, "msg2")
+	store.addInboxMessage("testuser@example.com", nil, "msg3")
+
+	s := newTestSession(t, store)
+	_, err := s.Select("INBOX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("seq * returns last message", func(t *testing.T) {
+		var seqSet imap.SeqSet
+		seqSet.AddNum(0) // bare *
+		indices := s.resolveNumSet(seqSet)
+		if len(indices) != 1 {
+			t.Fatalf("expected 1 index, got %d: %v", len(indices), indices)
+		}
+		if indices[0] != 2 {
+			t.Errorf("expected index 2 (last), got %d", indices[0])
+		}
+	})
+
+	t.Run("seq 2:* returns messages 2-3", func(t *testing.T) {
+		var seqSet imap.SeqSet
+		seqSet.AddRange(2, 0) // 2:*
+		indices := s.resolveNumSet(seqSet)
+		if len(indices) != 2 {
+			t.Fatalf("expected 2 indices, got %d: %v", len(indices), indices)
+		}
+		if indices[0] != 1 || indices[1] != 2 {
+			t.Errorf("expected [1, 2], got %v", indices)
+		}
+	})
+}
+
+func TestResolveNumSet_EmptyMailbox(t *testing.T) {
+	store := newMockStore()
+	s := newTestSession(t, store)
+	_, err := s.Select("INBOX", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var uidSet imap.UIDSet
+	uidSet.AddRange(1, 0) // 1:*
+	indices := s.resolveNumSet(uidSet)
+	if len(indices) != 0 {
+		t.Errorf("expected 0 indices for empty mailbox, got %d", len(indices))
+	}
+}
+
 func TestExtractDomain(t *testing.T) {
 	tests := []struct {
 		input string

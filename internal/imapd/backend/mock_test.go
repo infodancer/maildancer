@@ -16,23 +16,23 @@ type mockStore struct {
 	mu      sync.Mutex
 	inbox   map[string][]msgstore.MessageInfo            // mailbox -> inbox messages
 	folders map[string]map[string][]msgstore.MessageInfo // mailbox -> folder -> messages
-	content map[string]string                            // uid -> content
-	deleted map[string]bool                              // uid -> pending deletion
-	uidSeq  uint64
+	content map[uint32]string                            // uid -> content
+	deleted map[uint32]bool                              // uid -> pending deletion
+	uidSeq  uint32
 }
 
 func newMockStore() *mockStore {
 	return &mockStore{
 		inbox:   make(map[string][]msgstore.MessageInfo),
 		folders: make(map[string]map[string][]msgstore.MessageInfo),
-		content: make(map[string]string),
-		deleted: make(map[string]bool),
+		content: make(map[uint32]string),
+		deleted: make(map[uint32]bool),
 	}
 }
 
-func (m *mockStore) nextUID() string {
+func (m *mockStore) nextUID() uint32 {
 	m.uidSeq++
-	return fmt.Sprintf("uid%d", m.uidSeq)
+	return m.uidSeq
 }
 
 // addInboxMessage adds a message to the inbox for testing.
@@ -81,17 +81,17 @@ func (m *mockStore) List(_ context.Context, mailbox string) ([]msgstore.MessageI
 	return result, nil
 }
 
-func (m *mockStore) Retrieve(_ context.Context, _ string, uid string) (io.ReadCloser, error) {
+func (m *mockStore) Retrieve(_ context.Context, _ string, uid uint32) (io.ReadCloser, error) {
 	m.mu.Lock()
 	body, ok := m.content[uid]
 	m.mu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("message not found: %s", uid)
+		return nil, fmt.Errorf("message not found: %d", uid)
 	}
 	return io.NopCloser(strings.NewReader(body)), nil
 }
 
-func (m *mockStore) Delete(_ context.Context, _ string, uid string) error {
+func (m *mockStore) Delete(_ context.Context, _ string, uid uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deleted[uid] = true
@@ -199,17 +199,17 @@ func (m *mockStore) StatFolder(_ context.Context, mailbox string, folder string)
 	return len(msgs), total, nil
 }
 
-func (m *mockStore) RetrieveFromFolder(_ context.Context, _ string, _ string, uid string) (io.ReadCloser, error) {
+func (m *mockStore) RetrieveFromFolder(_ context.Context, _ string, _ string, uid uint32) (io.ReadCloser, error) {
 	m.mu.Lock()
 	body, ok := m.content[uid]
 	m.mu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("message not found: %s", uid)
+		return nil, fmt.Errorf("message not found: %d", uid)
 	}
 	return io.NopCloser(strings.NewReader(body)), nil
 }
 
-func (m *mockStore) DeleteInFolder(_ context.Context, _ string, _ string, uid string) error {
+func (m *mockStore) DeleteInFolder(_ context.Context, _ string, _ string, uid uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deleted[uid] = true
@@ -256,10 +256,10 @@ func (m *mockStore) RenameFolder(_ context.Context, mailbox string, oldName stri
 	return nil
 }
 
-func (m *mockStore) AppendToFolder(_ context.Context, mailbox string, folder string, r io.Reader, flags []string, date time.Time) (string, error) {
+func (m *mockStore) AppendToFolder(_ context.Context, mailbox string, folder string, r io.Reader, flags []string, date time.Time) (uint32, error) {
 	body, err := io.ReadAll(r)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -282,7 +282,7 @@ func (m *mockStore) AppendToFolder(_ context.Context, mailbox string, folder str
 	return uid, nil
 }
 
-func (m *mockStore) SetFlagsInFolder(_ context.Context, mailbox string, folder string, uid string, flags []string) error {
+func (m *mockStore) SetFlagsInFolder(_ context.Context, mailbox string, folder string, uid uint32, flags []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if strings.EqualFold(folder, "INBOX") {
@@ -302,15 +302,15 @@ func (m *mockStore) SetFlagsInFolder(_ context.Context, mailbox string, folder s
 			}
 		}
 	}
-	return fmt.Errorf("message not found: %s", uid)
+	return fmt.Errorf("message not found: %d", uid)
 }
 
-func (m *mockStore) CopyMessage(_ context.Context, mailbox string, srcFolder string, uid string, destFolder string) (string, error) {
+func (m *mockStore) CopyMessage(_ context.Context, mailbox string, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	body, ok := m.content[uid]
 	if !ok {
-		return "", fmt.Errorf("message not found: %s", uid)
+		return 0, fmt.Errorf("message not found: %d", uid)
 	}
 	newUID := m.nextUID()
 	// Find source flags
@@ -343,4 +343,10 @@ func (m *mockStore) CopyMessage(_ context.Context, mailbox string, srcFolder str
 
 func (m *mockStore) UIDValidity(_ context.Context, _ string, _ string) (uint32, error) {
 	return 12345, nil
+}
+
+func (m *mockStore) UIDNext(_ context.Context, _ string, _ string) (uint32, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.uidSeq + 1, nil
 }

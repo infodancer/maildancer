@@ -8,6 +8,7 @@ import (
 
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
 	dkimloader "github.com/infodancer/maildancer/internal/session-manager/dkim"
+	"github.com/infodancer/maildancer/internal/session-manager/metrics"
 	"github.com/infodancer/maildancer/internal/session-manager/queue"
 )
 
@@ -15,6 +16,7 @@ type outboundServer struct {
 	pb.UnimplementedOutboundServiceServer
 	queueCfg    queue.Config
 	domainsPath string
+	metrics     metrics.Collector
 }
 
 // Enqueue accepts an outbound message via client-streaming (metadata + body
@@ -67,6 +69,7 @@ func (s *outboundServer) Enqueue(stream pb.OutboundService_EnqueueServer) error 
 	if err != nil {
 		slog.Warn("DKIM key load failed, sending unsigned",
 			"domain", senderDomain, "error", err)
+		s.metrics.DKIMSignCompleted(senderDomain, "error")
 	}
 	if key != nil {
 		cfg.DKIMSign = func(domain string, msg io.Reader) (io.Reader, error) {
@@ -76,9 +79,11 @@ func (s *outboundServer) Enqueue(stream pb.OutboundService_EnqueueServer) error 
 			"domain", senderDomain,
 			"selector", selector,
 			"from", meta.Sender)
+		s.metrics.DKIMSignCompleted(senderDomain, "signed")
 	} else if err == nil {
 		slog.Debug("no DKIM key configured",
 			"domain", senderDomain)
+		s.metrics.DKIMSignCompleted(senderDomain, "skipped")
 	}
 
 	// Write to queue.
@@ -88,8 +93,12 @@ func (s *outboundServer) Enqueue(stream pb.OutboundService_EnqueueServer) error 
 			"from", meta.Sender,
 			"to", meta.Recipients,
 			"error", err)
+		s.metrics.EnqueueCompleted(senderDomain, "error")
 		return fmt.Errorf("queue write: %w", err)
 	}
+
+	s.metrics.EnqueueCompleted(senderDomain, "success")
+	s.metrics.EnqueueSize(senderDomain, int64(bodySize))
 
 	slog.Info("message enqueued",
 		"msg_id", msgID,

@@ -15,6 +15,7 @@ import (
 	"github.com/infodancer/maildancer/internal/session-manager/certutil"
 	"github.com/infodancer/maildancer/internal/session-manager/config"
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
+	"github.com/infodancer/maildancer/internal/session-manager/metrics"
 	"github.com/infodancer/maildancer/internal/session-manager/queue"
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"google.golang.org/grpc"
@@ -32,7 +33,7 @@ type Server struct {
 
 // New creates a new gRPC server with all services registered.
 // If TLS config is provided and complete, the server uses mTLS.
-func New(mgr *manager.Manager, cfg *config.Config) (*Server, error) {
+func New(mgr *manager.Manager, cfg *config.Config, mc metrics.Collector) (*Server, error) {
 	var opts []grpc.ServerOption
 
 	// Enable mTLS if TLS config is fully specified.
@@ -55,7 +56,7 @@ func New(mgr *manager.Manager, cfg *config.Config) (*Server, error) {
 	smpb.RegisterSessionServiceServer(gsrv, &sessionServer{mgr: mgr})
 	pb.RegisterMailboxServiceServer(gsrv, &mailboxProxy{mgr: mgr})
 	pb.RegisterFolderServiceServer(gsrv, &folderProxy{mgr: mgr})
-	pb.RegisterDeliveryServiceServer(gsrv, &deliveryProxy{mgr: mgr})
+	pb.RegisterDeliveryServiceServer(gsrv, &deliveryProxy{mgr: mgr, metrics: mc})
 	pb.RegisterWatchServiceServer(gsrv, &watchProxy{mgr: mgr})
 
 	// Register OutboundService if queue is configured.
@@ -68,6 +69,7 @@ func New(mgr *manager.Manager, cfg *config.Config) (*Server, error) {
 		pb.RegisterOutboundServiceServer(gsrv, &outboundServer{
 			queueCfg:    queueCfg,
 			domainsPath: cfg.DomainsPath,
+			metrics:     mc,
 		})
 		slog.Info("outbound queue service enabled", "dir", cfg.Queue.Dir)
 	}

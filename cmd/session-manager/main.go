@@ -8,11 +8,13 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/infodancer/maildancer/internal/session-manager/certutil"
 	"github.com/infodancer/maildancer/internal/session-manager/config"
 	"github.com/infodancer/maildancer/internal/session-manager/grpcserver"
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
+	"github.com/infodancer/maildancer/internal/session-manager/metrics"
 
 	// Register storage drivers used by the domain provider.
 	_ "github.com/infodancer/maildancer/msgstore/maildir"
@@ -65,10 +67,16 @@ func runServe() {
 		os.Exit(1)
 	}
 
-	mgr := manager.New(cfg, authRouter)
+	mc, metricsSrv := metrics.New(metrics.Config{
+		Enabled: cfg.Metrics.Enabled,
+		Address: cfg.Metrics.Address,
+		Path:    cfg.Metrics.Path,
+	})
+
+	mgr := manager.New(cfg, authRouter, mc)
 	defer mgr.Close()
 
-	srv, err := grpcserver.New(mgr, cfg)
+	srv, err := grpcserver.New(mgr, cfg, mc)
 	if err != nil {
 		slog.Error("create server", "error", err)
 		os.Exit(1)
@@ -78,8 +86,17 @@ func runServe() {
 	defer stop()
 
 	go func() {
+		if err := metricsSrv.Start(ctx); err != nil {
+			slog.Error("metrics server", "error", err)
+		}
+	}()
+
+	go func() {
 		<-ctx.Done()
 		slog.Info("shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = metricsSrv.Shutdown(shutdownCtx)
 		srv.Stop()
 	}()
 

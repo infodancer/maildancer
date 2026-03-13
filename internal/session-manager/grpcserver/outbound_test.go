@@ -11,6 +11,7 @@ import (
 	"time"
 
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	"github.com/infodancer/maildancer/internal/session-manager/metrics"
 	"github.com/infodancer/maildancer/internal/session-manager/queue"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -30,6 +31,7 @@ func TestOutboundEnqueue(t *testing.T) {
 	pb.RegisterOutboundServiceServer(gsrv, &outboundServer{
 		queueCfg:    cfg,
 		domainsPath: t.TempDir(), // no DKIM keys configured
+		metrics:     &metrics.NoopCollector{},
 	})
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -152,6 +154,7 @@ func TestOutboundEnqueue_MissingMetadata(t *testing.T) {
 	pb.RegisterOutboundServiceServer(gsrv, &outboundServer{
 		queueCfg:    queue.Config{Dir: t.TempDir(), MessageTTL: time.Hour, Hostname: "test"},
 		domainsPath: t.TempDir(),
+		metrics:     &metrics.NoopCollector{},
 	})
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -4,14 +4,17 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
+	"github.com/infodancer/maildancer/internal/session-manager/metrics"
 )
 
 type deliveryProxy struct {
 	pb.UnimplementedDeliveryServiceServer
-	mgr *manager.Manager
+	mgr     *manager.Manager
+	metrics metrics.Collector
 }
 
 // Deliver proxies a delivery request by spawning a oneshot mail-session for
@@ -37,12 +40,18 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 		"to", meta.Recipient,
 		"from", meta.Sender)
 
+	recipientDomain := "unknown"
+	if _, d, ok := strings.Cut(meta.Recipient, "@"); ok {
+		recipientDomain = d
+	}
+
 	// Spawn oneshot mail-session for this recipient.
 	deliveryCl, cleanup, err := p.mgr.DeliverySession(stream.Context(), meta.Recipient)
 	if err != nil {
 		slog.Warn("delivery session failed",
 			"to", meta.Recipient,
 			"error", err)
+		p.metrics.DeliveryProxyCompleted(recipientDomain, "error")
 		return err
 	}
 	defer cleanup()
@@ -68,11 +77,13 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 					"to", meta.Recipient,
 					"from", meta.Sender,
 					"error", err)
+				p.metrics.DeliveryProxyCompleted(recipientDomain, "error")
 				return err
 			}
 			slog.Info("delivery complete",
 				"to", meta.Recipient,
 				"from", meta.Sender)
+			p.metrics.DeliveryProxyCompleted(recipientDomain, "success")
 			return stream.SendAndClose(resp)
 		}
 		if err != nil {

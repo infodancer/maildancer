@@ -22,6 +22,7 @@ import (
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
 	"github.com/infodancer/maildancer/internal/session-manager/config"
 	"github.com/infodancer/maildancer/internal/session-manager/credentials"
+	"github.com/infodancer/maildancer/internal/session-manager/metrics"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -45,6 +46,7 @@ type sessionEntry struct {
 type Manager struct {
 	cfg        *config.Config
 	authRouter *domain.AuthRouter
+	metrics    metrics.Collector
 
 	mu sync.Mutex
 	// byToken maps session tokens to session entries.
@@ -58,10 +60,11 @@ type Manager struct {
 }
 
 // New creates a new Manager.
-func New(cfg *config.Config, authRouter *domain.AuthRouter) *Manager {
+func New(cfg *config.Config, authRouter *domain.AuthRouter, mc metrics.Collector) *Manager {
 	return &Manager{
 		cfg:        cfg,
 		authRouter: authRouter,
+		metrics:    mc,
 		byToken:    make(map[string]*sessionEntry),
 		byUser:     make(map[string]*sessionEntry),
 	}
@@ -146,6 +149,7 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token, 
 		pid = entry.cmd.Process.Pid
 	}
 	slog.Info("session created", "username", username, "pid", pid)
+	m.metrics.SessionCreated()
 
 	go m.monitorProcess(entry)
 
@@ -165,6 +169,7 @@ func (m *Manager) Logout(_ context.Context, token string) error {
 	delete(m.byToken, token)
 
 	entry.refCount--
+	m.metrics.SessionClosed()
 	if entry.refCount <= 0 {
 		entry.idleTimer = time.AfterFunc(m.cfg.IdleTimeout, func() {
 			m.reapSession(entry)
@@ -501,6 +506,7 @@ func (m *Manager) reapSession(entry *sessionEntry) {
 		pid = entry.cmd.Process.Pid
 	}
 	slog.Info("reaping idle session", "username", entry.username, "pid", pid)
+	m.metrics.SessionReaped()
 
 	delete(m.byUser, entry.username)
 

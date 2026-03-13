@@ -45,6 +45,9 @@ type Config struct {
 
 	// Queue configures outbound mail queue injection.
 	Queue QueueConfig `toml:"queue"`
+
+	// Metrics configures the Prometheus metrics endpoint.
+	Metrics MetricsConfig `toml:"metrics"`
 }
 
 // QueueConfig holds outbound queue injection settings.
@@ -85,6 +88,18 @@ type TLSConfig struct {
 
 	// ServerKey is the path to the server private key.
 	ServerKey string `toml:"server_key"`
+}
+
+// MetricsConfig configures the Prometheus metrics endpoint.
+type MetricsConfig struct {
+	// Enabled controls whether the metrics HTTP server is started.
+	Enabled bool `toml:"enabled"`
+
+	// Address is the listen address for the metrics HTTP server (e.g. ":9100").
+	Address string `toml:"address"`
+
+	// Path is the HTTP path for the metrics endpoint (e.g. "/metrics").
+	Path string `toml:"path"`
 }
 
 // AuthConfig controls how the session manager authenticates users.

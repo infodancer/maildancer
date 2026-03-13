@@ -3,6 +3,7 @@ package smtp
 import (
 	"log/slog"
 	"net"
+	"time"
 
 	"github.com/emersion/go-smtp"
 	"github.com/infodancer/maildancer/auth"
@@ -13,6 +14,7 @@ import (
 	"github.com/infodancer/maildancer/internal/smtpd/logging"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
+	"github.com/redis/go-redis/v9"
 )
 
 // Backend implements the go-smtp Backend interface.
@@ -30,7 +32,7 @@ type Backend struct {
 	rejectionMode       config.RejectionMode
 	spamtrapLearner     *spamtrapLearner
 	spamtrapRateLimiter *ipRateLimiter
-	senderRateLimiter   *ipRateLimiter
+	senderRateLimiter   senderLimiter
 	notifier            *Notifier
 	collector           metrics.Collector
 	maxRecipients       int
@@ -53,6 +55,7 @@ type BackendConfig struct {
 	RejectionMode   config.RejectionMode
 	SpamtrapConfig  config.SpamtrapConfig
 	MaxSendsPerHour int
+	RedisClient     *redis.Client // shared Redis for cross-subprocess rate limiting
 	Notifier        *Notifier
 	Collector       metrics.Collector
 	MaxRecipients   int
@@ -90,8 +93,9 @@ func NewBackend(cfg BackendConfig) *Backend {
 		logger:         logger,
 	}
 
-	if cfg.MaxSendsPerHour > 0 {
-		b.senderRateLimiter = newIPRateLimiter(cfg.MaxSendsPerHour)
+	if cfg.MaxSendsPerHour > 0 && cfg.RedisClient != nil {
+		b.senderRateLimiter = newRedisRateLimiter(
+			cfg.RedisClient, cfg.MaxSendsPerHour, time.Hour, "smtpd:sendrate:")
 		logger.Info("sender rate limiting enabled",
 			"max_sends_per_hour", cfg.MaxSendsPerHour)
 	}

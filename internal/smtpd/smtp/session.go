@@ -241,9 +241,9 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 // Mail handles the MAIL FROM command.
 // Implements smtp.Session interface.
 func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
-	// Per-sender rate limiting for authenticated submission.
+	// Per-sender rate limiting for authenticated submission (Redis-backed).
 	if s.authUser != "" && s.backend.senderRateLimiter != nil {
-		if !s.backend.senderRateLimiter.allow(s.authUser) {
+		if !s.backend.senderRateLimiter.allow(context.Background(), s.authUser) {
 			s.logger.Warn("sender rate limit exceeded",
 				slog.String("auth_user", s.authUser))
 			return &smtp.SMTPError{

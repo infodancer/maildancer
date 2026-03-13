@@ -14,6 +14,7 @@ import (
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 // Stack owns all components of a running smtpd instance and manages their lifecycle.
@@ -153,17 +154,22 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		tempDir = filepath.Join(cfg.Config.Delivery.BasePath, "tmp")
 	}
 
-	// Create Redis notifier for IMAP IDLE new-mail notifications.
+	// Create shared Redis client for notifications and rate limiting.
+	var redisClient *goredis.Client
 	var notifier *Notifier
 	if cfg.Config.Redis.URL != "" {
-		var err error
-		notifier, err = NewNotifier(cfg.Config.Redis.URL, cfg.Config.Redis.Password, logger)
+		opts, err := goredis.ParseURL(cfg.Config.Redis.URL)
 		if err != nil {
 			s.Close() //nolint:errcheck
 			return nil, err
 		}
+		if cfg.Config.Redis.Password != "" {
+			opts.Password = cfg.Config.Redis.Password
+		}
+		redisClient = goredis.NewClient(opts)
+		notifier = NewNotifierFromClient(redisClient, logger)
 		s.closers = append(s.closers, notifier)
-		logger.Info("redis notifier enabled", "url", cfg.Config.Redis.URL)
+		logger.Info("redis enabled", "url", cfg.Config.Redis.URL)
 	}
 
 	backend := NewBackend(BackendConfig{
@@ -178,6 +184,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		RejectionMode:   cfg.Config.GetRejectionMode(),
 		SpamtrapConfig:  cfg.Config.Spamtrap,
 		MaxSendsPerHour: cfg.Config.Limits.MaxSendsPerHour,
+		RedisClient:     redisClient,
 		Notifier:        notifier,
 		Collector:       collector,
 		MaxRecipients:   cfg.Config.Limits.MaxRecipients,

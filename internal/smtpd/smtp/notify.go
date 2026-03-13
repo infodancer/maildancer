@@ -36,6 +36,16 @@ func NewNotifier(url, password string, logger *slog.Logger) (*Notifier, error) {
 	}, nil
 }
 
+// NewNotifierFromClient creates a Notifier from an existing Redis client.
+// The caller retains ownership of the client — Close on the Notifier is a no-op
+// for the underlying connection.
+func NewNotifierFromClient(client *redis.Client, logger *slog.Logger) *Notifier {
+	return &Notifier{
+		client: client,
+		logger: logger,
+	}
+}
+
 // Close shuts down the Redis client.
 func (n *Notifier) Close() error {
 	if n == nil {

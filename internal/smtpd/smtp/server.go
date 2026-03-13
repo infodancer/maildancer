@@ -28,15 +28,15 @@ type Server struct {
 
 // ServerConfig holds configuration for creating a multi-mode Server.
 type ServerConfig struct {
-	Backend      *Backend
-	Listeners    []config.ListenerConfig
-	Hostname     string
-	TLSConfig    *tls.Config
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
+	Backend        *Backend
+	Listeners      []config.ListenerConfig
+	Hostname       string
+	TLSConfig      *tls.Config
+	ReadTimeout    time.Duration
+	WriteTimeout   time.Duration
 	MaxMessageSize int
 	MaxRecipients  int
-	Logger       *slog.Logger
+	Logger         *slog.Logger
 }
 
 // NewServer creates a new multi-mode Server with go-smtp servers for each listener.
@@ -84,8 +84,12 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 				return nil, fmt.Errorf("listener %s: TLS required for SMTPS mode but not configured", listener.Address)
 			}
 			s.TLSConfig = cfg.TLSConfig
-			// AUTH is allowed since connection is already TLS
-			s.AllowInsecureAuth = false
+			// AllowInsecureAuth must be true for SMTPS because go-smtp
+			// cannot detect TLS on connections wrapped by oneConnListener's
+			// notifyConn (the *tls.Conn type assertion fails). Since SMTPS
+			// connections are always TLS by definition, this is safe.
+			// Our AuthMechanisms() has its own TLS check as a second layer.
+			s.AllowInsecureAuth = true
 
 		case config.ModeAlt:
 			// Alternative mode - similar to SMTP

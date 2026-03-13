@@ -2,7 +2,6 @@ package smtp
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -89,21 +88,4 @@ func (r *memRateLimiter) allow(_ context.Context, key string) bool {
 	}
 	bucket.count++
 	return true
-}
-
-// remaining returns the number of sends remaining for the key, or an error.
-func (r *redisRateLimiter) remaining(ctx context.Context, key string) (int, error) {
-	redisKey := r.prefix + key
-	count, err := r.client.Get(ctx, redisKey).Int()
-	if err == redis.Nil {
-		return r.maxRate, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("redis get: %w", err)
-	}
-	rem := r.maxRate - count
-	if rem < 0 {
-		rem = 0
-	}
-	return rem, nil
 }

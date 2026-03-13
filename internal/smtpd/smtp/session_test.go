@@ -418,6 +418,103 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 	})
 }
 
+func TestSession_Mail_SenderRateLimit(t *testing.T) {
+	logger := slog.Default()
+
+	t.Run("rate limit enforced for authenticated sender", func(t *testing.T) {
+		limiter := newIPRateLimiter(3)
+		backend := &Backend{senderRateLimiter: limiter}
+		session := &Session{
+			backend:  backend,
+			authUser: "alice@example.com",
+			logger:   logger,
+		}
+
+		// First 3 should succeed
+		for i := 0; i < 3; i++ {
+			err := session.Mail("alice@example.com", nil)
+			if err != nil {
+				t.Fatalf("message %d: unexpected error: %v", i+1, err)
+			}
+			session.Reset()
+		}
+
+		// 4th should be rate limited
+		err := session.Mail("alice@example.com", nil)
+		if err == nil {
+			t.Fatal("expected rate limit error")
+		}
+		smtpErr, ok := err.(*gosmtp.SMTPError)
+		if !ok {
+			t.Fatalf("expected SMTPError, got %T", err)
+		}
+		if smtpErr.Code != 452 {
+			t.Errorf("expected code 452, got %d", smtpErr.Code)
+		}
+	})
+
+	t.Run("no rate limit for unauthenticated", func(t *testing.T) {
+		limiter := newIPRateLimiter(1)
+		backend := &Backend{senderRateLimiter: limiter}
+		session := &Session{
+			backend: backend,
+			logger:  logger,
+		}
+
+		// Should succeed without limit since not authenticated
+		for i := 0; i < 5; i++ {
+			err := session.Mail("anyone@anywhere.com", nil)
+			if err != nil {
+				t.Fatalf("message %d: unexpected error: %v", i+1, err)
+			}
+			session.Reset()
+		}
+	})
+
+	t.Run("no rate limit when limiter not configured", func(t *testing.T) {
+		backend := &Backend{}
+		session := &Session{
+			backend:  backend,
+			authUser: "alice@example.com",
+			logger:   logger,
+		}
+
+		for i := 0; i < 5; i++ {
+			err := session.Mail("alice@example.com", nil)
+			if err != nil {
+				t.Fatalf("message %d: unexpected error: %v", i+1, err)
+			}
+			session.Reset()
+		}
+	})
+
+	t.Run("separate limits per sender", func(t *testing.T) {
+		limiter := newIPRateLimiter(2)
+		backend := &Backend{senderRateLimiter: limiter}
+
+		alice := &Session{backend: backend, authUser: "alice@example.com", logger: logger}
+		bob := &Session{backend: backend, authUser: "bob@example.com", logger: logger}
+
+		// Alice sends 2
+		for i := 0; i < 2; i++ {
+			if err := alice.Mail("alice@example.com", nil); err != nil {
+				t.Fatalf("alice message %d: %v", i+1, err)
+			}
+			alice.Reset()
+		}
+
+		// Alice is now limited
+		if err := alice.Mail("alice@example.com", nil); err == nil {
+			t.Fatal("expected alice to be rate limited")
+		}
+
+		// Bob should still be fine
+		if err := bob.Mail("bob@example.com", nil); err != nil {
+			t.Fatalf("bob should not be rate limited: %v", err)
+		}
+	})
+}
+
 func TestExtractDomain(t *testing.T) {
 	tests := []struct {
 		email    string

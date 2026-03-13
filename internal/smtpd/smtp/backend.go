@@ -30,6 +30,7 @@ type Backend struct {
 	rejectionMode       config.RejectionMode
 	spamtrapLearner     *spamtrapLearner
 	spamtrapRateLimiter *ipRateLimiter
+	senderRateLimiter   *ipRateLimiter
 	notifier            *Notifier
 	collector           metrics.Collector
 	maxRecipients       int
@@ -40,21 +41,22 @@ type Backend struct {
 
 // BackendConfig holds configuration for creating a Backend.
 type BackendConfig struct {
-	Hostname       string
-	Delivery       msgstore.DeliveryAgent       // legacy delivery agent
-	SMDelivery     *SessionManagerDeliveryAgent // session-manager delivery agent (preferred)
-	AuthAgent      auth.AuthenticationAgent
-	AuthRouter     *domain.AuthRouter
-	OAuthAgent     oauth.Agent
-	DomainProvider domain.DomainProvider
-	SpamChecker    spamcheck.Checker
-	SpamConfig     config.SpamCheckConfig
-	RejectionMode  config.RejectionMode
-	SpamtrapConfig config.SpamtrapConfig
-	Notifier       *Notifier
-	Collector      metrics.Collector
-	MaxRecipients  int
-	MaxMessageSize int64
+	Hostname        string
+	Delivery        msgstore.DeliveryAgent       // legacy delivery agent
+	SMDelivery      *SessionManagerDeliveryAgent // session-manager delivery agent (preferred)
+	AuthAgent       auth.AuthenticationAgent
+	AuthRouter      *domain.AuthRouter
+	OAuthAgent      oauth.Agent
+	DomainProvider  domain.DomainProvider
+	SpamChecker     spamcheck.Checker
+	SpamConfig      config.SpamCheckConfig
+	RejectionMode   config.RejectionMode
+	SpamtrapConfig  config.SpamtrapConfig
+	MaxSendsPerHour int
+	Notifier        *Notifier
+	Collector       metrics.Collector
+	MaxRecipients   int
+	MaxMessageSize  int64
 	// TempDir is the directory for temporary message files during DATA.
 	// Should be on the same filesystem as the mail store to enable atomic renames.
 	// Defaults to os.TempDir() if empty.
@@ -86,6 +88,12 @@ func NewBackend(cfg BackendConfig) *Backend {
 		maxMessageSize: cfg.MaxMessageSize,
 		tempDir:        cfg.TempDir,
 		logger:         logger,
+	}
+
+	if cfg.MaxSendsPerHour > 0 {
+		b.senderRateLimiter = newIPRateLimiter(cfg.MaxSendsPerHour)
+		logger.Info("sender rate limiting enabled",
+			"max_sends_per_hour", cfg.MaxSendsPerHour)
 	}
 
 	if cfg.SpamtrapConfig.Enabled && cfg.SpamtrapConfig.ControllerURL != "" {

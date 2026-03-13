@@ -241,6 +241,19 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 // Mail handles the MAIL FROM command.
 // Implements smtp.Session interface.
 func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
+	// Per-sender rate limiting for authenticated submission.
+	if s.authUser != "" && s.backend.senderRateLimiter != nil {
+		if !s.backend.senderRateLimiter.allow(s.authUser) {
+			s.logger.Warn("sender rate limit exceeded",
+				slog.String("auth_user", s.authUser))
+			return &smtp.SMTPError{
+				Code:         452,
+				EnhancedCode: smtp.EnhancedCode{4, 7, 1},
+				Message:      "Too many messages, try again later",
+			}
+		}
+	}
+
 	// Sender verification: authenticated users may only send as their exact
 	// authenticated address. No aliases, no other local parts on the same domain.
 	// Bounce messages (empty sender) are exempt.

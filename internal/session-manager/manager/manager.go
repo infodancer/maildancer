@@ -38,6 +38,7 @@ type sessionEntry struct {
 	socketDir string
 	refCount  int
 	idleTimer *time.Timer
+	waited    bool // true after cmd.Wait() has been called
 }
 
 // Manager handles mail-session lifecycle.
@@ -85,17 +86,24 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token, 
 	// Fast path: reuse existing session under short lock.
 	m.mu.Lock()
 	if entry, ok := m.byUser[username]; ok {
-		if entry.idleTimer != nil {
-			entry.idleTimer.Stop()
-			entry.idleTimer = nil
+		if !m.isAliveLocked(entry) {
+			// Subprocess died; clean up stale entry and fall through to spawn.
+			slog.Warn("stale session detected, removing",
+				"username", username)
+			m.removeEntryLocked(entry)
+		} else {
+			if entry.idleTimer != nil {
+				entry.idleTimer.Stop()
+				entry.idleTimer = nil
+			}
+			entry.refCount++
+			token = m.generateTokenLocked(entry)
+			m.mu.Unlock()
+			slog.Debug("session reused",
+				"username", username,
+				"ref_count", entry.refCount)
+			return token, mailbox, nil
 		}
-		entry.refCount++
-		token = m.generateTokenLocked(entry)
-		m.mu.Unlock()
-		slog.Debug("session reused",
-			"username", username,
-			"ref_count", entry.refCount)
-		return token, mailbox, nil
 	}
 	m.mu.Unlock()
 
@@ -138,6 +146,8 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token, 
 		pid = entry.cmd.Process.Pid
 	}
 	slog.Info("session created", "username", username, "pid", pid)
+
+	go m.monitorProcess(entry)
 
 	return token, mailbox, nil
 }
@@ -405,6 +415,77 @@ func (m *Manager) generateTokenLocked(entry *sessionEntry) string {
 	return token
 }
 
+// isAliveLocked checks whether the subprocess backing a session entry is still
+// running. Must be called with m.mu held.
+func (m *Manager) isAliveLocked(entry *sessionEntry) bool {
+	if entry.cmd == nil {
+		// No subprocess (test stub or in-process mock) — assume alive.
+		return true
+	}
+	if entry.cmd.Process == nil {
+		return false
+	}
+	// Signal 0 checks process existence without sending a real signal.
+	return entry.cmd.Process.Signal(syscall.Signal(0)) == nil
+}
+
+// removeEntryLocked removes a session entry from all maps and kills it.
+// Must be called with m.mu held.
+func (m *Manager) removeEntryLocked(entry *sessionEntry) {
+	if entry.idleTimer != nil {
+		entry.idleTimer.Stop()
+		entry.idleTimer = nil
+	}
+	delete(m.byUser, entry.username)
+	for tok, e := range m.byToken {
+		if e == entry {
+			delete(m.byToken, tok)
+		}
+	}
+	m.killEntry(entry)
+}
+
+// monitorProcess waits for a mail-session subprocess to exit and cleans up its
+// registry entry. This catches cases where the subprocess exits on its own
+// (e.g., idle timeout) without waiting for the manager's reap timer.
+func (m *Manager) monitorProcess(entry *sessionEntry) {
+	if entry.cmd == nil {
+		return
+	}
+	// cmd.Wait() blocks until the process exits. Ignore the error — the
+	// process may exit cleanly (idle timeout) or be killed by reapSession.
+	_ = entry.cmd.Wait()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry.waited = true
+
+	// Only clean up if this entry is still in the registry. If reapSession
+	// or Close already removed it, there's nothing to do.
+	if existing, ok := m.byUser[entry.username]; ok && existing == entry {
+		slog.Info("mail-session process exited, cleaning up",
+			"username", entry.username)
+		if entry.idleTimer != nil {
+			entry.idleTimer.Stop()
+			entry.idleTimer = nil
+		}
+		delete(m.byUser, entry.username)
+		for tok, e := range m.byToken {
+			if e == entry {
+				delete(m.byToken, tok)
+			}
+		}
+		// Process already exited; just clean up resources.
+		if entry.conn != nil {
+			_ = entry.conn.Close()
+		}
+		if entry.socketDir != "" {
+			_ = os.RemoveAll(entry.socketDir)
+		}
+	}
+}
+
 // reapSession terminates a mail-session that has been idle.
 func (m *Manager) reapSession(entry *sessionEntry) {
 	m.mu.Lock()
@@ -434,13 +515,15 @@ func (m *Manager) reapSession(entry *sessionEntry) {
 }
 
 // killEntry terminates the mail-session process and cleans up resources.
+// Safe to call even if the process has already exited and been waited on.
 func (m *Manager) killEntry(entry *sessionEntry) {
 	if entry.conn != nil {
 		_ = entry.conn.Close()
 	}
-	if entry.cmd != nil && entry.cmd.Process != nil {
+	if entry.cmd != nil && entry.cmd.Process != nil && !entry.waited {
 		_ = entry.cmd.Process.Signal(syscall.SIGTERM)
 		_ = entry.cmd.Wait()
+		entry.waited = true
 	}
 	if entry.socketDir != "" {
 		_ = os.RemoveAll(entry.socketDir)

@@ -142,7 +142,7 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 			}
 
 			// AuthRouter handles domain splitting for user@domain usernames
-			session, err := s.backend.authRouter.Authenticate(ctx, username, password)
+			_, err := s.backend.authRouter.Authenticate(ctx, username, password)
 			if err != nil {
 				if s.backend.collector != nil {
 					domain := sessionExtractAuthDomain(username)
@@ -176,11 +176,10 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 				}
 			}
 
-			if session != nil && session.User != nil {
-				s.authUser = session.User.Username
-			} else {
-				s.authUser = username
-			}
+			// Always use the full login username (user@domain) for sender
+			// verification. The auth session's User.Username may be the
+			// bare local part without domain.
+			s.authUser = username
 
 			if s.backend.collector != nil {
 				domain := sessionExtractAuthDomain(username)
@@ -242,6 +241,23 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 // Mail handles the MAIL FROM command.
 // Implements smtp.Session interface.
 func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
+	// Sender verification: authenticated users may only send from their own domain.
+	// Bounce messages (empty sender) are exempt — they're legitimate in submission.
+	if s.authUser != "" && from != "" {
+		fromDomain := extractDomain(from)
+		authDomain := sessionExtractAuthDomain(s.authUser)
+		if !strings.EqualFold(fromDomain, authDomain) {
+			s.logger.Warn("sender verification failed",
+				slog.String("auth_user", s.authUser),
+				slog.String("from", from))
+			return &smtp.SMTPError{
+				Code:         553,
+				EnhancedCode: smtp.EnhancedCode{5, 7, 1},
+				Message:      "Sender address not authorized for this account",
+			}
+		}
+	}
+
 	s.from = from
 	s.mailFromSeen = true
 

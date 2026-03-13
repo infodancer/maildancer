@@ -8,7 +8,7 @@ require (
 	github.com/emersion/go-message v0.18.2
 	github.com/infodancer/maildancer/auth v0.1.14
 	github.com/infodancer/maildancer/internal/mail-session v0.1.2
-	github.com/infodancer/maildancer/msgstore v0.2.3
+	github.com/infodancer/maildancer/msgstore v0.2.4
 	github.com/infodancer/maildancer/internal/session-manager v0.1.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2

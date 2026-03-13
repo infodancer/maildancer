@@ -9,33 +9,32 @@ import (
 )
 
 // senderLimiter is the interface for per-sender rate limiting.
+// maxRate is passed per-call to support per-domain limits.
 type senderLimiter interface {
-	allow(ctx context.Context, key string) bool
+	allow(ctx context.Context, key string, maxRate int) bool
 }
 
 // redisRateLimiter enforces per-key rate limits using Redis INCR + EXPIRE.
 // Safe for use across multiple subprocesses sharing the same Redis instance.
 type redisRateLimiter struct {
-	client  *redis.Client
-	maxRate int
-	window  time.Duration
-	prefix  string
+	client *redis.Client
+	window time.Duration
+	prefix string
 }
 
 // newRedisRateLimiter creates a rate limiter backed by Redis.
 // prefix distinguishes different rate limit namespaces (e.g. "smtpd:sendrate:").
-func newRedisRateLimiter(client *redis.Client, maxRate int, window time.Duration, prefix string) *redisRateLimiter {
+func newRedisRateLimiter(client *redis.Client, window time.Duration, prefix string) *redisRateLimiter {
 	return &redisRateLimiter{
-		client:  client,
-		maxRate: maxRate,
-		window:  window,
-		prefix:  prefix,
+		client: client,
+		window: window,
+		prefix: prefix,
 	}
 }
 
 // allow returns true if the key is under the rate limit and increments the counter.
 // On Redis errors, it fails open (allows the request) to avoid blocking mail delivery.
-func (r *redisRateLimiter) allow(_ context.Context, key string) bool {
+func (r *redisRateLimiter) allow(_ context.Context, key string, maxRate int) bool {
 	ctx := context.Background()
 	redisKey := r.prefix + key
 
@@ -51,14 +50,13 @@ func (r *redisRateLimiter) allow(_ context.Context, key string) bool {
 		r.client.Expire(ctx, redisKey, r.window)
 	}
 
-	return count <= int64(r.maxRate)
+	return count <= int64(maxRate)
 }
 
 // memRateLimiter is an in-memory rate limiter for testing.
 type memRateLimiter struct {
-	mu      sync.Mutex
-	counts  map[string]*memBucket
-	maxRate int
+	mu     sync.Mutex
+	counts map[string]*memBucket
 }
 
 type memBucket struct {
@@ -66,14 +64,13 @@ type memBucket struct {
 	resetAt time.Time
 }
 
-func newMemRateLimiter(maxPerHour int) *memRateLimiter {
+func newMemRateLimiter() *memRateLimiter {
 	return &memRateLimiter{
-		counts:  make(map[string]*memBucket),
-		maxRate: maxPerHour,
+		counts: make(map[string]*memBucket),
 	}
 }
 
-func (r *memRateLimiter) allow(_ context.Context, key string) bool {
+func (r *memRateLimiter) allow(_ context.Context, key string, maxRate int) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -83,7 +80,7 @@ func (r *memRateLimiter) allow(_ context.Context, key string) bool {
 		r.counts[key] = &memBucket{count: 1, resetAt: now.Add(time.Hour)}
 		return true
 	}
-	if bucket.count >= r.maxRate {
+	if bucket.count >= maxRate {
 		return false
 	}
 	bucket.count++

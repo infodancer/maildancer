@@ -422,8 +422,8 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 	logger := slog.Default()
 
 	t.Run("rate limit enforced for authenticated sender", func(t *testing.T) {
-		limiter := newMemRateLimiter(3)
-		backend := &Backend{senderRateLimiter: limiter}
+		limiter := newMemRateLimiter()
+		backend := &Backend{senderRateLimiter: limiter, maxSendsPerHour: 3}
 		session := &Session{
 			backend:  backend,
 			authUser: "alice@example.com",
@@ -454,8 +454,8 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 	})
 
 	t.Run("no rate limit for unauthenticated", func(t *testing.T) {
-		limiter := newMemRateLimiter(1)
-		backend := &Backend{senderRateLimiter: limiter}
+		limiter := newMemRateLimiter()
+		backend := &Backend{senderRateLimiter: limiter, maxSendsPerHour: 1}
 		session := &Session{
 			backend: backend,
 			logger:  logger,
@@ -489,8 +489,8 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 	})
 
 	t.Run("separate limits per sender", func(t *testing.T) {
-		limiter := newMemRateLimiter(2)
-		backend := &Backend{senderRateLimiter: limiter}
+		limiter := newMemRateLimiter()
+		backend := &Backend{senderRateLimiter: limiter, maxSendsPerHour: 2}
 
 		alice := &Session{backend: backend, authUser: "alice@example.com", logger: logger}
 		bob := &Session{backend: backend, authUser: "bob@example.com", logger: logger}
@@ -511,6 +511,69 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 		// Bob should still be fine
 		if err := bob.Mail("bob@example.com", nil); err != nil {
 			t.Fatalf("bob should not be rate limited: %v", err)
+		}
+	})
+
+	t.Run("per-domain limit overrides global", func(t *testing.T) {
+		limiter := newMemRateLimiter()
+		provider := &mockDomainProvider{
+			domains: map[string]*domain.Domain{
+				"example.com": {
+					Name:   "example.com",
+					Limits: domain.LimitsConfig{MaxSendsPerHour: 2},
+				},
+			},
+		}
+		backend := &Backend{
+			senderRateLimiter: limiter,
+			maxSendsPerHour:   100, // global allows 100
+			domainProvider:    provider,
+		}
+		session := &Session{
+			backend:  backend,
+			authUser: "alice@example.com",
+			logger:   logger,
+		}
+
+		// Per-domain limit is 2, so first 2 succeed
+		for i := 0; i < 2; i++ {
+			err := session.Mail("alice@example.com", nil)
+			if err != nil {
+				t.Fatalf("message %d: unexpected error: %v", i+1, err)
+			}
+			session.Reset()
+		}
+
+		// 3rd should be rate limited (per-domain limit of 2)
+		err := session.Mail("alice@example.com", nil)
+		if err == nil {
+			t.Fatal("expected rate limit error from per-domain limit")
+		}
+		smtpErr, ok := err.(*gosmtp.SMTPError)
+		if !ok {
+			t.Fatalf("expected SMTPError, got %T", err)
+		}
+		if smtpErr.Code != 452 {
+			t.Errorf("expected code 452, got %d", smtpErr.Code)
+		}
+	})
+
+	t.Run("no limit when maxSendsPerHour is zero", func(t *testing.T) {
+		limiter := newMemRateLimiter()
+		backend := &Backend{senderRateLimiter: limiter, maxSendsPerHour: 0}
+		session := &Session{
+			backend:  backend,
+			authUser: "alice@example.com",
+			logger:   logger,
+		}
+
+		// Should succeed without limit since maxSendsPerHour is 0
+		for i := 0; i < 10; i++ {
+			err := session.Mail("alice@example.com", nil)
+			if err != nil {
+				t.Fatalf("message %d: unexpected error: %v", i+1, err)
+			}
+			session.Reset()
 		}
 	})
 }

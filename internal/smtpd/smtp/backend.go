@@ -33,6 +33,7 @@ type Backend struct {
 	spamtrapLearner     *spamtrapLearner
 	spamtrapRateLimiter *ipRateLimiter
 	senderRateLimiter   senderLimiter
+	maxSendsPerHour     int // global default; per-domain overrides via DomainConfig.Limits
 	notifier            *Notifier
 	collector           metrics.Collector
 	maxRecipients       int
@@ -75,29 +76,30 @@ func NewBackend(cfg BackendConfig) *Backend {
 	}
 
 	b := &Backend{
-		hostname:       cfg.Hostname,
-		delivery:       cfg.Delivery,
-		smDelivery:     cfg.SMDelivery,
-		authAgent:      cfg.AuthAgent,
-		authRouter:     cfg.AuthRouter,
-		oauthAgent:     cfg.OAuthAgent,
-		domainProvider: cfg.DomainProvider,
-		spamChecker:    cfg.SpamChecker,
-		spamConfig:     cfg.SpamConfig,
-		rejectionMode:  cfg.RejectionMode,
-		notifier:       cfg.Notifier,
-		collector:      cfg.Collector,
-		maxRecipients:  cfg.MaxRecipients,
-		maxMessageSize: cfg.MaxMessageSize,
-		tempDir:        cfg.TempDir,
-		logger:         logger,
+		hostname:        cfg.Hostname,
+		delivery:        cfg.Delivery,
+		smDelivery:      cfg.SMDelivery,
+		authAgent:       cfg.AuthAgent,
+		authRouter:      cfg.AuthRouter,
+		oauthAgent:      cfg.OAuthAgent,
+		domainProvider:  cfg.DomainProvider,
+		spamChecker:     cfg.SpamChecker,
+		spamConfig:      cfg.SpamConfig,
+		rejectionMode:   cfg.RejectionMode,
+		notifier:        cfg.Notifier,
+		collector:       cfg.Collector,
+		maxRecipients:   cfg.MaxRecipients,
+		maxMessageSize:  cfg.MaxMessageSize,
+		maxSendsPerHour: cfg.MaxSendsPerHour,
+		tempDir:         cfg.TempDir,
+		logger:          logger,
 	}
 
-	if cfg.MaxSendsPerHour > 0 && cfg.RedisClient != nil {
+	if cfg.RedisClient != nil {
 		b.senderRateLimiter = newRedisRateLimiter(
-			cfg.RedisClient, cfg.MaxSendsPerHour, time.Hour, "smtpd:sendrate:")
+			cfg.RedisClient, time.Hour, "smtpd:sendrate:")
 		logger.Info("sender rate limiting enabled",
-			"max_sends_per_hour", cfg.MaxSendsPerHour)
+			"default_max_sends_per_hour", cfg.MaxSendsPerHour)
 	}
 
 	if cfg.SpamtrapConfig.Enabled && cfg.SpamtrapConfig.ControllerURL != "" {

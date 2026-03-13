@@ -49,11 +49,11 @@ func (s *sessionManagerStore) Stat(ctx context.Context, mailbox string) (int, in
 	return int(count), totalBytes, nil
 }
 
-func (s *sessionManagerStore) Retrieve(ctx context.Context, mailbox, uid string) (io.ReadCloser, error) {
+func (s *sessionManagerStore) Retrieve(ctx context.Context, mailbox string, uid uint32) (io.ReadCloser, error) {
 	return s.client.FetchMessage(ctx, s.token, "", uid)
 }
 
-func (s *sessionManagerStore) Delete(ctx context.Context, mailbox, uid string) error {
+func (s *sessionManagerStore) Delete(ctx context.Context, mailbox string, uid uint32) error {
 	return s.client.DeleteMessage(ctx, s.token, uid)
 }
 

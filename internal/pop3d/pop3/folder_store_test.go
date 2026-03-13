@@ -2,6 +2,7 @@ package pop3
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -24,7 +25,7 @@ type mockFolderStore struct {
 func newMockFolderStore(folders map[string][]msgstore.MessageInfo) *mockFolderStore {
 	return &mockFolderStore{
 		inbox: []msgstore.MessageInfo{
-			{UID: "inbox1", Size: 100},
+			{UID: 1, Size: 100},
 		},
 		folders: folders,
 	}
@@ -35,11 +36,11 @@ func (m *mockFolderStore) List(_ context.Context, _ string) ([]msgstore.MessageI
 	return m.inbox, nil
 }
 
-func (m *mockFolderStore) Retrieve(_ context.Context, _, uid string) (io.ReadCloser, error) {
-	return io.NopCloser(strings.NewReader("Subject: " + uid + "\r\n\r\nbody\r\n")), nil
+func (m *mockFolderStore) Retrieve(_ context.Context, _ string, uid uint32) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader(fmt.Sprintf("Subject: %d\r\n\r\nbody\r\n", uid))), nil
 }
 
-func (m *mockFolderStore) Delete(_ context.Context, _, _ string) error { return nil }
+func (m *mockFolderStore) Delete(_ context.Context, _ string, _ uint32) error { return nil }
 
 func (m *mockFolderStore) Expunge(_ context.Context, _ string) error { return nil }
 
@@ -50,7 +51,6 @@ func (m *mockFolderStore) Stat(_ context.Context, _ string) (int, int64, error) 
 	}
 	return len(m.inbox), total, nil
 }
-
 
 // FolderStore interface
 func (m *mockFolderStore) ListFolders(_ context.Context, _ string) ([]string, error) {
@@ -82,11 +82,11 @@ func (m *mockFolderStore) StatFolder(_ context.Context, _, folder string) (int, 
 	return len(msgs), total, nil
 }
 
-func (m *mockFolderStore) RetrieveFromFolder(_ context.Context, _, folder, uid string) (io.ReadCloser, error) {
-	return io.NopCloser(strings.NewReader("Subject: " + folder + "/" + uid + "\r\n\r\nbody\r\n")), nil
+func (m *mockFolderStore) RetrieveFromFolder(_ context.Context, _, folder string, uid uint32) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader(fmt.Sprintf("Subject: %s/%d\r\n\r\nbody\r\n", folder, uid))), nil
 }
 
-func (m *mockFolderStore) DeleteInFolder(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockFolderStore) DeleteInFolder(_ context.Context, _, _ string, _ uint32) error { return nil }
 
 func (m *mockFolderStore) ExpungeFolder(_ context.Context, _, _ string) error { return nil }
 
@@ -96,20 +96,24 @@ func (m *mockFolderStore) DeliverToFolder(_ context.Context, _, _ string, _ io.R
 
 func (m *mockFolderStore) RenameFolder(_ context.Context, _, _, _ string) error { return nil }
 
-func (m *mockFolderStore) AppendToFolder(_ context.Context, _, _ string, _ io.Reader, _ []string, _ time.Time) (string, error) {
-	return "", nil
+func (m *mockFolderStore) AppendToFolder(_ context.Context, _, _ string, _ io.Reader, _ []string, _ time.Time) (uint32, error) {
+	return 0, nil
 }
 
-func (m *mockFolderStore) SetFlagsInFolder(_ context.Context, _, _, _ string, _ []string) error {
+func (m *mockFolderStore) SetFlagsInFolder(_ context.Context, _, _ string, _ uint32, _ []string) error {
 	return nil
 }
 
-func (m *mockFolderStore) CopyMessage(_ context.Context, _, _, _, _ string) (string, error) {
-	return "", nil
+func (m *mockFolderStore) CopyMessage(_ context.Context, _, _ string, _ uint32, _ string) (uint32, error) {
+	return 0, nil
 }
 
 func (m *mockFolderStore) UIDValidity(_ context.Context, _, _ string) (uint32, error) {
 	return 1, nil
+}
+
+func (m *mockFolderStore) UIDNext(_ context.Context, _, _ string) (uint32, error) {
+	return 2, nil
 }
 
 // helper: authenticated session ready for InitializeMailbox
@@ -126,7 +130,7 @@ func newAuthenticatedSession() *Session {
 
 func TestInitializeMailbox_NoFolder(t *testing.T) {
 	store := newMockFolderStore(map[string][]msgstore.MessageInfo{
-		"work": {{UID: "w1", Size: 50}},
+		"work": {{UID: 10, Size: 50}},
 	})
 	sess := newAuthenticatedSession()
 
@@ -142,8 +146,8 @@ func TestInitializeMailbox_NoFolder(t *testing.T) {
 
 func TestInitializeMailbox_FolderExists(t *testing.T) {
 	folderMsgs := []msgstore.MessageInfo{
-		{UID: "w1", Size: 50},
-		{UID: "w2", Size: 75},
+		{UID: 10, Size: 50},
+		{UID: 11, Size: 75},
 	}
 	store := newMockFolderStore(map[string][]msgstore.MessageInfo{
 		"work": folderMsgs,
@@ -162,7 +166,7 @@ func TestInitializeMailbox_FolderExists(t *testing.T) {
 
 func TestInitializeMailbox_FolderMissing(t *testing.T) {
 	store := newMockFolderStore(map[string][]msgstore.MessageInfo{
-		"work": {{UID: "w1", Size: 50}},
+		"work": {{UID: 10, Size: 50}},
 	})
 	sess := newAuthenticatedSession()
 

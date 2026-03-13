@@ -366,11 +366,11 @@ func (s *Session) ResetDeletions() {
 }
 
 // GetDeletedUIDs returns the UIDs of messages marked for deletion.
-func (s *Session) GetDeletedUIDs() []string {
+func (s *Session) GetDeletedUIDs() []uint32 {
 	if s.messageList == nil {
 		return nil
 	}
-	var uids []string
+	var uids []uint32
 	for msgNum := range s.deletedSet {
 		if msgNum >= 1 && msgNum <= len(s.messageList) {
 			uids = append(uids, s.messageList[msgNum-1].UID)

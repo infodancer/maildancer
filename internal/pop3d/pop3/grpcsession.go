@@ -97,14 +97,14 @@ func (g *grpcSessionStore) List(ctx context.Context, mailbox string) ([]msgstore
 	return g.client.List(ctx, mailbox)
 }
 
-func (g *grpcSessionStore) Retrieve(ctx context.Context, mailbox, uid string) (io.ReadCloser, error) {
+func (g *grpcSessionStore) Retrieve(ctx context.Context, mailbox string, uid uint32) (io.ReadCloser, error) {
 	if err := g.ensureReady(mailbox); err != nil {
 		return nil, err
 	}
 	return g.client.Retrieve(ctx, mailbox, uid)
 }
 
-func (g *grpcSessionStore) Delete(ctx context.Context, mailbox, uid string) error {
+func (g *grpcSessionStore) Delete(ctx context.Context, mailbox string, uid uint32) error {
 	if err := g.ensureReady(mailbox); err != nil {
 		return err
 	}

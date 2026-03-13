@@ -57,8 +57,8 @@ func (m *mockMailboxService) List(ctx context.Context, req *pb.ListRequest) (*pb
 	}
 	return &pb.ListResponse{
 		Messages: []*pb.MessageInfo{
-			{Uid: "msg1", Size: 1024},
-			{Uid: "msg2", Size: 2048},
+			{Uid: 1, Size: 1024},
+			{Uid: 2, Size: 2048},
 		},
 	}, nil
 }
@@ -193,8 +193,8 @@ func TestSessionManagerClient_ListMessages(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("got %d messages, want 2", len(msgs))
 	}
-	if msgs[0].Uid != "msg1" || msgs[0].Size != 1024 {
-		t.Errorf("msg[0] = %+v, want uid=msg1 size=1024", msgs[0])
+	if msgs[0].Uid != 1 || msgs[0].Size != 1024 {
+		t.Errorf("msg[0] = %+v, want uid=1 size=1024", msgs[0])
 	}
 }
 
@@ -270,7 +270,7 @@ func TestSessionManagerClient_FetchMessage(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	rc, err := client.FetchMessage(context.Background(), "tok", "", "msg1")
+	rc, err := client.FetchMessage(context.Background(), "tok", "", 1)
 	if err != nil {
 		t.Fatalf("FetchMessage: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestSessionManagerClient_FetchMessage(t *testing.T) {
 }
 
 func TestSessionManagerClient_DeleteAndExpunge(t *testing.T) {
-	var deletedUID string
+	var deletedUID uint32
 	var expungedFolder string
 	mailboxSvc := &mockMailboxService{
 		deleteFunc: func(ctx context.Context, req *pb.DeleteRequest) (*pb.DeleteResponse, error) {
@@ -311,11 +311,11 @@ func TestSessionManagerClient_DeleteAndExpunge(t *testing.T) {
 	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
-	if err := client.DeleteMessage(ctx, "tok", "msg1"); err != nil {
+	if err := client.DeleteMessage(ctx, "tok", 1); err != nil {
 		t.Fatalf("DeleteMessage: %v", err)
 	}
-	if deletedUID != "msg1" {
-		t.Errorf("deleted UID = %q, want %q", deletedUID, "msg1")
+	if deletedUID != 1 {
+		t.Errorf("deleted UID = %d, want 1", deletedUID)
 	}
 
 	if err := client.ExpungeMailbox(ctx, "tok", "INBOX"); err != nil {
@@ -430,7 +430,7 @@ func TestSessionManagerStore_ListAndStat(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Fatalf("got %d messages, want 2", len(msgs))
 	}
-	if msgs[0].UID != "msg1" || msgs[0].Size != 1024 {
+	if msgs[0].UID != 1 || msgs[0].Size != 1024 {
 		t.Errorf("msg[0] = %+v", msgs[0])
 	}
 

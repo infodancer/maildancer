@@ -5,9 +5,9 @@ go 1.26.1
 require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/infodancer/maildancer/auth v0.1.14
-	github.com/infodancer/maildancer/internal/mail-session v0.1.2
-	github.com/infodancer/maildancer/msgstore v0.2.4
-	github.com/infodancer/maildancer/internal/session-manager v0.1.0
+	github.com/infodancer/maildancer/internal/mail-session v0.1.3-0.20260313080315-2774e158a243
+	github.com/infodancer/maildancer/msgstore v0.2.5-0.20260313075010-ceed9cfc0b22
+	github.com/infodancer/maildancer/internal/session-manager v0.1.2-0.20260313080955-e5678627d2f2
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	golang.org/x/crypto v0.48.0

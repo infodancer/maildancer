@@ -34,8 +34,6 @@ linters:
               desc: "session-manager code must use mail-session proto types, not msgstore"
             - pkg: "github.com/infodancer/maildancer/auth"
               desc: "authentication is the session-manager's responsibility"
-            - pkg: "github.com/infodancer/maildancer/internal/smtpd/queue"
-              desc: "outbound queue is a separate concern from delivery"
             - pkg: "github.com/infodancer/maildancer/internal/smtpd/rspamd"
               desc: "spam checking happens before delivery dispatch"
             - pkg: "github.com/infodancer/maildancer/internal/smtpd/spamcheck"

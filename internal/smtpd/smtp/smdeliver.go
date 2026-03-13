@@ -28,6 +28,7 @@ import (
 type SessionManagerDeliveryAgent struct {
 	conn     *grpc.ClientConn
 	delivery pb.DeliveryServiceClient
+	outbound pb.OutboundServiceClient
 	logger   *slog.Logger
 }
 
@@ -65,6 +66,7 @@ func NewSessionManagerDeliveryAgent(cfg config.SessionManagerConfig, logger *slo
 	return &SessionManagerDeliveryAgent{
 		conn:     conn,
 		delivery: pb.NewDeliveryServiceClient(conn),
+		outbound: pb.NewOutboundServiceClient(conn),
 		logger:   logger,
 	}, nil
 }
@@ -151,6 +153,58 @@ func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recip
 // Close closes the gRPC connection to the session-manager.
 func (a *SessionManagerDeliveryAgent) Close() error {
 	return a.conn.Close()
+}
+
+// Enqueue sends a message to the session-manager's OutboundService for queue
+// injection. The session-manager handles DKIM signing and envelope generation.
+func (a *SessionManagerDeliveryAgent) Enqueue(ctx context.Context, sender string, recipients []string, message io.Reader) (string, error) {
+	stream, err := a.outbound.Enqueue(ctx)
+	if err != nil {
+		return "", fmt.Errorf("session-manager enqueue: open stream: %w", err)
+	}
+
+	// Send metadata.
+	if err := stream.Send(&pb.EnqueueRequest{
+		Payload: &pb.EnqueueRequest_Metadata{
+			Metadata: &pb.EnqueueMetadata{
+				Sender:     sender,
+				Recipients: recipients,
+			},
+		},
+	}); err != nil {
+		return "", fmt.Errorf("session-manager enqueue: send metadata: %w", err)
+	}
+
+	// Stream body in 64KB chunks.
+	buf := make([]byte, 64*1024)
+	for {
+		n, readErr := message.Read(buf)
+		if n > 0 {
+			if err := stream.Send(&pb.EnqueueRequest{
+				Payload: &pb.EnqueueRequest_Data{Data: buf[:n]},
+			}); err != nil {
+				return "", fmt.Errorf("session-manager enqueue: send body: %w", err)
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return "", fmt.Errorf("session-manager enqueue: read message: %w", readErr)
+		}
+	}
+
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		return "", fmt.Errorf("session-manager enqueue: close stream: %w", err)
+	}
+
+	a.logger.Debug("message enqueued via session-manager",
+		slog.String("msgid", resp.GetMessageId()),
+		slog.String("sender", sender),
+		slog.Int("recipients", len(recipients)))
+
+	return resp.GetMessageId(), nil
 }
 
 // buildClientTLS creates a TLS config for connecting to the session-manager with mTLS.

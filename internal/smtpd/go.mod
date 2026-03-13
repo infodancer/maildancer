@@ -4,11 +4,10 @@ go 1.26.1
 
 require (
 	github.com/alicebob/miniredis/v2 v2.37.0
-	github.com/emersion/go-msgauth v0.7.0
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.24.0
 	github.com/infodancer/maildancer/auth v0.1.14
-	github.com/infodancer/maildancer/internal/mail-session v0.1.3
+	github.com/infodancer/maildancer/internal/mail-session v0.1.4
 	github.com/infodancer/maildancer/msgstore v0.2.5
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2

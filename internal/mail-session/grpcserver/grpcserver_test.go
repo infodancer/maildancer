@@ -163,8 +163,8 @@ func TestMailboxService_AppendAndFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	uid := appendResp.GetUid()
-	if uid == "" {
-		t.Fatal("expected non-empty UID")
+	if uid == 0 {
+		t.Fatal("expected non-zero UID")
 	}
 
 	// Verify via List.
@@ -176,7 +176,7 @@ func TestMailboxService_AppendAndFetch(t *testing.T) {
 		t.Fatalf("expected 1 message, got %d", len(listResp.GetMessages()))
 	}
 	if listResp.GetMessages()[0].GetUid() != uid {
-		t.Errorf("uid mismatch: got %q, want %q", listResp.GetMessages()[0].GetUid(), uid)
+		t.Errorf("uid mismatch: got %d, want %d", listResp.GetMessages()[0].GetUid(), uid)
 	}
 
 	// Fetch the message.

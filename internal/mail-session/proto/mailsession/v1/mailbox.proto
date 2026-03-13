@@ -56,7 +56,7 @@ service MailboxService {
 // MessageInfo describes a single message in a folder.
 message MessageInfo {
   // UID is the msgstore-assigned unique identifier.
-  string uid = 1;
+  uint32 uid = 1;
 
   // Size is the message size in bytes.
   int64 size = 2;
@@ -84,7 +84,7 @@ message StatResponse {
 
 message FetchRequest {
   string folder = 1;
-  string uid = 2;
+  uint32 uid = 2;
 }
 
 message FetchResponse {
@@ -94,7 +94,7 @@ message FetchResponse {
 
 message FetchHeadersRequest {
   string folder = 1;
-  string uid = 2;
+  uint32 uid = 2;
 
   // Number of body lines to include after headers. 0 = headers only.
   int32 body_lines = 3;
@@ -124,32 +124,32 @@ message AppendMetadata {
 
 message AppendResponse {
   // The UID assigned to the newly stored message.
-  string uid = 1;
+  uint32 uid = 1;
 }
 
 message CopyRequest {
   string folder = 1;
-  string uid = 2;
+  uint32 uid = 2;
   string dest_folder = 3;
 }
 
 message CopyResponse {
-  string new_uid = 1;
+  uint32 new_uid = 1;
 }
 
 message MoveRequest {
-  string uid = 1;
+  uint32 uid = 1;
   string src_folder = 2;
   string dest_folder = 3;
 }
 
 message MoveResponse {
-  string new_uid = 1;
+  uint32 new_uid = 1;
 }
 
 message SetFlagsRequest {
   string folder = 1;
-  string uid = 2;
+  uint32 uid = 2;
   repeated string flags = 3;
 }
 
@@ -161,7 +161,7 @@ message ExpungeRequest {
 
 message ExpungeResponse {
   // UIDs of messages that were permanently removed.
-  repeated string expelled_uids = 1;
+  repeated uint32 expelled_uids = 1;
 }
 
 message RescanRequest {
@@ -179,16 +179,17 @@ message UIDValidityRequest {
 
 message UIDValidityResponse {
   uint32 uid_validity = 1;
+  uint32 uid_next = 2;
 }
 
 message DeleteRequest {
-  string uid = 1;
+  uint32 uid = 1;
 }
 
 message DeleteResponse {}
 
 message UndeleteRequest {
-  string uid = 1;
+  uint32 uid = 1;
 }
 
 message UndeleteResponse {}

@@ -42,11 +42,11 @@ message NewMessagesEvent {
 
 // ExpungedEvent reports UIDs that were permanently removed.
 message ExpungedEvent {
-  repeated string uids = 1;
+  repeated uint32 uids = 1;
 }
 
 // FlagsChangedEvent reports a message whose flags were updated.
 message FlagsChangedEvent {
-  string uid = 1;
+  uint32 uid = 1;
   repeated string flags = 2;
 }

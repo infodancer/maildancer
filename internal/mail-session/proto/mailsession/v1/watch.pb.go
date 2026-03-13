@@ -217,7 +217,7 @@ func (x *NewMessagesEvent) GetMessages() []*MessageInfo {
 // ExpungedEvent reports UIDs that were permanently removed.
 type ExpungedEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uids          []string               `protobuf:"bytes,1,rep,name=uids,proto3" json:"uids,omitempty"`
+	Uids          []uint32               `protobuf:"varint,1,rep,packed,name=uids,proto3" json:"uids,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -252,7 +252,7 @@ func (*ExpungedEvent) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_watch_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *ExpungedEvent) GetUids() []string {
+func (x *ExpungedEvent) GetUids() []uint32 {
 	if x != nil {
 		return x.Uids
 	}
@@ -262,7 +262,7 @@ func (x *ExpungedEvent) GetUids() []string {
 // FlagsChangedEvent reports a message whose flags were updated.
 type FlagsChangedEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uid           string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Uid           uint32                 `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
 	Flags         []string               `protobuf:"bytes,2,rep,name=flags,proto3" json:"flags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -298,11 +298,11 @@ func (*FlagsChangedEvent) Descriptor() ([]byte, []int) {
 	return file_mailsession_v1_watch_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *FlagsChangedEvent) GetUid() string {
+func (x *FlagsChangedEvent) GetUid() uint32 {
 	if x != nil {
 		return x.Uid
 	}
-	return ""
+	return 0
 }
 
 func (x *FlagsChangedEvent) GetFlags() []string {
@@ -328,9 +328,9 @@ const file_mailsession_v1_watch_proto_rawDesc = "" +
 	"\x10NewMessagesEvent\x127\n" +
 	"\bmessages\x18\x01 \x03(\v2\x1b.mailsession.v1.MessageInfoR\bmessages\"#\n" +
 	"\rExpungedEvent\x12\x12\n" +
-	"\x04uids\x18\x01 \x03(\tR\x04uids\";\n" +
+	"\x04uids\x18\x01 \x03(\rR\x04uids\";\n" +
 	"\x11FlagsChangedEvent\x12\x10\n" +
-	"\x03uid\x18\x01 \x01(\tR\x03uid\x12\x14\n" +
+	"\x03uid\x18\x01 \x01(\rR\x03uid\x12\x14\n" +
 	"\x05flags\x18\x02 \x03(\tR\x05flags2S\n" +
 	"\fWatchService\x12C\n" +
 	"\x05Watch\x12\x1c.mailsession.v1.WatchRequest\x1a\x1a.mailsession.v1.WatchEvent0\x01B9Z7github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"

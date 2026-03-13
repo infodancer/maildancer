@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	gosmtp "github.com/emersion/go-smtp"
@@ -574,6 +575,136 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 				t.Fatalf("message %d: unexpected error: %v", i+1, err)
 			}
 			session.Reset()
+		}
+	})
+}
+
+func TestSession_CheckFromAlignment(t *testing.T) {
+	logger := slog.Default()
+
+	makeMsg := func(from string) string {
+		return "From: " + from + "\r\nTo: bob@remote.com\r\nSubject: test\r\n\r\nBody\r\n"
+	}
+
+	t.Run("aligned domains pass", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "alice@example.com",
+			from:     "alice@example.com",
+			logger:   logger,
+		}
+		err := session.checkFromAlignment(strings.NewReader(makeMsg("alice@example.com")))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("different local part same domain rejected", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "alice@example.com",
+			from:     "alice@example.com",
+			logger:   logger,
+		}
+		err := session.checkFromAlignment(strings.NewReader(makeMsg("noreply@example.com")))
+		if err == nil {
+			t.Fatal("expected error for different local part")
+		}
+		smtpErr, ok := err.(*gosmtp.SMTPError)
+		if !ok {
+			t.Fatalf("expected SMTPError, got %T", err)
+		}
+		if smtpErr.Code != 550 {
+			t.Errorf("expected code 550, got %d", smtpErr.Code)
+		}
+	})
+
+	t.Run("mismatched domain rejected", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "alice@example.com",
+			from:     "alice@example.com",
+			logger:   logger,
+		}
+		err := session.checkFromAlignment(strings.NewReader(makeMsg("alice@evil.com")))
+		if err == nil {
+			t.Fatal("expected error for mismatched domain")
+		}
+		smtpErr, ok := err.(*gosmtp.SMTPError)
+		if !ok {
+			t.Fatalf("expected SMTPError, got %T", err)
+		}
+		if smtpErr.Code != 550 {
+			t.Errorf("expected code 550, got %d", smtpErr.Code)
+		}
+	})
+
+	t.Run("missing From header rejected", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "alice@example.com",
+			from:     "alice@example.com",
+			logger:   logger,
+		}
+		msg := "To: bob@remote.com\r\nSubject: test\r\n\r\nBody\r\n"
+		err := session.checkFromAlignment(strings.NewReader(msg))
+		if err == nil {
+			t.Fatal("expected error for missing From header")
+		}
+		smtpErr, ok := err.(*gosmtp.SMTPError)
+		if !ok {
+			t.Fatalf("expected SMTPError, got %T", err)
+		}
+		if smtpErr.Code != 550 {
+			t.Errorf("expected code 550, got %d", smtpErr.Code)
+		}
+	})
+
+	t.Run("multiple From addresses rejected", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "alice@example.com",
+			from:     "alice@example.com",
+			logger:   logger,
+		}
+		msg := "From: alice@example.com, bob@example.com\r\nTo: ext@remote.com\r\nSubject: test\r\n\r\nBody\r\n"
+		err := session.checkFromAlignment(strings.NewReader(msg))
+		if err == nil {
+			t.Fatal("expected error for multiple From addresses")
+		}
+		smtpErr, ok := err.(*gosmtp.SMTPError)
+		if !ok {
+			t.Fatalf("expected SMTPError, got %T", err)
+		}
+		if smtpErr.Code != 550 {
+			t.Errorf("expected code 550, got %d", smtpErr.Code)
+		}
+	})
+
+	t.Run("case insensitive domain match", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "alice@Example.COM",
+			from:     "alice@Example.COM",
+			logger:   logger,
+		}
+		err := session.checkFromAlignment(strings.NewReader(makeMsg("alice@example.com")))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("display name in From header handled", func(t *testing.T) {
+		session := &Session{
+			backend:  &Backend{},
+			authUser: "alice@example.com",
+			from:     "alice@example.com",
+			logger:   logger,
+		}
+		msg := "From: Alice Smith <alice@example.com>\r\nTo: bob@remote.com\r\nSubject: test\r\n\r\nBody\r\n"
+		err := session.checkFromAlignment(strings.NewReader(msg))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 }

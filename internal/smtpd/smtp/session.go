@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/mail"
 	"os"
 	"strings"
 	"time"
@@ -418,6 +419,74 @@ func extractDomain(email string) string {
 	return strings.ToLower(email[idx+1:])
 }
 
+// checkFromAlignment parses the RFC 5322 From header and verifies it exactly
+// matches the envelope sender (and therefore the authenticated user). This
+// enforces both DMARC alignment and prevents header forgery — the DKIM
+// signature domain will match the From header domain at the receiving MTA.
+func (s *Session) checkFromAlignment(r io.Reader) error {
+	msg, err := mail.ReadMessage(r)
+	if err != nil {
+		s.logger.Warn("failed to parse message headers",
+			slog.String("error", err.Error()))
+		return &smtp.SMTPError{
+			Code:         550,
+			EnhancedCode: smtp.EnhancedCode{5, 6, 0},
+			Message:      "Message headers could not be parsed",
+		}
+	}
+
+	fromHeader := msg.Header.Get("From")
+	if fromHeader == "" {
+		s.logger.Warn("missing From header in outbound message")
+		return &smtp.SMTPError{
+			Code:         550,
+			EnhancedCode: smtp.EnhancedCode{5, 6, 0},
+			Message:      "Message must contain a From header",
+		}
+	}
+
+	addrs, err := mail.ParseAddressList(fromHeader)
+	if err != nil || len(addrs) == 0 {
+		s.logger.Warn("invalid From header",
+			slog.String("from_header", fromHeader),
+			slog.String("error", err.Error()))
+		return &smtp.SMTPError{
+			Code:         550,
+			EnhancedCode: smtp.EnhancedCode{5, 6, 0},
+			Message:      "From header address is invalid",
+		}
+	}
+
+	if len(addrs) > 1 {
+		s.logger.Warn("multiple From addresses in outbound message",
+			slog.String("from_header", fromHeader))
+		return &smtp.SMTPError{
+			Code:         550,
+			EnhancedCode: smtp.EnhancedCode{5, 6, 0},
+			Message:      "Message must have exactly one From address",
+		}
+	}
+
+	// Exact address match: From header must be the authenticated sender.
+	// Same policy as envelope sender verification in Mail().
+	normFrom := strings.ToLower(addrs[0].Address)
+	normEnvelope := strings.ToLower(strings.TrimSuffix(strings.TrimPrefix(s.from, "<"), ">"))
+
+	if normFrom != normEnvelope {
+		s.logger.Warn("From header does not match envelope sender",
+			slog.String("header_from", addrs[0].Address),
+			slog.String("envelope_from", s.from),
+			slog.String("auth_user", s.authUser))
+		return &smtp.SMTPError{
+			Code:         550,
+			EnhancedCode: smtp.EnhancedCode{5, 7, 1},
+			Message:      "From header must match the authenticated sender address",
+		}
+	}
+
+	return nil
+}
+
 // Data handles the DATA command and message delivery.
 // Implements smtp.Session interface.
 //
@@ -709,6 +778,17 @@ func (s *Session) Data(r io.Reader) error {
 			slog.String("from", s.from),
 			slog.String("to", s.recipients[0]),
 			slog.Int64("size", counter.n))
+	}
+
+	// DMARC alignment check for outbound submission: verify the RFC 5322
+	// From header domain matches the envelope sender domain. This ensures
+	// DKIM signatures (applied using the envelope sender domain) will pass
+	// DMARC alignment at the receiving MTA. Only checked for authenticated
+	// outbound messages.
+	if len(s.remoteRecipients) > 0 && s.authUser != "" && s.from != "" {
+		if err := s.checkFromAlignment(tmp.reader()); err != nil {
+			return err
+		}
 	}
 
 	// Remote delivery: enqueue via session-manager's OutboundService.

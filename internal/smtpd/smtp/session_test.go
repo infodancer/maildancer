@@ -422,7 +422,7 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 	logger := slog.Default()
 
 	t.Run("rate limit enforced for authenticated sender", func(t *testing.T) {
-		limiter := newIPRateLimiter(3)
+		limiter := newMemRateLimiter(3)
 		backend := &Backend{senderRateLimiter: limiter}
 		session := &Session{
 			backend:  backend,
@@ -454,7 +454,7 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 	})
 
 	t.Run("no rate limit for unauthenticated", func(t *testing.T) {
-		limiter := newIPRateLimiter(1)
+		limiter := newMemRateLimiter(1)
 		backend := &Backend{senderRateLimiter: limiter}
 		session := &Session{
 			backend: backend,
@@ -489,7 +489,7 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 	})
 
 	t.Run("separate limits per sender", func(t *testing.T) {
-		limiter := newIPRateLimiter(2)
+		limiter := newMemRateLimiter(2)
 		backend := &Backend{senderRateLimiter: limiter}
 
 		alice := &Session{backend: backend, authUser: "alice@example.com", logger: logger}

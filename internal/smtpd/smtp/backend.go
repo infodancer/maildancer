@@ -10,6 +10,7 @@ import (
 	"github.com/infodancer/maildancer/auth/oauth"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
+	"github.com/infodancer/maildancer/internal/smtpd/logging"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
@@ -107,12 +108,16 @@ func (b *Backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 	}
 
 	clientIP := extractIPFromConn(c.Conn())
+	remoteAddr := ""
+	if c.Conn() != nil && c.Conn().RemoteAddr() != nil {
+		remoteAddr = c.Conn().RemoteAddr().String()
+	}
 
 	return &Session{
 		backend:  b,
 		conn:     c,
 		clientIP: clientIP,
-		logger:   b.logger.With(slog.String("client_ip", clientIP)),
+		logger:   logging.WithConnection(b.logger, remoteAddr),
 	}, nil
 }
 

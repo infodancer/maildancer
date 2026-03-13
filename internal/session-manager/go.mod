@@ -3,8 +3,9 @@ module github.com/infodancer/maildancer/internal/session-manager
 go 1.26.1
 
 require (
+	github.com/emersion/go-msgauth v0.7.0
 	github.com/infodancer/maildancer/auth v0.1.13
-	github.com/infodancer/maildancer/internal/mail-session v0.1.3-0.20260313080315-2774e158a243
+	github.com/infodancer/maildancer/internal/mail-session v0.1.4
 	github.com/infodancer/maildancer/msgstore v0.2.5-0.20260313075010-ceed9cfc0b22
 	github.com/pelletier/go-toml/v2 v2.2.4
 	google.golang.org/grpc v1.79.2

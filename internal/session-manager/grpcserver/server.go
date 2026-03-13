@@ -15,6 +15,7 @@ import (
 	"github.com/infodancer/maildancer/internal/session-manager/certutil"
 	"github.com/infodancer/maildancer/internal/session-manager/config"
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
+	"github.com/infodancer/maildancer/internal/session-manager/queue"
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -56,6 +57,20 @@ func New(mgr *manager.Manager, cfg *config.Config) (*Server, error) {
 	pb.RegisterFolderServiceServer(gsrv, &folderProxy{mgr: mgr})
 	pb.RegisterDeliveryServiceServer(gsrv, &deliveryProxy{mgr: mgr})
 	pb.RegisterWatchServiceServer(gsrv, &watchProxy{mgr: mgr})
+
+	// Register OutboundService if queue is configured.
+	if cfg.Queue.Dir != "" {
+		queueCfg := queue.Config{
+			Dir:        cfg.Queue.Dir,
+			MessageTTL: cfg.Queue.GetMessageTTL(),
+			Hostname:   cfg.Queue.Hostname,
+		}
+		pb.RegisterOutboundServiceServer(gsrv, &outboundServer{
+			queueCfg:    queueCfg,
+			domainsPath: cfg.DomainsPath,
+		})
+		slog.Info("outbound queue service enabled", "dir", cfg.Queue.Dir)
+	}
 
 	healthSrv := health.NewServer()
 	healthgrpc.RegisterHealthServer(gsrv, healthSrv)

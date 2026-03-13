@@ -28,7 +28,7 @@ type SmarthostConfig struct {
 	// Addr is the smarthost address in host:port form (e.g. "relay.example.com:587").
 	Addr string `toml:"addr"`
 
-	// User is the SMTP AUTH username. Password comes from --outbound-fd or MAIL_REMOTE_PASSWORD env var.
+	// User is the SMTP AUTH username. Password comes from stdin JSON config or MAIL_REMOTE_PASSWORD env var.
 	User string `toml:"user"`
 
 	// MaxTransactionsPerConn limits MAIL FROM transactions per connection.

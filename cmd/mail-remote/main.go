@@ -8,7 +8,7 @@
 //
 // Protocol (when invoked by queue-manager):
 //
-//	stdin:  JSON outbound config {"strategy","smarthost","smarthost_user","password"}
+//	stdin:  JSON outbound config {"strategy","hostname","smarthost","smarthost_user","password"}
 //	stdout: JSON delivery results [{"envelope","status","smtp_code","diagnostic"},...]
 //	stderr: structured logging (slog)
 //
@@ -21,7 +21,7 @@
 //	--config path         Path to shared TOML config file (reads [mail-remote] section).
 //	--smarthost host:port Relay via SMTP smarthost (overrides stdin config).
 //	--smarthost-user user SMTP AUTH username (overrides stdin config).
-//	--hostname fqdn       EHLO hostname for direct MX delivery (required without smarthost).
+//	--hostname fqdn       EHLO hostname for direct MX delivery (defaults to os.Hostname()).
 //	--final               Signal that this is the final delivery attempt (try all transports).
 //
 // Exit codes:
@@ -66,6 +66,7 @@ type recipientResult struct {
 // avoiding environment variables (visible in /proc/pid/environ).
 type outboundConfig struct {
 	Strategy  string `json:"strategy"`  // "direct" | "smarthost"
+	Hostname  string `json:"hostname"`  // EHLO hostname for direct MX
 	Smarthost string `json:"smarthost"` // host:port
 	Username  string `json:"smarthost_user"`
 	Password  string `json:"password"`
@@ -137,7 +138,12 @@ func run() int {
 
 	// Apply stdin config as baseline, then let CLI flags override.
 	password := ""
+	strategy := "" // "" = infer from smarthost presence (legacy)
 	if stdinCfg != nil {
+		strategy = stdinCfg.Strategy
+		if stdinCfg.Hostname != "" {
+			cfg.Hostname = stdinCfg.Hostname
+		}
 		if stdinCfg.Smarthost != "" {
 			cfg.Smarthost.Addr = stdinCfg.Smarthost
 		}
@@ -185,8 +191,28 @@ func run() int {
 		slog.Info("final delivery attempt", "envelopes", len(envs))
 	}
 
+	// Determine delivery strategy.
+	// Explicit strategy from stdin takes precedence; otherwise infer from
+	// smarthost presence (backward-compatible with manual invocation).
+	useSmarthost := cfg.Smarthost.Addr != ""
+	switch strategy {
+	case "smarthost":
+		if cfg.Smarthost.Addr == "" {
+			slog.Error("strategy is 'smarthost' but no smarthost address configured")
+			return exUsage
+		}
+		useSmarthost = true
+	case "direct":
+		useSmarthost = false
+	case "":
+		// Infer from config (legacy behavior).
+	default:
+		slog.Error("unknown delivery strategy", "strategy", strategy)
+		return exUsage
+	}
+
 	var results map[string]error
-	if cfg.Smarthost.Addr != "" {
+	if useSmarthost {
 		sh := smtp.Smarthost{
 			Addr:     cfg.Smarthost.Addr,
 			Username: cfg.Smarthost.User,
@@ -195,8 +221,13 @@ func run() int {
 		results = smtp.DeliverViaSmarthost(context.Background(), sh, bodyPath, envs, cfg.Smarthost.MaxTransactionsPerConn)
 	} else {
 		if cfg.Hostname == "" {
-			fmt.Fprintln(os.Stderr, "error: --hostname (or config hostname) is required for direct MX delivery")
-			return exUsage
+			h, err := os.Hostname()
+			if err != nil {
+				slog.Error("cannot determine hostname for EHLO", "error", err)
+				return exUsage
+			}
+			cfg.Hostname = h
+			slog.Info("using os.Hostname() for EHLO", "hostname", h)
 		}
 		domain, err := envs[0].RecipientDomain()
 		if err != nil {

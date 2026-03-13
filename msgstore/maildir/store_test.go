@@ -1261,8 +1261,8 @@ func TestMaildirStore_AppendToFolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendToFolder: %v", err)
 	}
-	if uid == "" {
-		t.Fatal("expected non-empty UID")
+	if uid == 0 {
+		t.Fatal("expected non-zero UID")
 	}
 
 	msgs, err := store.ListInFolder(ctx, "user@example.com", "archive")
@@ -1294,8 +1294,8 @@ func TestMaildirStore_AppendToFolder_INBOX(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendToFolder INBOX: %v", err)
 	}
-	if uid == "" {
-		t.Fatal("expected non-empty UID")
+	if uid == 0 {
+		t.Fatal("expected non-zero UID")
 	}
 
 	msgs, err := store.List(ctx, "user@example.com")
@@ -1365,7 +1365,7 @@ func TestMaildirStore_SetFlagsInFolder_MessageNotFound(t *testing.T) {
 		t.Fatalf("CreateFolder: %v", err)
 	}
 
-	err := store.SetFlagsInFolder(ctx, "user@example.com", "work", "nonexistent-key", []string{"\\Seen"})
+	err := store.SetFlagsInFolder(ctx, "user@example.com", "work", 99999, []string{"\\Seen"})
 	if err != errors.ErrMessageNotFound {
 		t.Fatalf("expected ErrMessageNotFound, got %v", err)
 	}
@@ -1386,8 +1386,8 @@ func TestMaildirStore_CopyMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CopyMessage: %v", err)
 	}
-	if destUID == "" {
-		t.Fatal("expected non-empty dest UID")
+	if destUID == 0 {
+		t.Fatal("expected non-zero dest UID")
 	}
 
 	// Source should still have the message.
@@ -1434,8 +1434,8 @@ func TestMaildirStore_CopyMessage_FromINBOX(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CopyMessage from INBOX: %v", err)
 	}
-	if destUID == "" {
-		t.Fatal("expected non-empty dest UID")
+	if destUID == 0 {
+		t.Fatal("expected non-zero dest UID")
 	}
 
 	dstMsgs, err := store.ListInFolder(ctx, "user@example.com", "archive")
@@ -1456,7 +1456,7 @@ func TestMaildirStore_CopyMessage_NotFound(t *testing.T) {
 		t.Fatalf("CreateFolder: %v", err)
 	}
 
-	_, err := store.CopyMessage(ctx, "user@example.com", "src", "nonexistent", "dst")
+	_, err := store.CopyMessage(ctx, "user@example.com", "src", 99999, "dst")
 	if err != errors.ErrMessageNotFound {
 		t.Fatalf("expected ErrMessageNotFound, got %v", err)
 	}
@@ -1489,16 +1489,9 @@ func TestMaildirStore_UIDValidity(t *testing.T) {
 		t.Errorf("UIDValidity not stable: %d != %d", v1, v2)
 	}
 
-	// Different folder name, different result.
-	if err := store.CreateFolder(ctx, "user@example.com", "archive"); err != nil {
-		t.Fatalf("CreateFolder: %v", err)
-	}
-	vOther, err := store.UIDValidity(ctx, "user@example.com", "archive")
-	if err != nil {
-		t.Fatalf("UIDValidity archive: %v", err)
-	}
-	if v1 == vOther {
-		t.Error("different folders should have different UIDValidity")
+	// Value should be a reasonable Unix timestamp.
+	if v1 < 1_000_000_000 {
+		t.Errorf("UIDValidity should be a Unix timestamp, got %d", v1)
 	}
 }
 
@@ -1726,5 +1719,246 @@ func TestEnsureMaildir_CreatesDefaultFolders(t *testing.T) {
 		if !found[name] {
 			t.Errorf("ensureMaildir did not create default folder %q", name)
 		}
+	}
+}
+
+// --- UID persistence integration tests ---
+
+func TestMaildirStore_UID_StableAcrossListCalls(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"user@example.com"},
+	}
+	for i := 0; i < 3; i++ {
+		msg := strings.NewReader("Subject: Msg\r\n\r\nBody")
+		if err := store.Deliver(ctx, envelope, msg); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+	}
+
+	msgs1, err := store.List(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("List 1: %v", err)
+	}
+	msgs2, err := store.List(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("List 2: %v", err)
+	}
+
+	if len(msgs1) != len(msgs2) {
+		t.Fatalf("message counts differ: %d vs %d", len(msgs1), len(msgs2))
+	}
+	for i := range msgs1 {
+		if msgs1[i].UID != msgs2[i].UID {
+			t.Errorf("msg %d: UID %d vs %d", i, msgs1[i].UID, msgs2[i].UID)
+		}
+	}
+}
+
+func TestMaildirStore_UID_StableAfterDeleteExpunge(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"user@example.com"},
+	}
+	for i := 0; i < 3; i++ {
+		msg := strings.NewReader("Subject: Msg\r\n\r\nBody")
+		if err := store.Deliver(ctx, envelope, msg); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+	}
+
+	msgs, err := store.List(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(msgs))
+	}
+
+	// Delete the middle message.
+	if err := store.Delete(ctx, "user@example.com", msgs[1].UID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := store.Expunge(ctx, "user@example.com"); err != nil {
+		t.Fatalf("Expunge: %v", err)
+	}
+
+	remaining, err := store.List(ctx, "user@example.com")
+	if err != nil {
+		t.Fatalf("List after expunge: %v", err)
+	}
+	if len(remaining) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(remaining))
+	}
+
+	// UIDs of remaining messages must be unchanged.
+	if remaining[0].UID != msgs[0].UID {
+		t.Errorf("first msg UID changed: %d -> %d", msgs[0].UID, remaining[0].UID)
+	}
+	if remaining[1].UID != msgs[2].UID {
+		t.Errorf("third msg UID changed: %d -> %d", msgs[2].UID, remaining[1].UID)
+	}
+}
+
+func TestMaildirStore_UID_NeverReused(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"user@example.com"},
+	}
+
+	// Deliver 2 messages, delete both, deliver a new one.
+	for i := 0; i < 2; i++ {
+		msg := strings.NewReader("Subject: Msg\r\n\r\nBody")
+		if err := store.Deliver(ctx, envelope, msg); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+	}
+
+	msgs, _ := store.List(ctx, "user@example.com")
+	maxUID := msgs[len(msgs)-1].UID
+
+	for _, m := range msgs {
+		if err := store.Delete(ctx, "user@example.com", m.UID); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	}
+	if err := store.Expunge(ctx, "user@example.com"); err != nil {
+		t.Fatalf("Expunge: %v", err)
+	}
+
+	// Deliver a new message.
+	msg := strings.NewReader("Subject: New\r\n\r\nBody")
+	if err := store.Deliver(ctx, envelope, msg); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	newMsgs, _ := store.List(ctx, "user@example.com")
+	if len(newMsgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(newMsgs))
+	}
+	if newMsgs[0].UID <= maxUID {
+		t.Errorf("new UID %d should be greater than previous max %d", newMsgs[0].UID, maxUID)
+	}
+}
+
+func TestMaildirStore_UIDValidity_PersistsAcrossListCalls(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	// Create folder.
+	if err := store.CreateFolder(ctx, "user@example.com", "work"); err != nil {
+		t.Fatalf("CreateFolder: %v", err)
+	}
+
+	v1, err := store.UIDValidity(ctx, "user@example.com", "work")
+	if err != nil {
+		t.Fatalf("UIDValidity 1: %v", err)
+	}
+
+	// Deliver a message and list to trigger uidlist activity.
+	if err := store.DeliverToFolder(ctx, "user@example.com", "work", strings.NewReader("Subject: X\r\n\r\nBody")); err != nil {
+		t.Fatalf("DeliverToFolder: %v", err)
+	}
+	if _, err := store.ListInFolder(ctx, "user@example.com", "work"); err != nil {
+		t.Fatalf("ListInFolder: %v", err)
+	}
+
+	v2, err := store.UIDValidity(ctx, "user@example.com", "work")
+	if err != nil {
+		t.Fatalf("UIDValidity 2: %v", err)
+	}
+	if v1 != v2 {
+		t.Errorf("UIDValidity changed: %d -> %d", v1, v2)
+	}
+}
+
+func TestMaildirStore_ExternalFileAddition_GetsUID(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	// Deliver one message to bootstrap the maildir and uidlist.
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"user@example.com"},
+	}
+	if err := store.Deliver(ctx, envelope, strings.NewReader("Subject: First\r\n\r\nBody")); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	msgs1, _ := store.List(ctx, "user@example.com")
+	if len(msgs1) != 1 {
+		t.Fatalf("expected 1, got %d", len(msgs1))
+	}
+
+	// Simulate external delivery: drop a file directly into cur/.
+	mailboxPath := filepath.Join(basePath, "user", "cur")
+	externalKey := "9999999999.M999999.external"
+	if err := os.WriteFile(filepath.Join(mailboxPath, externalKey+":2,"), []byte("Subject: External\r\n\r\nBody"), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// List should pick it up with a new UID via reconciliation.
+	msgs2, _ := store.List(ctx, "user@example.com")
+	if len(msgs2) != 2 {
+		t.Fatalf("expected 2 after external add, got %d", len(msgs2))
+	}
+
+	// The external file should have a UID > the first message's UID.
+	uids := make(map[uint32]bool)
+	for _, m := range msgs2 {
+		if uids[m.UID] {
+			t.Errorf("duplicate UID %d", m.UID)
+		}
+		uids[m.UID] = true
+	}
+}
+
+func TestMaildirStore_UIDNext(t *testing.T) {
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	// Create folder and check initial UIDNext.
+	if err := store.CreateFolder(ctx, "user@example.com", "test"); err != nil {
+		t.Fatalf("CreateFolder: %v", err)
+	}
+
+	next1, err := store.UIDNext(ctx, "user@example.com", "test")
+	if err != nil {
+		t.Fatalf("UIDNext: %v", err)
+	}
+	if next1 != 1 {
+		t.Errorf("initial UIDNext: got %d, want 1", next1)
+	}
+
+	// Append a message.
+	uid, err := store.AppendToFolder(ctx, "user@example.com", "test", strings.NewReader("Subject: X\r\n\r\nBody"), nil, time.Now())
+	if err != nil {
+		t.Fatalf("AppendToFolder: %v", err)
+	}
+	if uid != 1 {
+		t.Errorf("AppendToFolder UID: got %d, want 1", uid)
+	}
+
+	next2, err := store.UIDNext(ctx, "user@example.com", "test")
+	if err != nil {
+		t.Fatalf("UIDNext after append: %v", err)
+	}
+	if next2 != 2 {
+		t.Errorf("UIDNext after append: got %d, want 2", next2)
 	}
 }

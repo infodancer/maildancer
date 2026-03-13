@@ -51,12 +51,12 @@ func (s *PassthroughDecryptingStore) List(ctx context.Context, mailbox string) (
 // Retrieve delegates to the underlying store.
 // When decryption is implemented, this method will call DecryptMessage on
 // the returned content when sessionKey is non-nil.
-func (s *PassthroughDecryptingStore) Retrieve(ctx context.Context, mailbox string, uid string) (io.ReadCloser, error) {
+func (s *PassthroughDecryptingStore) Retrieve(ctx context.Context, mailbox string, uid uint32) (io.ReadCloser, error) {
 	return s.underlying.Retrieve(ctx, mailbox, uid)
 }
 
 // Delete delegates to the underlying store.
-func (s *PassthroughDecryptingStore) Delete(ctx context.Context, mailbox string, uid string) error {
+func (s *PassthroughDecryptingStore) Delete(ctx context.Context, mailbox string, uid uint32) error {
 	return s.underlying.Delete(ctx, mailbox, uid)
 }
 

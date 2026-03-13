@@ -18,15 +18,15 @@ type mockStore struct {
 
 func (m *mockStore) List(_ context.Context, _ string) ([]MessageInfo, error) {
 	m.listCalled = true
-	return []MessageInfo{{UID: "1", Size: 42}}, nil
+	return []MessageInfo{{UID: 1, Size: 42}}, nil
 }
 
-func (m *mockStore) Retrieve(_ context.Context, _ string, _ string) (io.ReadCloser, error) {
+func (m *mockStore) Retrieve(_ context.Context, _ string, _ uint32) (io.ReadCloser, error) {
 	m.retrieveCalled = true
 	return io.NopCloser(bytes.NewReader([]byte("hello"))), nil
 }
 
-func (m *mockStore) Delete(_ context.Context, _ string, _ string) error {
+func (m *mockStore) Delete(_ context.Context, _ string, _ uint32) error {
 	m.deleteCalled = true
 	return nil
 }
@@ -53,14 +53,14 @@ func TestPassthroughDecryptingStore_PassesThrough(t *testing.T) {
 		t.Error("List not delegated to underlying store")
 	}
 
-	if _, err := store.Retrieve(ctx, "inbox", "1"); err != nil {
+	if _, err := store.Retrieve(ctx, "inbox", 1); err != nil {
 		t.Fatalf("Retrieve: %v", err)
 	}
 	if !mock.retrieveCalled {
 		t.Error("Retrieve not delegated to underlying store")
 	}
 
-	if err := store.Delete(ctx, "inbox", "1"); err != nil {
+	if err := store.Delete(ctx, "inbox", 1); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 	if !mock.deleteCalled {
@@ -136,4 +136,3 @@ func TestPassthroughDecryptingStore_SatisfiesDecryptingStore(_ *testing.T) {
 
 // Ensure mockStore satisfies MessageStore at compile time.
 var _ MessageStore = (*mockStore)(nil)
-

@@ -42,6 +42,34 @@ type Config struct {
 
 	// Auth configures the authentication backend.
 	Auth AuthConfig `toml:"auth"`
+
+	// Queue configures outbound mail queue injection.
+	Queue QueueConfig `toml:"queue"`
+}
+
+// QueueConfig holds outbound queue injection settings.
+type QueueConfig struct {
+	// Dir is the root of the on-disk mail queue (e.g. "/var/spool/mail-queue").
+	Dir string `toml:"dir"`
+
+	// MessageTTL is how long the message should be retried (e.g. "168h").
+	// Default: 168h (7 days).
+	MessageTTL string `toml:"message_ttl"`
+
+	// Hostname is the VERP domain. Falls back to the system hostname if empty.
+	Hostname string `toml:"hostname"`
+}
+
+// GetMessageTTL parses MessageTTL as a duration, defaulting to 7 days.
+func (q *QueueConfig) GetMessageTTL() time.Duration {
+	if q.MessageTTL == "" {
+		return 7 * 24 * time.Hour
+	}
+	d, err := time.ParseDuration(q.MessageTTL)
+	if err != nil {
+		return 7 * 24 * time.Hour
+	}
+	return d
 }
 
 // TLSConfig holds certificate paths for mTLS.

@@ -8,8 +8,8 @@ require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.24.0
 	github.com/infodancer/maildancer/auth v0.1.14
-	github.com/infodancer/maildancer/internal/mail-session v0.1.1
-	github.com/infodancer/maildancer/msgstore v0.2.5-0.20260313075010-ceed9cfc0b22
+	github.com/infodancer/maildancer/internal/mail-session v0.1.2
+	github.com/infodancer/maildancer/msgstore v0.2.5
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0

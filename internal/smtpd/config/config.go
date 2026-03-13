@@ -171,8 +171,9 @@ type TLSConfig struct {
 
 // LimitsConfig defines resource limits for the server.
 type LimitsConfig struct {
-	MaxMessageSize int `toml:"max_message_size"`
-	MaxRecipients  int `toml:"max_recipients"`
+	MaxMessageSize  int `toml:"max_message_size"`
+	MaxRecipients   int `toml:"max_recipients"`
+	MaxSendsPerHour int `toml:"max_sends_per_hour"` // Per-sender rate limit for authenticated submission (0 = disabled)
 }
 
 // TimeoutsConfig defines timeout durations.

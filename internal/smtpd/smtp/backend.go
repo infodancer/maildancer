@@ -11,7 +11,6 @@ import (
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
-	"github.com/infodancer/maildancer/internal/smtpd/queue"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
 
@@ -21,7 +20,6 @@ type Backend struct {
 	hostname            string
 	delivery            msgstore.DeliveryAgent       // legacy: direct or GrpcDeliveryAgent
 	smDelivery          *SessionManagerDeliveryAgent // session-manager: takes priority over delivery
-	queueCfg            queue.Config
 	authAgent           auth.AuthenticationAgent
 	authRouter          *domain.AuthRouter
 	oauthAgent          oauth.Agent
@@ -44,7 +42,6 @@ type BackendConfig struct {
 	Hostname       string
 	Delivery       msgstore.DeliveryAgent       // legacy delivery agent
 	SMDelivery     *SessionManagerDeliveryAgent // session-manager delivery agent (preferred)
-	QueueConfig    queue.Config
 	AuthAgent      auth.AuthenticationAgent
 	AuthRouter     *domain.AuthRouter
 	OAuthAgent     oauth.Agent
@@ -75,7 +72,6 @@ func NewBackend(cfg BackendConfig) *Backend {
 		hostname:       cfg.Hostname,
 		delivery:       cfg.Delivery,
 		smDelivery:     cfg.SMDelivery,
-		queueCfg:       cfg.QueueConfig,
 		authAgent:      cfg.AuthAgent,
 		authRouter:     cfg.AuthRouter,
 		oauthAgent:     cfg.OAuthAgent,

@@ -282,14 +282,6 @@ func mergeConfig(dst, src Config) Config {
 		}
 	}
 
-	// Merge queue config
-	if src.Queue.Dir != "" {
-		dst.Queue.Dir = src.Queue.Dir
-	}
-	if src.Queue.MessageTTL != "" {
-		dst.Queue.MessageTTL = src.Queue.MessageTTL
-	}
-
 	// Merge spamcheck config (if defined in [smtpd.spamcheck])
 	dst = mergeSpamCheckConfig(dst, src.SpamCheck)
 

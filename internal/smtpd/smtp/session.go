@@ -17,7 +17,6 @@ import (
 	autherrors "github.com/infodancer/maildancer/auth/errors"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
-	"github.com/infodancer/maildancer/internal/smtpd/queue"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 )
 
@@ -428,9 +427,9 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
-	// For remote-only delivery, ensure queue is configured before buffering.
-	if len(s.recipients) == 0 && len(s.remoteRecipients) > 0 && s.backend.queueCfg.Dir == "" {
-		s.logger.Debug("queue not configured for remote delivery")
+	// For remote-only delivery, ensure session-manager is configured.
+	if len(s.recipients) == 0 && len(s.remoteRecipients) > 0 && s.backend.smDelivery == nil {
+		s.logger.Debug("session-manager not configured for remote delivery")
 		return &smtp.SMTPError{
 			Code:         451,
 			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
@@ -666,9 +665,19 @@ func (s *Session) Data(r io.Reader) error {
 			slog.Int("recipients", len(s.recipients)))
 	}
 
-	// Remote delivery: write to queue for mail-remote / queue-manager.
+	// Remote delivery: enqueue via session-manager's OutboundService.
 	if len(s.remoteRecipients) > 0 {
-		if err := queue.Write(s.backend.queueCfg, s.from, s.remoteRecipients, tmp.reader()); err != nil {
+		if s.backend.smDelivery == nil {
+			s.logger.Error("remote delivery requested but no session-manager configured")
+			return &smtp.SMTPError{
+				Code:         451,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+				Message:      "Temporary queue failure, try again later",
+			}
+		}
+
+		ctx := context.Background()
+		if _, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, tmp.reader()); err != nil {
 			s.logger.Debug("queue write failed", slog.String("error", err.Error()))
 
 			if s.backend.collector != nil {

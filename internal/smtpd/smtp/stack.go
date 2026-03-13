@@ -138,6 +138,15 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		WithRateLimit(domain.DefaultRateLimitConfig())
 	s.closers = append(s.closers, authRouter)
 
+	// If no global auth agent is configured but domain-based auth is
+	// available via the domain provider, use the auth router as the auth
+	// agent. This enables AUTH PLAIN advertisement on submission ports
+	// without requiring a redundant [smtpd.auth] config section.
+	if authAgent == nil && domainProvider != nil {
+		authAgent = authRouter
+		logger.Info("authentication enabled via domain provider")
+	}
+
 	// Build temp dir path: on the same filesystem as the mail store so
 	// temp files can be renamed atomically into the maildir.
 	var tempDir string

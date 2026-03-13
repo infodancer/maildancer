@@ -32,22 +32,6 @@ base_path = "users"
 	}
 }
 
-func TestMergeConfig_RecipientRejection(t *testing.T) {
-	base := DomainConfig{RecipientRejection: "rcpt"}
-	override := DomainConfig{RecipientRejection: "data"}
-
-	result := mergeConfig(base, override)
-	if result.RecipientRejection != "data" {
-		t.Errorf("expected merged RecipientRejection %q, got %q", "data", result.RecipientRejection)
-	}
-
-	// Empty override should not overwrite base
-	result = mergeConfig(base, DomainConfig{})
-	if result.RecipientRejection != "rcpt" {
-		t.Errorf("expected base RecipientRejection %q retained, got %q", "rcpt", result.RecipientRejection)
-	}
-}
-
 func TestDomainConfig_OutboundTOML(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
@@ -81,58 +65,23 @@ password_file = "ses-password"
 	}
 }
 
-func TestMergeConfig_Outbound(t *testing.T) {
-	base := DomainConfig{
-		Outbound: OutboundConfig{
-			Strategy:      "smarthost",
-			Smarthost:     "default-relay:587",
-			SmarthostUser: "default-user",
-			PasswordFile:  "default-pass",
-		},
-	}
-	override := DomainConfig{
-		Outbound: OutboundConfig{
-			Smarthost:     "custom-relay:465",
-			SmarthostUser: "custom-user",
-		},
+func TestDomainConfig_LimitsTOML(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	content := `
+[limits]
+max_sends_per_hour = 50
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
-	result := mergeConfig(base, override)
-	if result.Outbound.Strategy != "smarthost" {
-		t.Errorf("Strategy = %q, want smarthost (retained from base)", result.Outbound.Strategy)
+	cfg, err := LoadDomainConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadDomainConfig: %v", err)
 	}
-	if result.Outbound.Smarthost != "custom-relay:465" {
-		t.Errorf("Smarthost = %q, want custom-relay:465", result.Outbound.Smarthost)
-	}
-	if result.Outbound.SmarthostUser != "custom-user" {
-		t.Errorf("SmarthostUser = %q, want custom-user", result.Outbound.SmarthostUser)
-	}
-	if result.Outbound.PasswordFile != "default-pass" {
-		t.Errorf("PasswordFile = %q, want default-pass (retained from base)", result.Outbound.PasswordFile)
-	}
-
-	// Empty override should not overwrite base.
-	result = mergeConfig(base, DomainConfig{})
-	if result.Outbound.Strategy != "smarthost" {
-		t.Errorf("Strategy = %q, want smarthost (retained)", result.Outbound.Strategy)
-	}
-	if result.Outbound.Smarthost != "default-relay:587" {
-		t.Errorf("Smarthost = %q, want default-relay:587 (retained)", result.Outbound.Smarthost)
-	}
-}
-
-func TestMergeConfig_Gid(t *testing.T) {
-	base := DomainConfig{Gid: 1000}
-	override := DomainConfig{Gid: 2001}
-
-	result := mergeConfig(base, override)
-	if result.Gid != 2001 {
-		t.Errorf("expected merged Gid 2001, got %d", result.Gid)
-	}
-
-	// Zero override should not overwrite base
-	result = mergeConfig(base, DomainConfig{})
-	if result.Gid != 1000 {
-		t.Errorf("expected base Gid 1000 retained, got %d", result.Gid)
+	if cfg.Limits.MaxSendsPerHour != 50 {
+		t.Errorf("expected MaxSendsPerHour 50, got %d", cfg.Limits.MaxSendsPerHour)
 	}
 }

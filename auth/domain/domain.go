@@ -46,6 +46,10 @@ type Domain struct {
 	// Empty means use the global default.
 	RecipientRejection string
 
+	// Limits holds per-domain rate limiting and resource limits.
+	// Values of 0 mean "use the global default".
+	Limits LimitsConfig
+
 	// DKIMSelector is the DKIM selector name for DNS lookup.
 	DKIMSelector string
 

@@ -17,7 +17,7 @@ import (
 // tried to close the same channel.
 type oneConnListener struct {
 	mu       sync.Mutex
-	conn     net.Conn    // nil after first Accept
+	conn     net.Conn      // nil after first Accept
 	connDone chan struct{} // session-end signal (owned by notifyConn)
 	stopped  chan struct{} // listener-close signal (owned by this listener)
 	stopOnce sync.Once

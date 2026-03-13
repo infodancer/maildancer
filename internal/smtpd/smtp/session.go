@@ -3,6 +3,7 @@ package smtp
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"io"
 	"log/slog"
 	"net"
@@ -100,8 +101,11 @@ type Session struct {
 // AuthMechanisms returns the available authentication mechanisms.
 // Implements smtp.AuthSession interface.
 func (s *Session) AuthMechanisms() []string {
-	// Only advertise AUTH if TLS is active or connection is from localhost
-	_, isTLS := s.conn.TLSConnectionState()
+	// Only advertise AUTH if TLS is active or connection is from localhost.
+	// Check both go-smtp's TLS detection and the underlying connection,
+	// because implicit TLS connections (port 465) wrapped in notifyConn
+	// are not detected by go-smtp's direct *tls.Conn type assertion.
+	isTLS := sessionConnIsTLS(s.conn)
 	if !isTLS && !sessionIsLocalhost(s.clientIP) {
 		return nil
 	}
@@ -753,4 +757,24 @@ func sessionExtractAuthDomain(username string) string {
 func sessionIsLocalhost(ip string) bool {
 	return ip == "127.0.0.1" || ip == "::1" ||
 		(len(ip) > 4 && ip[:4] == "127.") || ip == "localhost"
+}
+
+// sessionConnIsTLS checks whether the SMTP connection is using TLS.
+// It first tries go-smtp's built-in TLS detection, then falls back to
+// checking if the underlying net.Conn (possibly wrapped in notifyConn)
+// is a *tls.Conn. This fallback is needed because oneConnListener wraps
+// connections in notifyConn for session-end detection, which hides the
+// *tls.Conn from go-smtp's direct type assertion.
+func sessionConnIsTLS(c *smtp.Conn) bool {
+	if _, ok := c.TLSConnectionState(); ok {
+		return true
+	}
+	// Check if the underlying connection is TLS (wrapped by notifyConn).
+	conn := c.Conn()
+	if nc, ok := conn.(*notifyConn); ok {
+		if _, tlsOK := nc.Conn.(*tls.Conn); tlsOK {
+			return true
+		}
+	}
+	return false
 }

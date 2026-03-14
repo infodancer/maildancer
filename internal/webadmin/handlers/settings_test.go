@@ -217,6 +217,73 @@ func TestHandleSetSpamcheckSettings_TogglesEnabled(t *testing.T) {
 	}
 }
 
+func TestHandleSetSpamcheckSettings_EnabledTrue(t *testing.T) {
+	h, cfgFile := newTestSettingsHandler(t)
+	writeConfig(t, cfgFile, fullSharedConfig)
+
+	// First disable it.
+	body := `{"enabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/spamcheck", strings.NewReader(body))
+	h.HandleSetSpamcheckSettings(httptest.NewRecorder(), req)
+
+	// Re-enable with a JSON boolean.
+	body = `{"enabled":true}`
+	req = httptest.NewRequest(http.MethodPost, "/api/settings/spamcheck", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.HandleSetSpamcheckSettings(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(cfgFile)
+	if !strings.Contains(string(data), "enabled = true") {
+		t.Errorf("expected enabled = true, got:\n%s", string(data))
+	}
+}
+
+func TestHandleSetSpamcheckSettings_StringOn(t *testing.T) {
+	h, cfgFile := newTestSettingsHandler(t)
+	writeConfig(t, cfgFile, fullSharedConfig)
+
+	// Disable first.
+	body := `{"enabled":false}`
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/spamcheck", strings.NewReader(body))
+	h.HandleSetSpamcheckSettings(httptest.NewRecorder(), req)
+
+	// Re-enable with string "on" (as sent by HTMX json-enc for checkboxes).
+	body = `{"enabled":"on"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/settings/spamcheck", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.HandleSetSpamcheckSettings(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(cfgFile)
+	if !strings.Contains(string(data), "enabled = true") {
+		t.Errorf("expected enabled = true after string 'on', got:\n%s", string(data))
+	}
+}
+
+func TestHandleSetSpamcheckSettings_EmptyBody(t *testing.T) {
+	h, cfgFile := newTestSettingsHandler(t)
+	writeConfig(t, cfgFile, fullSharedConfig)
+
+	// Empty JSON object (unchecked checkbox omitted by json-enc) should set enabled = false.
+	body := `{}`
+	req := httptest.NewRequest(http.MethodPost, "/api/settings/spamcheck", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.HandleSetSpamcheckSettings(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	data, _ := os.ReadFile(cfgFile)
+	if !strings.Contains(string(data), "enabled = false") {
+		t.Errorf("expected enabled = false for empty body, got:\n%s", string(data))
+	}
+}
+
 func TestHandleSettings_NoFileConfigured_Returns400(t *testing.T) {
 	store := session.NewStore(30*time.Minute, false)
 	h := NewSettingsHandler("", store, slog.Default())

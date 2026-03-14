@@ -204,10 +204,11 @@
   {{if .Data.IsSuperAdmin}}
   <form hx-post="/api/settings/spamcheck" hx-target="#spamcheck-result" hx-swap="innerHTML"
         hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-vals='js:{"enabled": document.getElementById("spamcheck-enabled").checked}'
         hx-on::after-request="if(event.detail.successful) showFlash('Settings saved', 'success')"
         style="margin-bottom:1rem">
     <label>
-      <input type="checkbox" name="enabled" role="switch"{{if .Data.SpamCheck.Enabled}} checked{{end}}>
+      <input type="checkbox" id="spamcheck-enabled" name="enabled" role="switch"{{if .Data.SpamCheck.Enabled}} checked{{end}}>
       Enable spam filtering
     </label>
     <div class="grid" style="margin-top:1rem">

@@ -260,6 +260,8 @@ func (h *SettingsHandler) HandleSetPop3dSettings(w http.ResponseWriter, r *http.
 }
 
 // HandleSetSpamcheckSettings updates [spamcheck] enabled flag.
+// Accepts {"enabled": true} (JSON boolean) or {"enabled": "on"} / {"enabled": "true"}
+// (string, as sent by HTML checkbox via json-enc without hx-vals type override).
 func (h *SettingsHandler) HandleSetSpamcheckSettings(w http.ResponseWriter, r *http.Request) {
 	if h.configFile == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "config_file not configured"})
@@ -267,12 +269,14 @@ func (h *SettingsHandler) HandleSetSpamcheckSettings(w http.ResponseWriter, r *h
 	}
 
 	var req struct {
-		Enabled bool `json:"enabled"`
+		Enabled any `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
+
+	enabled := parseBoolish(req.Enabled)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -284,7 +288,7 @@ func (h *SettingsHandler) HandleSetSpamcheckSettings(w http.ResponseWriter, r *h
 	}
 
 	enabledVal := "false"
-	if req.Enabled {
+	if enabled {
 		enabledVal = "true"
 	}
 	content = config.PatchSectionValue(content, "spamcheck", "enabled", enabledVal)
@@ -295,7 +299,7 @@ func (h *SettingsHandler) HandleSetSpamcheckSettings(w http.ResponseWriter, r *h
 		return
 	}
 
-	h.logger.Info("spamcheck settings updated", "enabled", req.Enabled)
+	h.logger.Info("spamcheck settings updated", "enabled", enabled)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }
 
@@ -358,6 +362,19 @@ func (h *SettingsHandler) writeContent(content []byte) error {
 		return fmt.Errorf("rename config file: %w", err)
 	}
 	return nil
+}
+
+// parseBoolish extracts a boolean from a JSON-decoded value that may be a bool
+// or the strings "on", "true", or "1" (as sent by HTML checkboxes via json-enc).
+func parseBoolish(v any) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	case string:
+		return b == "on" || b == "true" || b == "1"
+	default:
+		return false
+	}
 }
 
 // isValidLogLevel returns true for accepted slog level names.

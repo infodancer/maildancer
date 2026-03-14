@@ -23,11 +23,11 @@ type mockMessageStore struct {
 func (m *mockMessageStore) List(_ context.Context, _ string) ([]msgstore.MessageInfo, error) {
 	return nil, nil
 }
-func (m *mockMessageStore) Retrieve(_ context.Context, _, _ string) (io.ReadCloser, error) {
+func (m *mockMessageStore) Retrieve(_ context.Context, _ string, _ uint32) (io.ReadCloser, error) {
 	return nil, nil
 }
-func (m *mockMessageStore) Delete(_ context.Context, _, _ string) error { return nil }
-func (m *mockMessageStore) Expunge(_ context.Context, _ string) error   { return nil }
+func (m *mockMessageStore) Delete(_ context.Context, _ string, _ uint32) error { return nil }
+func (m *mockMessageStore) Expunge(_ context.Context, _ string) error          { return nil }
 func (m *mockMessageStore) Stat(_ context.Context, _ string) (int, int64, error) {
 	return m.count, m.totalBytes, nil
 }

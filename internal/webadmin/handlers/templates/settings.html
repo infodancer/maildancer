@@ -121,6 +121,80 @@
   {{end}}
 </article>
 
+<h2>Outbound Transport</h2>
+<article>
+  <header><strong>System-wide outbound transport default</strong></header>
+
+  {{if .Data.IsSuperAdmin}}
+  <form id="outbound-default-form">
+    <label>Strategy
+      <select id="default-outbound-strategy" name="strategy"
+              onchange="document.getElementById('default-smarthost-fields').style.display = this.value === 'smarthost' ? '' : 'none'">
+        <option value="direct"{{if ne .Data.Outbound.Strategy "smarthost"}} selected{{end}}>Direct MX</option>
+        <option value="smarthost"{{if eq .Data.Outbound.Strategy "smarthost"}} selected{{end}}>Smarthost relay</option>
+      </select>
+    </label>
+    <fieldset id="default-smarthost-fields"{{if ne .Data.Outbound.Strategy "smarthost"}} style="display:none"{{end}}>
+      <div class="grid">
+        <label>Smarthost (host:port)
+          <input type="text" name="smarthost" value="{{.Data.Outbound.Smarthost}}"
+                 placeholder="relay.example.com:587">
+        </label>
+        <label>Username
+          <input type="text" name="smarthost_user" value="{{.Data.Outbound.SmarthostUser}}"
+                 placeholder="smtp-user">
+        </label>
+      </div>
+      <div class="grid">
+        <label>Password
+          <input type="password" name="password"
+                 placeholder="{{if .Data.Outbound.HasPassword}}(unchanged){{else}}enter password{{end}}">
+        </label>
+        <label>Password file name
+          <input type="text" name="password_file" value="{{.Data.Outbound.PasswordFile}}"
+                 placeholder="outbound-password">
+        </label>
+      </div>
+      <small>Leave password blank to keep the existing value.</small>
+    </fieldset>
+    <div class="grid" style="margin-top:1rem">
+      <button type="button" onclick="saveDefaultOutbound('{{.CSRFToken}}')">Save</button>
+    </div>
+  </form>
+  <div id="outbound-result"></div>
+  <script>
+  function saveDefaultOutbound(csrfToken) {
+    var strategy = document.getElementById('default-outbound-strategy').value;
+    var body = { strategy: strategy };
+    if (strategy === 'smarthost') {
+      var form = document.getElementById('outbound-default-form');
+      body.smarthost = form.querySelector('[name=smarthost]').value;
+      body.smarthost_user = form.querySelector('[name=smarthost_user]').value;
+      body.password = form.querySelector('[name=password]').value;
+      body.password_file = form.querySelector('[name=password_file]').value;
+    }
+    fetch('/api/outbound/default', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+      body: JSON.stringify(body)
+    }).then(function(r) {
+      if (r.ok) { showFlash('Settings saved', 'success'); }
+      else { r.json().then(function(e) { alert('Error: ' + e.error); }); }
+    });
+  }
+  </script>
+  {{else}}
+  <p>
+    Strategy: <code>{{if .Data.Outbound.Strategy}}{{.Data.Outbound.Strategy}}{{else}}direct{{end}}</code>
+    {{if eq .Data.Outbound.Strategy "smarthost"}}
+    <br>Smarthost: <code>{{.Data.Outbound.Smarthost}}</code>
+    <br>Username: <code>{{.Data.Outbound.SmarthostUser}}</code>
+    <br>Password: {{if .Data.Outbound.HasPassword}}<kbd class="badge badge-yes">set</kbd>{{else}}<kbd class="badge badge-no">not set</kbd>{{end}}
+    {{end}}
+  </p>
+  {{end}}
+</article>
+
 <h2>Spam Filter</h2>
 <article>
   <header>

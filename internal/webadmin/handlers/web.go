@@ -44,6 +44,25 @@ type uiSpamCheckSettings struct {
 	Enabled bool
 }
 
+// uiOutboundConfig holds outbound transport display data.
+type uiOutboundConfig struct {
+	Strategy      string
+	Smarthost     string
+	SmarthostUser string
+	HasPassword   bool
+	PasswordFile  string
+	HasConfig     bool
+}
+
+// uiOutboundSettings holds outbound transport display data for the settings page.
+type uiOutboundSettings struct {
+	Strategy      string
+	Smarthost     string
+	SmarthostUser string
+	HasPassword   bool
+	PasswordFile  string
+}
+
 // uiDomainRow holds domain data for dashboard rendering.
 type uiDomainRow struct {
 	Name              string
@@ -72,6 +91,7 @@ type WebHandler struct {
 	roles           *rbac.RoleStore
 	configFile      string           // path to the shared config file for rspamd settings display
 	settingsHandler *SettingsHandler // for loading general settings on the settings page
+	outboundHandler *OutboundHandler // for loading outbound settings on the settings page
 }
 
 // NewWebHandler creates a new web UI handler.
@@ -96,6 +116,12 @@ func (h *WebHandler) SetConfigFile(path string) {
 // all general settings for display. Called after construction.
 func (h *WebHandler) SetSettingsHandler(sh *SettingsHandler) {
 	h.settingsHandler = sh
+}
+
+// SetOutboundHandler wires the OutboundHandler so the settings and domain
+// detail pages can display outbound transport config. Called after construction.
+func (h *WebHandler) SetOutboundHandler(oh *OutboundHandler) {
+	h.outboundHandler = oh
 }
 
 // pageData builds common PageData from the request session.
@@ -262,12 +288,33 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 
 	users := h.listUsersForUI(domainPath)
 
+	// Read outbound transport config.
+	outbound := uiOutboundConfig{}
+	if configData, err := os.ReadFile(configPath); err == nil {
+		content := string(configData)
+		outbound.Strategy = extractTOMLValue(content, "strategy", "outbound")
+		outbound.Smarthost = extractTOMLValue(content, "smarthost", "outbound")
+		outbound.SmarthostUser = extractTOMLValue(content, "smarthost_user", "outbound")
+		outbound.PasswordFile = extractTOMLValue(content, "password_file", "outbound")
+		outbound.HasConfig = outbound.Strategy != ""
+		if outbound.PasswordFile != "" {
+			pwPath := outbound.PasswordFile
+			if !filepath.IsAbs(pwPath) {
+				pwPath = filepath.Join(domainPath, pwPath)
+			}
+			if _, err := os.Stat(pwPath); err == nil {
+				outbound.HasPassword = true
+			}
+		}
+	}
+
 	pd := h.pageData(r, nil)
 	pd.Data = struct {
 		Domain               uiDomainRow
 		Users                []uiUserRow
 		DomainKeyFingerprint string
 		IsSuperAdmin         bool
+		Outbound             uiOutboundConfig
 	}{
 		Domain: uiDomainRow{
 			Name:              name,
@@ -283,6 +330,7 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 		Users:                users,
 		DomainKeyFingerprint: domainKeyFingerprint,
 		IsSuperAdmin:         h.roles == nil || h.roles.IsSuperAdmin(h.currentUsername(r)),
+		Outbound:             outbound,
 	}
 
 	if err := h.render.Render(w, "domain", pd); err != nil {
@@ -493,6 +541,28 @@ func (h *WebHandler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Load system-wide outbound transport config.
+	outbound := uiOutboundSettings{}
+	if h.outboundHandler != nil {
+		configPath := filepath.Join(h.domainsPath, "config.toml")
+		if data, err := os.ReadFile(configPath); err == nil {
+			content := string(data)
+			outbound.Strategy = extractTOMLValue(content, "strategy", "outbound")
+			outbound.Smarthost = extractTOMLValue(content, "smarthost", "outbound")
+			outbound.SmarthostUser = extractTOMLValue(content, "smarthost_user", "outbound")
+			outbound.PasswordFile = extractTOMLValue(content, "password_file", "outbound")
+			if outbound.PasswordFile != "" {
+				pwPath := outbound.PasswordFile
+				if !filepath.IsAbs(pwPath) {
+					pwPath = filepath.Join(h.domainsPath, pwPath)
+				}
+				if _, err := os.Stat(pwPath); err == nil {
+					outbound.HasPassword = true
+				}
+			}
+		}
+	}
+
 	isSuperAdmin := h.roles == nil || h.roles.IsSuperAdmin(h.currentUsername(r))
 	pd := h.pageData(r, struct {
 		IsSuperAdmin bool
@@ -501,6 +571,7 @@ func (h *WebHandler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 		Smtpd        uiSmtpdSettings
 		Pop3d        uiPop3dSettings
 		SpamCheck    uiSpamCheckSettings
+		Outbound     uiOutboundSettings
 	}{
 		IsSuperAdmin: isSuperAdmin,
 		Rspamd:       rspamd,
@@ -508,6 +579,7 @@ func (h *WebHandler) HandleSettings(w http.ResponseWriter, r *http.Request) {
 		Smtpd:        smtpd,
 		Pop3d:        pop3d,
 		SpamCheck:    spamCheck,
+		Outbound:     outbound,
 	})
 	if err := h.render.Render(w, "settings", pd); err != nil {
 		h.logger.Error("failed to render settings page", "error", err)

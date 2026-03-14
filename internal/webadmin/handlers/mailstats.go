@@ -39,8 +39,8 @@ type mailStatsResponse struct {
 	} `json:"active_connections"`
 
 	Incoming24h struct {
-		Total     float64       `json:"total"`
-		ByDomain  []domainCount `json:"by_domain"`
+		Total    float64       `json:"total"`
+		ByDomain []domainCount `json:"by_domain"`
 	} `json:"incoming_24h"`
 
 	Verdict24h struct {

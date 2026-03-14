@@ -129,8 +129,10 @@ func (s *Server) registerRoutes() {
 	dashboardHandler := handlers.NewDashboardHandler(s.cfg.DomainsPath, s.sessions, s.logger)
 	rspamdHandler := handlers.NewRspamdHandler(s.cfg.FilePath, s.sessions, s.logger)
 	settingsHandler := handlers.NewSettingsHandler(s.cfg.FilePath, s.sessions, s.logger)
+	outboundHandler := handlers.NewOutboundHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.auditLog)
 	webHandler.SetConfigFile(s.cfg.FilePath)
 	webHandler.SetSettingsHandler(settingsHandler)
+	webHandler.SetOutboundHandler(outboundHandler)
 
 	requireAuth := middleware.RequireAuth(s.sessions, s.logger)
 	requireCSRF := middleware.RequireCSRF(s.sessions, s.logger)
@@ -322,6 +324,24 @@ func (s *Server) registerRoutes() {
 	))
 	s.mux.Handle("POST /api/settings/spamcheck", middleware.Chain(
 		http.HandlerFunc(settingsHandler.HandleSetSpamcheckSettings),
+		requireAuth, requireCSRF, requireSuperAdmin,
+	))
+
+	// Outbound transport routing API
+	s.mux.Handle("GET /api/domains/{name}/outbound", middleware.Chain(
+		http.HandlerFunc(outboundHandler.HandleGetDomainOutbound),
+		requireAuth, requireDomainAccessByName,
+	))
+	s.mux.Handle("PUT /api/domains/{name}/outbound", middleware.Chain(
+		http.HandlerFunc(outboundHandler.HandleSetDomainOutbound),
+		requireAuth, requireCSRF, requireDomainAccessByName,
+	))
+	s.mux.Handle("GET /api/outbound/default", middleware.Chain(
+		http.HandlerFunc(outboundHandler.HandleGetDefaultOutbound),
+		requireAuth, requireSuperAdmin,
+	))
+	s.mux.Handle("PUT /api/outbound/default", middleware.Chain(
+		http.HandlerFunc(outboundHandler.HandleSetDefaultOutbound),
 		requireAuth, requireCSRF, requireSuperAdmin,
 	))
 

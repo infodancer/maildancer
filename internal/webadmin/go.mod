@@ -1,10 +1,10 @@
 module github.com/infodancer/maildancer/internal/webadmin
 
-go 1.25.7
+go 1.25.8
 
 require (
 	github.com/infodancer/maildancer/auth v0.1.14
-	github.com/infodancer/maildancer/msgstore v0.2.4
+	github.com/infodancer/maildancer/msgstore v0.2.5
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2

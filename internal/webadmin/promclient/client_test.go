@@ -15,10 +15,7 @@ func prometheusHandler(t *testing.T, results []map[string]any) http.HandlerFunc 
 			http.NotFound(w, r)
 			return
 		}
-		samples := make([]map[string]any, 0, len(results))
-		for _, m := range results {
-			samples = append(samples, m)
-		}
+		samples := append([]map[string]any{}, results...)
 		resp := map[string]any{
 			"status": "success",
 			"data": map[string]any{

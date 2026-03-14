@@ -75,12 +75,12 @@ type promResponse struct {
 }
 
 type promData struct {
-	ResultType string        `json:"resultType"`
-	Result     []promSample  `json:"result"`
+	ResultType string       `json:"resultType"`
+	Result     []promSample `json:"result"`
 }
 
 type promSample struct {
-	Metric map[string]string `json:"metric"`
+	Metric map[string]string  `json:"metric"`
 	Value  [2]json.RawMessage `json:"value"` // [timestamp, value_string]
 }
 

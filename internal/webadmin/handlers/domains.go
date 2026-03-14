@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
+	"github.com/infodancer/maildancer/internal/webadmin/config"
 	"github.com/infodancer/maildancer/internal/webadmin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/rbac"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
@@ -275,9 +276,23 @@ func (h *DomainHandler) HandleUpdateDomainConfig(w http.ResponseWriter, r *http.
 		return
 	}
 
-	content := fmt.Sprintf("[auth]\ntype = %q\ncredential_backend = %q\nkey_backend = %q\n\n[msgstore]\ntype = %q\nbase_path = %q\n",
-		req.AuthType, req.CredentialBackend, req.KeyBackend, req.StoreType, req.BasePath)
-	if err := os.WriteFile(configPath, []byte(content), 0o640); err != nil {
+	// Read existing content so unmanaged sections (outbound, dkim, etc.) are preserved.
+	existing, err := os.ReadFile(configPath)
+	if err != nil && !os.IsNotExist(err) {
+		h.logger.Error("failed to read domain config", "domain", name, "error", err)
+		h.logAudit(r, "update_domain_config", name, "failure", err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read config"})
+		return
+	}
+
+	content := existing
+	content = config.PatchSectionValue(content, "auth", "type", config.QuoteString(req.AuthType))
+	content = config.PatchSectionValue(content, "auth", "credential_backend", config.QuoteString(req.CredentialBackend))
+	content = config.PatchSectionValue(content, "auth", "key_backend", config.QuoteString(req.KeyBackend))
+	content = config.PatchSectionValue(content, "msgstore", "type", config.QuoteString(req.StoreType))
+	content = config.PatchSectionValue(content, "msgstore", "base_path", config.QuoteString(req.BasePath))
+
+	if err := writeFileAtomic(configPath, content, 0o640); err != nil {
 		h.logger.Error("failed to write domain config", "domain", name, "error", err)
 		h.logAudit(r, "update_domain_config", name, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write config"})
@@ -615,6 +630,35 @@ func extractTOMLValue(content, key, section string) string {
 		}
 	}
 	return ""
+}
+
+// writeFileAtomic writes data to a file atomically via temp+rename.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".config-*.toml.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("write temp file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("close temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("rename temp file: %w", err)
+	}
+	return nil
 }
 
 // dirExists checks if a path exists and is a directory.

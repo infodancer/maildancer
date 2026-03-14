@@ -73,6 +73,64 @@ function saveDomainConfig(domain, csrfToken) {
 }
 </script>
 
+<h2>Outbound Transport</h2>
+<form id="outbound-config-form">
+  <label>Strategy
+    <select id="outbound-strategy" name="outbound_strategy"
+            onchange="document.getElementById('smarthost-fields').style.display = this.value === 'smarthost' ? '' : 'none'">
+      <option value=""{{if eq .Data.Outbound.Strategy ""}} selected{{end}}>Inherit default</option>
+      <option value="direct"{{if eq .Data.Outbound.Strategy "direct"}} selected{{end}}>Direct MX</option>
+      <option value="smarthost"{{if eq .Data.Outbound.Strategy "smarthost"}} selected{{end}}>Smarthost relay</option>
+    </select>
+  </label>
+  <fieldset id="smarthost-fields"{{if ne .Data.Outbound.Strategy "smarthost"}} style="display:none"{{end}}>
+    <div class="grid">
+      <label>Smarthost (host:port)
+        <input type="text" name="outbound_smarthost" value="{{.Data.Outbound.Smarthost}}"
+               placeholder="relay.example.com:587">
+      </label>
+      <label>Username
+        <input type="text" name="outbound_smarthost_user" value="{{.Data.Outbound.SmarthostUser}}"
+               placeholder="smtp-user">
+      </label>
+    </div>
+    <div class="grid">
+      <label>Password
+        <input type="password" name="outbound_password"
+               placeholder="{{if .Data.Outbound.HasPassword}}(unchanged){{else}}enter password{{end}}">
+      </label>
+      <label>Password file name
+        <input type="text" name="outbound_password_file" value="{{.Data.Outbound.PasswordFile}}"
+               placeholder="outbound-password">
+      </label>
+    </div>
+    <small>Leave password blank to keep the existing value.</small>
+  </fieldset>
+  {{if .Data.IsSuperAdmin}}
+  <button type="button" onclick="saveOutboundConfig('{{.Data.Domain.Name}}', '{{.CSRFToken}}')" style="margin-top:1rem">Save Outbound</button>
+  {{end}}
+</form>
+<script>
+function saveOutboundConfig(domain, csrfToken) {
+  var strategy = document.getElementById('outbound-strategy').value;
+  var body = { strategy: strategy };
+  if (strategy === 'smarthost') {
+    body.smarthost = document.querySelector('[name=outbound_smarthost]').value;
+    body.smarthost_user = document.querySelector('[name=outbound_smarthost_user]').value;
+    body.password = document.querySelector('[name=outbound_password]').value;
+    body.password_file = document.querySelector('[name=outbound_password_file]').value;
+  }
+  fetch('/api/domains/' + domain + '/outbound', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify(body)
+  }).then(function(r) {
+    if (r.ok) { location.reload(); }
+    else { r.json().then(function(e) { alert('Error: ' + e.error); }); }
+  });
+}
+</script>
+
 <h2>Domain Keys</h2>
 <div id="domain-keys-status">
   {{if .Data.Domain.HasKeys}}

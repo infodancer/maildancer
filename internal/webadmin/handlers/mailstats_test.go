@@ -35,9 +35,9 @@ func promSample(metric map[string]string, value string) map[string]any {
 
 func TestHandleGetMailStats_Available(t *testing.T) {
 	srv := fakePrometheus(t, map[string][]map[string]any{
-		"smtpd_connections_active": {promSample(nil, "3")},
-		"pop3d_connections_active": {promSample(nil, "1")},
-		"imapd_connections_active": {promSample(nil, "5")},
+		"smtpd_connections_active":                          {promSample(nil, "3")},
+		"pop3d_connections_active":                          {promSample(nil, "1")},
+		"imapd_connections_active":                          {promSample(nil, "5")},
 		`sum(increase(smtpd_messages_received_total[24h]))`: {promSample(nil, "100")},
 		`sum by (recipient_domain)(increase(smtpd_messages_received_total[24h]))`: {
 			promSample(map[string]string{"recipient_domain": "example.com"}, "80"),

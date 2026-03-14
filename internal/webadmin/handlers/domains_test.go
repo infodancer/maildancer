@@ -296,3 +296,69 @@ base_path = "users"
 		t.Errorf("expected empty string, got %q", got)
 	}
 }
+
+func TestUpdateDomainConfig_PreservesOutbound(t *testing.T) {
+	h, dir := newTestDomainHandler(t)
+	domainDir := filepath.Join(dir, "example.com")
+	if err := os.MkdirAll(filepath.Join(domainDir, "keys"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte("# Users\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write config with [outbound] section already present.
+	initial := `[auth]
+type = "passwd"
+credential_backend = "passwd"
+key_backend = "keys"
+
+[msgstore]
+type = "maildir"
+base_path = "users"
+
+[outbound]
+strategy = "smarthost"
+smarthost = "relay.example.com:587"
+`
+	configPath := filepath.Join(domainDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(initial), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	// Update auth/store config via the handler.
+	body, _ := json.Marshal(map[string]any{
+		"override":           true,
+		"auth_type":          "passwd",
+		"credential_backend": "passwd",
+		"key_backend":        "keys",
+		"store_type":         "maildir",
+		"base_path":          "mail",
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/domains/example.com/config", bytes.NewReader(body))
+	req.SetPathValue("name", "example.com")
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.HandleUpdateDomainConfig(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Read back config and verify [outbound] survived.
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if v := extractTOMLValue(content, "strategy", "outbound"); v != "smarthost" {
+		t.Errorf("expected outbound strategy smarthost, got %q", v)
+	}
+	if v := extractTOMLValue(content, "smarthost", "outbound"); v != "relay.example.com:587" {
+		t.Errorf("expected outbound smarthost relay.example.com:587, got %q", v)
+	}
+	// Verify the updated value took effect.
+	if v := extractTOMLValue(content, "base_path", "msgstore"); v != "mail" {
+		t.Errorf("expected base_path mail, got %q", v)
+	}
+}

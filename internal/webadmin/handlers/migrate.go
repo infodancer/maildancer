@@ -204,18 +204,3 @@ func (h *MigrateHandler) migratePasswdUIDs(domainPath, passwdPath string) (int, 
 	}
 	return migrated, nil
 }
-
-// writeDefaultConfig writes a standard default config.toml with the given gid.
-func writeDefaultConfig(configPath string, gid uint32) error {
-	content := fmt.Sprintf("[domain]\ngid = %d\n\n[auth]\ntype = \"passwd\"\ncredential_backend = \"passwd\"\nkey_backend = \"keys\"\n\n[msgstore]\ntype = \"maildir\"\nbase_path = \"users\"\n", gid)
-	return os.WriteFile(configPath, []byte(content), 0o640)
-}
-
-// prependDomainGID prepends a [domain] gid block to an existing config.toml that has no [domain] section.
-func prependDomainGID(configPath, existing string, gid uint32) error {
-	// If there's already a [domain] section (with gid=0 somehow), replace or prepend.
-	// Since we only call this when gid == 0 and [domain] section was absent or gid was missing/zero,
-	// always prepend.
-	content := fmt.Sprintf("[domain]\ngid = %d\n\n%s", gid, existing)
-	return os.WriteFile(configPath, []byte(content), 0o640)
-}

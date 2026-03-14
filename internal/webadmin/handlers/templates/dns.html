@@ -1,0 +1,139 @@
+{{define "title"}}DNS Setup - {{.Data.Domain}}{{end}}
+{{define "content"}}
+<nav aria-label="breadcrumb">
+  <ul>
+    <li><a href="/">Domains</a></li>
+    <li><a href="/domains/{{.Data.Domain}}">{{.Data.Domain}}</a></li>
+    <li>DNS Setup</li>
+  </ul>
+</nav>
+
+<hgroup>
+  <h1>DNS Setup</h1>
+  <p>Check and configure DNS records for <strong>{{.Data.Domain}}</strong></p>
+</hgroup>
+
+<article style="margin-bottom:1.5rem">
+  <div class="grid">
+    <label>Mail server IP address
+      <input type="text" id="dns-ip" value="{{.Data.ServerIP}}"
+             placeholder="e.g., 203.0.113.10" required
+             pattern="[0-9a-fA-F.:]+">
+    </label>
+    <label>Mail hostname
+      <input type="text" id="dns-hostname" value="{{.Data.Hostname}}"
+             placeholder="e.g., mail.example.com">
+    </label>
+  </div>
+  <button type="button" onclick="checkAllDNS()">Check All Records</button>
+</article>
+
+{{/* --- Record cards --- */}}
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem">
+
+  <article style="margin:0">
+    <header><strong>A Record</strong></header>
+    <p style="font-size:0.875rem;color:var(--pico-muted-color)">
+      Maps your domain name to the mail server IP address.
+    </p>
+    <div id="dns-result-a"><kbd class="badge badge-no">not checked</kbd></div>
+    <button type="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem;margin-top:0.5rem"
+            onclick="checkDNS('a')">Check</button>
+  </article>
+
+  <article style="margin:0">
+    <header><strong>MX Record</strong></header>
+    <p style="font-size:0.875rem;color:var(--pico-muted-color)">
+      Tells other servers where to deliver mail for your domain.
+    </p>
+    <div id="dns-result-mx"><kbd class="badge badge-no">not checked</kbd></div>
+    <button type="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem;margin-top:0.5rem"
+            onclick="checkDNS('mx')">Check</button>
+  </article>
+
+  <article style="margin:0">
+    <header><strong>PTR Record (Reverse DNS)</strong></header>
+    <p style="font-size:0.875rem;color:var(--pico-muted-color)">
+      Maps your IP back to a hostname. Required by most receiving servers.
+    </p>
+    <div id="dns-result-ptr"><kbd class="badge badge-no">not checked</kbd></div>
+    <button type="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem;margin-top:0.5rem"
+            onclick="checkDNS('ptr')">Check</button>
+  </article>
+
+  <article style="margin:0">
+    <header><strong>SPF Record</strong></header>
+    <p style="font-size:0.875rem;color:var(--pico-muted-color)">
+      Declares which IPs are authorized to send mail for your domain.
+    </p>
+    <div id="dns-result-spf"><kbd class="badge badge-no">not checked</kbd></div>
+    <button type="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem;margin-top:0.5rem"
+            onclick="checkDNS('spf')">Check</button>
+  </article>
+
+  <article style="margin:0">
+    <header><strong>DKIM Record</strong></header>
+    <p style="font-size:0.875rem;color:var(--pico-muted-color)">
+      Publishes a public key for verifying message signatures. Checked at <code>default._domainkey.{{.Data.Domain}}</code>.
+    </p>
+    <div id="dns-result-dkim"><kbd class="badge badge-no">not checked</kbd></div>
+    <button type="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem;margin-top:0.5rem"
+            onclick="checkDNS('dkim')">Check</button>
+  </article>
+
+  <article style="margin:0">
+    <header><strong>DMARC Record</strong></header>
+    <p style="font-size:0.875rem;color:var(--pico-muted-color)">
+      Policy for handling messages that fail SPF or DKIM. Checked at <code>_dmarc.{{.Data.Domain}}</code>.
+    </p>
+    <div id="dns-result-dmarc"><kbd class="badge badge-no">not checked</kbd></div>
+    <button type="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem;margin-top:0.5rem"
+            onclick="checkDNS('dmarc')">Check</button>
+  </article>
+
+</div>
+
+<script>
+function checkDNS(type) {
+  var ip = document.getElementById('dns-ip').value.trim();
+  var hostname = document.getElementById('dns-hostname').value.trim();
+  if (!ip) { alert('Enter the mail server IP address.'); return; }
+
+  var target = document.getElementById('dns-result-' + type);
+  target.innerHTML = '<span aria-busy="true">checking...</span>';
+
+  var url = '/api/domains/{{.Data.Domain}}/dns/check?type=' + type + '&ip=' + encodeURIComponent(ip);
+  if (hostname) url += '&hostname=' + encodeURIComponent(hostname);
+
+  fetch(url, {credentials: 'same-origin'})
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var badge = 'badge-no';
+      var icon = '&#10007;';
+      if (d.status === 'ok') { badge = 'badge-yes'; icon = '&#10003;'; }
+      else if (d.status === 'warning') { badge = 'badge-warn'; icon = '&#9679;'; }
+      else { badge = 'badge-err'; icon = '&#10007;'; }
+
+      var html = '<kbd class="badge ' + badge + '">' + icon + ' ' + d.status + '</kbd>';
+      if (d.actual) html += ' <code style="font-size:0.8rem">' + escapeHtml(d.actual) + '</code>';
+      if (d.message) html += '<br><small>' + escapeHtml(d.message) + '</small>';
+      if (d.expected) html += '<br><small style="color:var(--pico-muted-color)">Expected: ' + escapeHtml(d.expected) + '</small>';
+      target.innerHTML = html;
+    })
+    .catch(function(err) {
+      target.innerHTML = '<kbd class="badge badge-err">&#10007; error</kbd> <small>Check failed: ' + escapeHtml(err.message) + '</small>';
+    });
+}
+
+function checkAllDNS() {
+  ['a', 'mx', 'ptr', 'spf', 'dkim', 'dmarc'].forEach(checkDNS);
+}
+
+function escapeHtml(s) {
+  var d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+</script>
+{{end}}

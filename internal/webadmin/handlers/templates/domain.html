@@ -12,6 +12,10 @@
   <p>{{.Data.Domain.UserCount}} user{{if ne .Data.Domain.UserCount 1}}s{{end}} &middot; Auth: {{.Data.Domain.AuthType}} &middot; Store: {{.Data.Domain.StoreType}}</p>
 </hgroup>
 
+<div style="margin-bottom:1.5rem">
+  <a href="/domains/{{.Data.Domain.Name}}/dns" role="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem">Setup DNS Records</a>
+</div>
+
 <h2>Configuration</h2>
 <form id="domain-config-form">
   <label>

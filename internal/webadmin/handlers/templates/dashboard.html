@@ -99,6 +99,7 @@
       <th>Auth Type</th>
       <th>Store Type</th>
       <th>Keys</th>
+      <th>DNS</th>
       <th>Actions</th>
     </tr>
   </thead>
@@ -110,6 +111,9 @@
       <td>{{.AuthType}}</td>
       <td>{{.StoreType}}</td>
       <td>{{if .HasKeys}}<kbd class="badge badge-yes">encrypted</kbd>{{else}}<kbd class="badge badge-no">plain</kbd>{{end}}</td>
+      <td hx-get="/api/domains/{{.Name}}/dns/status" hx-trigger="load" hx-swap="innerHTML">
+        <span aria-busy="true"></span>
+      </td>
       <td class="actions">
         <a href="/domains/{{.Name}}" role="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem">View</a>
         {{if $.Data.IsSuperAdmin}}

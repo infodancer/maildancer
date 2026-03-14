@@ -124,6 +124,51 @@ func (h *WebHandler) SetOutboundHandler(oh *OutboundHandler) {
 	h.outboundHandler = oh
 }
 
+// HandleDNSWizard renders the DNS setup wizard page.
+func (h *WebHandler) HandleDNSWizard(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !isValidDomainName(name) {
+		http.Error(w, "Invalid domain name", http.StatusBadRequest)
+		return
+	}
+
+	if h.roles != nil {
+		username := h.currentUsername(r)
+		if !h.roles.IsSuperAdmin(username) && !h.roles.CanAccessDomain(username, name) {
+			http.Error(w, "Forbidden: insufficient domain access", http.StatusForbidden)
+			return
+		}
+	}
+
+	domainPath := filepath.Join(h.domainsPath, name)
+	if !dirExists(domainPath) {
+		http.Error(w, "Domain not found", http.StatusNotFound)
+		return
+	}
+
+	// Pre-fill hostname and IP from server settings.
+	hostname := ""
+	serverIP := ""
+	if h.settingsHandler != nil {
+		if cfg, err := h.settingsHandler.loadSettings(); err == nil {
+			hostname = cfg.Server.Hostname
+		}
+	}
+
+	pd := h.pageData(r, struct {
+		Domain   string
+		Hostname string
+		ServerIP string
+	}{
+		Domain:   name,
+		Hostname: hostname,
+		ServerIP: serverIP,
+	})
+	if err := h.render.Render(w, "dns", pd); err != nil {
+		h.logger.Error("failed to render DNS wizard", "error", err)
+	}
+}
+
 // pageData builds common PageData from the request session.
 func (h *WebHandler) pageData(r *http.Request, data any) PageData {
 	pd := PageData{Data: data}

@@ -19,7 +19,7 @@
 
 {{define "confirm-delete-domain"}}
 <tr>
-  <td colspan="6">
+  <td colspan="7">
     <div class="confirm-delete">
       <p><strong>Delete {{.Name}}?</strong> This cannot be undone.
         {{if gt .UserCount 0}} This domain has {{.UserCount}} user{{if ne .UserCount 1}}s{{end}}.{{end}}</p>

@@ -130,6 +130,7 @@ func (s *Server) registerRoutes() {
 	rspamdHandler := handlers.NewRspamdHandler(s.cfg.FilePath, s.sessions, s.logger)
 	settingsHandler := handlers.NewSettingsHandler(s.cfg.FilePath, s.sessions, s.logger)
 	outboundHandler := handlers.NewOutboundHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.auditLog)
+	dnsHandler := handlers.NewDNSHandler(s.cfg.DomainsPath, s.sessions, s.logger, settingsHandler)
 	webHandler.SetConfigFile(s.cfg.FilePath)
 	webHandler.SetSettingsHandler(settingsHandler)
 	webHandler.SetOutboundHandler(outboundHandler)
@@ -172,6 +173,20 @@ func (s *Server) registerRoutes() {
 	))
 	s.mux.Handle("GET /domains/{name}", middleware.Chain(
 		http.HandlerFunc(webHandler.HandleDomainDetail),
+		requireAuth, requireDomainAccessByName,
+	))
+	s.mux.Handle("GET /domains/{name}/dns", middleware.Chain(
+		http.HandlerFunc(webHandler.HandleDNSWizard),
+		requireAuth, requireDomainAccessByName,
+	))
+
+	// DNS check API
+	s.mux.Handle("GET /api/domains/{name}/dns/check", middleware.Chain(
+		http.HandlerFunc(dnsHandler.HandleCheckDNSRecord),
+		requireAuth, requireDomainAccessByName,
+	))
+	s.mux.Handle("GET /api/domains/{name}/dns/status", middleware.Chain(
+		http.HandlerFunc(dnsHandler.HandleDNSStatus),
 		requireAuth, requireDomainAccessByName,
 	))
 

@@ -152,7 +152,6 @@ func TestLoadSharedServerConfig(t *testing.T) {
 	content := `
 [server]
 hostname = "shared.example.com"
-maildir = "/var/mail"
 
 [server.tls]
 cert_file = "/etc/ssl/shared-cert.pem"
@@ -175,10 +174,6 @@ log_level = "warn"
 		t.Errorf("hostname = %q, want 'shared.example.com'", cfg.Hostname)
 	}
 
-	if cfg.Maildir != "/var/mail" {
-		t.Errorf("maildir = %q, want '/var/mail'", cfg.Maildir)
-	}
-
 	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
 		t.Errorf("tls.cert_file = %q, want '/etc/ssl/shared-cert.pem'", cfg.TLS.CertFile)
 	}
@@ -193,62 +188,6 @@ log_level = "warn"
 	}
 }
 
-func TestLoadPop3dDoesNotOverrideServer(t *testing.T) {
-	// Global settings (hostname, maildir, TLS) come from [server] only.
-	// [pop3d] values for these fields are ignored.
-	content := `
-[server]
-hostname = "shared.example.com"
-maildir = "/var/mail"
-domains_path = "/etc/mail/domains"
-
-[server.tls]
-cert_file = "/etc/ssl/shared-cert.pem"
-key_file = "/etc/ssl/shared-key.pem"
-
-[pop3d]
-hostname = "pop3.example.com"
-maildir = "/var/pop3mail"
-log_level = "warn"
-
-[pop3d.tls]
-cert_file = "/etc/ssl/pop3-cert.pem"
-`
-
-	path := createTempConfig(t, content)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	// Server values should win — pop3d does not override global settings
-	if cfg.Hostname != "shared.example.com" {
-		t.Errorf("hostname = %q, want 'shared.example.com' ([server] should win)", cfg.Hostname)
-	}
-
-	if cfg.Maildir != "/var/mail" {
-		t.Errorf("maildir = %q, want '/var/mail' ([server] should win)", cfg.Maildir)
-	}
-
-	if cfg.DomainsPath != "/etc/mail/domains" {
-		t.Errorf("domains_path = %q, want '/etc/mail/domains' ([server] should win)", cfg.DomainsPath)
-	}
-
-	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
-		t.Errorf("tls.cert_file = %q, want '/etc/ssl/shared-cert.pem' ([server] should win)", cfg.TLS.CertFile)
-	}
-
-	if cfg.TLS.KeyFile != "/etc/ssl/shared-key.pem" {
-		t.Errorf("tls.key_file = %q, want '/etc/ssl/shared-key.pem'", cfg.TLS.KeyFile)
-	}
-
-	// Pop3d-specific settings still apply
-	if cfg.LogLevel != "warn" {
-		t.Errorf("log_level = %q, want 'warn' (pop3d-specific setting)", cfg.LogLevel)
-	}
-}
-
 func TestApplyFlags(t *testing.T) {
 	cfg := Default()
 
@@ -258,7 +197,6 @@ func TestApplyFlags(t *testing.T) {
 		TLSCert:        "/flag/cert.pem",
 		TLSKey:         "/flag/key.pem",
 		MaxConnections: 25,
-		Maildir:        "/flag/maildir",
 	}
 
 	result := ApplyFlags(cfg, flags)
@@ -281,10 +219,6 @@ func TestApplyFlags(t *testing.T) {
 
 	if result.Limits.MaxConnections != 25 {
 		t.Errorf("max_connections = %d, want 25", result.Limits.MaxConnections)
-	}
-
-	if result.Maildir != "/flag/maildir" {
-		t.Errorf("maildir = %q, want '/flag/maildir'", result.Maildir)
 	}
 }
 
@@ -442,98 +376,6 @@ max_connections = 100
 	// Non-overridden config values should remain
 	if result.LogLevel != "info" {
 		t.Errorf("log_level = %q, want 'info' (config value should remain)", result.LogLevel)
-	}
-}
-
-func TestLoadDomainsPath(t *testing.T) {
-	// DomainsPath comes from [server], not [pop3d].
-	content := `
-[server]
-hostname = "mail.example.com"
-domains_path = "/etc/mail/domains"
-`
-
-	path := createTempConfig(t, content)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	if cfg.DomainsPath != "/etc/mail/domains" {
-		t.Errorf("domains_path = %q, want '/etc/mail/domains'", cfg.DomainsPath)
-	}
-}
-
-func TestLoadDomainsPathFromServer(t *testing.T) {
-	content := `
-[server]
-domains_path = "/etc/mail/shared-domains"
-
-[pop3d]
-hostname = "mail.example.com"
-`
-
-	path := createTempConfig(t, content)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	if cfg.DomainsPath != "/etc/mail/shared-domains" {
-		t.Errorf("domains_path = %q, want '/etc/mail/shared-domains'", cfg.DomainsPath)
-	}
-}
-
-func TestLoadDomainsPathPop3dDoesNotOverrideServer(t *testing.T) {
-	// domains_path in [pop3d] should be ignored; [server] wins.
-	content := `
-[server]
-domains_path = "/etc/mail/shared-domains"
-
-[pop3d]
-domains_path = "/etc/mail/pop3-domains"
-`
-
-	path := createTempConfig(t, content)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-
-	if cfg.DomainsPath != "/etc/mail/shared-domains" {
-		t.Errorf("domains_path = %q, want '/etc/mail/shared-domains' ([server] should win)", cfg.DomainsPath)
-	}
-}
-
-func TestApplyFlagsDomainsPath(t *testing.T) {
-	cfg := Default()
-
-	flags := &Flags{
-		DomainsPath: "/flag/domains",
-	}
-
-	result := ApplyFlags(cfg, flags)
-
-	if result.DomainsPath != "/flag/domains" {
-		t.Errorf("domains_path = %q, want '/flag/domains'", result.DomainsPath)
-	}
-}
-
-func TestApplyFlagsEmptyDomainsPathDoesNotOverride(t *testing.T) {
-	cfg := Default()
-	cfg.DomainsPath = "/etc/mail/domains"
-
-	flags := &Flags{
-		DomainsPath: "",
-	}
-
-	result := ApplyFlags(cfg, flags)
-
-	if result.DomainsPath != "/etc/mail/domains" {
-		t.Errorf("domains_path = %q, want '/etc/mail/domains' (should not be overridden)", result.DomainsPath)
 	}
 }
 

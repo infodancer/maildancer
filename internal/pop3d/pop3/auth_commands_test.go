@@ -3,43 +3,14 @@ package pop3
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"log/slog"
 	"testing"
 
-	"github.com/infodancer/maildancer/auth"
-	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
-
-// mockDomainAuth implements DomainAuthenticator for testing.
-type mockDomainAuth struct {
-	authenticateFn func(ctx context.Context, username, password string) (*domain.AuthResult, error)
-}
-
-func (m *mockDomainAuth) AuthenticateWithDomain(ctx context.Context, username, password string) (*domain.AuthResult, error) {
-	if m.authenticateFn != nil {
-		return m.authenticateFn(ctx, username, password)
-	}
-	return nil, errors.New("not implemented")
-}
-
-// newSimpleAuth creates a mockDomainAuth that authenticates without domain routing.
-// This is the common case for tests that don't care about domain-specific behavior.
-func newSimpleAuth(fn func(ctx context.Context, username, password string) (*auth.AuthSession, error)) *mockDomainAuth {
-	return &mockDomainAuth{
-		authenticateFn: func(ctx context.Context, username, password string) (*domain.AuthResult, error) {
-			if fn == nil {
-				return nil, errors.New("not implemented")
-			}
-			session, err := fn(ctx, username, password)
-			if err != nil {
-				return nil, err
-			}
-			return &domain.AuthResult{Session: session}, nil
-		},
-	}
-}
 
 // mockConnection is a minimal mock for testing commands that need a logger.
 type mockConnection struct {
@@ -64,6 +35,44 @@ func newMockConnection() *mockConnection {
 // is unconfigured.
 func newTestSession(mode config.ListenerMode, isTLS bool) *Session {
 	return NewSession("test.example.com", mode, &tls.Config{}, isTLS) //nolint:gosec
+}
+
+// newTestSMClient creates a SessionManagerClient connected to a test gRPC server
+// with the given session and mailbox service implementations.
+func newTestSMClient(t *testing.T, sessionSvc *mockSessionService, mailboxSvc *mockMailboxService) *SessionManagerClient {
+	t.Helper()
+	socketPath, cleanup := startTestServer(t, sessionSvc, mailboxSvc)
+	t.Cleanup(cleanup)
+
+	client, err := NewSessionManagerClient(config.SessionManagerConfig{
+		Socket: socketPath,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewSessionManagerClient: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+// defaultSessionSvc returns a mock session service that accepts any login.
+func defaultSessionSvc() *mockSessionService {
+	return &mockSessionService{
+		loginFunc: func(ctx context.Context, req *smpb.LoginRequest) (*smpb.LoginResponse, error) {
+			return &smpb.LoginResponse{
+				SessionToken: "test-token",
+				Mailbox:      req.Username,
+			}, nil
+		},
+	}
+}
+
+// failingSessionSvc returns a mock session service that rejects all logins.
+func failingSessionSvc() *mockSessionService {
+	return &mockSessionService{
+		loginFunc: func(ctx context.Context, req *smpb.LoginRequest) (*smpb.LoginResponse, error) {
+			return nil, status.Error(codes.Unauthenticated, "invalid credentials")
+		},
+	}
 }
 
 func TestCapaCommand(t *testing.T) {
@@ -250,7 +259,7 @@ func TestPassCommand(t *testing.T) {
 		sess         *Session
 		setupSession func(*Session)
 		args         []string
-		authFn       func(ctx context.Context, username, password string) (*auth.AuthSession, error)
+		sessionSvc   *mockSessionService
 		wantOK       bool
 		wantMessage  string
 		wantState    State
@@ -262,6 +271,7 @@ func TestPassCommand(t *testing.T) {
 				s.SetUsername("testuser")
 			},
 			args:        []string{"password"},
+			sessionSvc:  defaultSessionSvc(),
 			wantOK:      false,
 			wantMessage: "TLS required for authentication",
 			wantState:   StateAuthorization,
@@ -270,6 +280,7 @@ func TestPassCommand(t *testing.T) {
 			name:        "PASS without prior USER fails",
 			sess:        newTestSession(config.ModePop3s, true),
 			args:        []string{"password"},
+			sessionSvc:  defaultSessionSvc(),
 			wantOK:      false,
 			wantMessage: "No username specified",
 			wantState:   StateAuthorization,
@@ -280,15 +291,8 @@ func TestPassCommand(t *testing.T) {
 			setupSession: func(s *Session) {
 				s.SetUsername("testuser")
 			},
-			args: []string{"correctpassword"},
-			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
-				return &auth.AuthSession{
-					User: &auth.User{
-						Username: username,
-						Mailbox:  "/var/mail/" + username,
-					},
-				}, nil
-			},
+			args:        []string{"correctpassword"},
+			sessionSvc:  defaultSessionSvc(),
 			wantOK:      true,
 			wantMessage: "Logged in as testuser",
 			wantState:   StateTransaction,
@@ -299,10 +303,8 @@ func TestPassCommand(t *testing.T) {
 			setupSession: func(s *Session) {
 				s.SetUsername("testuser")
 			},
-			args: []string{"wrongpassword"},
-			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
-				return nil, errors.New("invalid credentials")
-			},
+			args:        []string{"wrongpassword"},
+			sessionSvc:  failingSessionSvc(),
 			wantOK:      false,
 			wantMessage: "Authentication failed",
 			wantState:   StateAuthorization,
@@ -314,6 +316,7 @@ func TestPassCommand(t *testing.T) {
 				s.SetUsername("testuser")
 			},
 			args:        []string{},
+			sessionSvc:  defaultSessionSvc(),
 			wantOK:      false,
 			wantMessage: "PASS command requires password argument",
 			wantState:   StateAuthorization,
@@ -326,7 +329,8 @@ func TestPassCommand(t *testing.T) {
 				tt.setupSession(tt.sess)
 			}
 
-			cmd := &passCommand{auth: newSimpleAuth(tt.authFn)}
+			smClient := newTestSMClient(t, tt.sessionSvc, &mockMailboxService{})
+			cmd := &passCommand{smClient: smClient}
 
 			conn := newMockConnection()
 			resp, err := cmd.Execute(context.Background(), tt.sess, conn, tt.args)
@@ -372,9 +376,7 @@ func TestQuitCommand(t *testing.T) {
 			name: "QUIT in TRANSACTION",
 			sess: newTestSession(config.ModePop3s, true),
 			setupSession: func(s *Session) {
-				s.SetAuthenticated(&auth.AuthSession{
-					User: &auth.User{Username: "test"},
-				})
+				s.SetAuthenticated(AuthenticatedUser{Username: "test"})
 			},
 			args:        []string{},
 			wantOK:      true,
@@ -424,9 +426,8 @@ func TestCommandRegistry(t *testing.T) {
 	// Clear the registry first
 	commandRegistry = make(map[string]Command)
 
-	// Register test commands
-	mockAuth := newSimpleAuth(nil)
-	RegisterAuthCommands(mockAuth, nil, nil)
+	// Register test commands — nil smClient is fine for registry tests
+	RegisterAuthCommands(nil)
 
 	tests := []struct {
 		name      string
@@ -464,7 +465,7 @@ func TestAuthCommand(t *testing.T) {
 		name             string
 		sess             *Session
 		args             []string
-		authFn           func(ctx context.Context, username, password string) (*auth.AuthSession, error)
+		sessionSvc       *mockSessionService
 		wantOK           bool
 		wantContinuation bool
 		wantMessage      string
@@ -474,6 +475,7 @@ func TestAuthCommand(t *testing.T) {
 			name:        "AUTH without TLS fails",
 			sess:        newTestSession(config.ModePop3, false),
 			args:        []string{"PLAIN"},
+			sessionSvc:  defaultSessionSvc(),
 			wantOK:      false,
 			wantMessage: "TLS required for authentication",
 			wantState:   StateAuthorization,
@@ -482,6 +484,7 @@ func TestAuthCommand(t *testing.T) {
 			name:        "AUTH without mechanism fails",
 			sess:        newTestSession(config.ModePop3s, true),
 			args:        []string{},
+			sessionSvc:  defaultSessionSvc(),
 			wantOK:      false,
 			wantMessage: "AUTH command requires mechanism argument",
 			wantState:   StateAuthorization,
@@ -490,6 +493,7 @@ func TestAuthCommand(t *testing.T) {
 			name:        "AUTH with unsupported mechanism fails",
 			sess:        newTestSession(config.ModePop3s, true),
 			args:        []string{"CRAM-MD5"},
+			sessionSvc:  defaultSessionSvc(),
 			wantOK:      false,
 			wantMessage: "Unsupported mechanism: CRAM-MD5",
 			wantState:   StateAuthorization,
@@ -498,6 +502,7 @@ func TestAuthCommand(t *testing.T) {
 			name:             "AUTH PLAIN without initial response sends challenge",
 			sess:             newTestSession(config.ModePop3s, true),
 			args:             []string{"PLAIN"},
+			sessionSvc:       defaultSessionSvc(),
 			wantContinuation: true,
 			wantState:        StateAuthorization,
 		},
@@ -505,18 +510,8 @@ func TestAuthCommand(t *testing.T) {
 			name: "AUTH PLAIN with valid initial response succeeds",
 			sess: newTestSession(config.ModePop3s, true),
 			// Base64 of "\x00alice\x00secret"
-			args: []string{"PLAIN", "AGFsaWNlAHNlY3JldA=="},
-			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
-				if username == "alice" && password == "secret" {
-					return &auth.AuthSession{
-						User: &auth.User{
-							Username: username,
-							Mailbox:  "/var/mail/" + username,
-						},
-					}, nil
-				}
-				return nil, errors.New("invalid credentials")
-			},
+			args:        []string{"PLAIN", "AGFsaWNlAHNlY3JldA=="},
+			sessionSvc:  defaultSessionSvc(),
 			wantOK:      true,
 			wantMessage: "Logged in as alice",
 			wantState:   StateTransaction,
@@ -525,10 +520,8 @@ func TestAuthCommand(t *testing.T) {
 			name: "AUTH PLAIN with invalid credentials fails",
 			sess: newTestSession(config.ModePop3s, true),
 			// Base64 of "\x00alice\x00wrongpassword"
-			args: []string{"PLAIN", "AGFsaWNlAHdyb25ncGFzc3dvcmQ="},
-			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
-				return nil, errors.New("invalid credentials")
-			},
+			args:        []string{"PLAIN", "AGFsaWNlAHdyb25ncGFzc3dvcmQ="},
+			sessionSvc:  failingSessionSvc(),
 			wantOK:      false,
 			wantMessage: "Authentication failed",
 			wantState:   StateAuthorization,
@@ -537,18 +530,16 @@ func TestAuthCommand(t *testing.T) {
 			name:        "AUTH PLAIN with invalid base64 fails",
 			sess:        newTestSession(config.ModePop3s, true),
 			args:        []string{"PLAIN", "not-valid-base64!!!"},
+			sessionSvc:  defaultSessionSvc(),
 			wantOK:      false,
 			wantMessage: "Invalid base64 encoding",
 			wantState:   StateAuthorization,
 		},
 		{
-			name: "AUTH PLAIN with empty initial response (=) sends challenge",
-			sess: newTestSession(config.ModePop3s, true),
-			args: []string{"PLAIN", "="},
-			authFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
-				// Empty response is not valid PLAIN credentials
-				return nil, errors.New("invalid credentials")
-			},
+			name:        "AUTH PLAIN with empty initial response (=) sends challenge",
+			sess:        newTestSession(config.ModePop3s, true),
+			args:        []string{"PLAIN", "="},
+			sessionSvc:  failingSessionSvc(),
 			wantOK:      false,
 			wantMessage: "Authentication failed",
 			wantState:   StateAuthorization,
@@ -557,7 +548,8 @@ func TestAuthCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := &authCommand{auth: newSimpleAuth(tt.authFn)}
+			smClient := newTestSMClient(t, tt.sessionSvc, &mockMailboxService{})
+			cmd := &authCommand{smClient: smClient}
 
 			conn := newMockConnection()
 			resp, err := cmd.Execute(context.Background(), tt.sess, conn, tt.args)
@@ -587,11 +579,10 @@ func TestAuthCommand(t *testing.T) {
 
 func TestAuthCommandInTransaction(t *testing.T) {
 	sess := newTestSession(config.ModePop3s, true)
-	sess.SetAuthenticated(&auth.AuthSession{
-		User: &auth.User{Username: "test"},
-	})
+	sess.SetAuthenticated(AuthenticatedUser{Username: "test"})
 
-	cmd := &authCommand{auth: newSimpleAuth(nil)}
+	smClient := newTestSMClient(t, defaultSessionSvc(), &mockMailboxService{})
+	cmd := &authCommand{smClient: smClient}
 	conn := newMockConnection()
 
 	resp, err := cmd.Execute(context.Background(), sess, conn, []string{"PLAIN"})
@@ -611,7 +602,8 @@ func TestAuthCommandInTransaction(t *testing.T) {
 func TestAuthSASLCancellation(t *testing.T) {
 	sess := newTestSession(config.ModePop3s, true)
 
-	cmd := &authCommand{auth: newSimpleAuth(nil)}
+	smClient := newTestSMClient(t, defaultSessionSvc(), &mockMailboxService{})
+	cmd := &authCommand{smClient: smClient}
 	conn := newMockConnection()
 
 	// First, start AUTH to create SASL state
@@ -649,19 +641,9 @@ func TestAuthSASLCancellation(t *testing.T) {
 
 func TestAuthSASLMultiStep(t *testing.T) {
 	sess := newTestSession(config.ModePop3s, true)
-	mockAuth := newSimpleAuth(func(_ context.Context, username, password string) (*auth.AuthSession, error) {
-		if username == "alice" && password == "secret" {
-			return &auth.AuthSession{
-				User: &auth.User{
-					Username: username,
-					Mailbox:  "/var/mail/" + username,
-				},
-			}, nil
-		}
-		return nil, errors.New("invalid credentials")
-	})
 
-	cmd := &authCommand{auth: mockAuth}
+	smClient := newTestSMClient(t, defaultSessionSvc(), &mockMailboxService{})
+	cmd := &authCommand{smClient: smClient}
 	conn := newMockConnection()
 
 	// Start AUTH without initial response
@@ -787,225 +769,6 @@ func TestResponseFormatting(t *testing.T) {
 			got := tt.resp.String()
 			if got != tt.wantText {
 				t.Errorf("Response.String() = %q, want %q", got, tt.wantText)
-			}
-		})
-	}
-}
-
-func TestPassCommandDomainAuth(t *testing.T) {
-	// Create a mock that routes domain auth via AuthResult.Domain
-	domainAuth := &mockDomainAuth{
-		authenticateFn: func(_ context.Context, username, password string) (*domain.AuthResult, error) {
-			local, domainName := domain.SplitUsername(username)
-
-			if domainName == "example.com" {
-				if local == "alice" && password == "domainpass" {
-					return &domain.AuthResult{
-						Session: &auth.AuthSession{
-							User: &auth.User{Username: local, Mailbox: local},
-						},
-						Domain: &domain.Domain{Name: "example.com"},
-					}, nil
-				}
-				return nil, errors.New("invalid credentials")
-			}
-
-			// Simulate unknown domain falling through to global auth
-			if username == "globaluser" && password == "globalpass" {
-				return &domain.AuthResult{
-					Session: &auth.AuthSession{
-						User: &auth.User{Username: username, Mailbox: username},
-					},
-				}, nil
-			}
-
-			return nil, errors.New("invalid credentials")
-		},
-	}
-
-	tests := []struct {
-		name        string
-		username    string
-		password    string
-		wantOK      bool
-		wantMessage string
-		wantState   State
-	}{
-		{
-			name:        "domain user authenticates with local part",
-			username:    "alice@example.com",
-			password:    "domainpass",
-			wantOK:      true,
-			wantMessage: "Logged in as alice@example.com",
-			wantState:   StateTransaction,
-		},
-		{
-			name:        "domain user wrong password fails",
-			username:    "alice@example.com",
-			password:    "wrongpass",
-			wantOK:      false,
-			wantMessage: "Authentication failed",
-			wantState:   StateAuthorization,
-		},
-		{
-			name:        "unknown domain fails",
-			username:    "alice@unknown.org",
-			password:    "domainpass",
-			wantOK:      false,
-			wantMessage: "Authentication failed",
-			wantState:   StateAuthorization,
-		},
-		{
-			name:        "plain user falls back to global auth",
-			username:    "globaluser",
-			password:    "globalpass",
-			wantOK:      true,
-			wantMessage: "Logged in as globaluser",
-			wantState:   StateTransaction,
-		},
-		{
-			name:        "plain user wrong password fails via global auth",
-			username:    "globaluser",
-			password:    "wrongpass",
-			wantOK:      false,
-			wantMessage: "Authentication failed",
-			wantState:   StateAuthorization,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sess := newTestSession(config.ModePop3s, true)
-			sess.SetUsername(tt.username)
-
-			cmd := &passCommand{auth: domainAuth}
-
-			conn := newMockConnection()
-			resp, err := cmd.Execute(context.Background(), sess, conn, []string{tt.password})
-
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
-
-			if resp.OK != tt.wantOK {
-				t.Errorf("Execute() OK = %v, want %v", resp.OK, tt.wantOK)
-			}
-
-			if resp.Message != tt.wantMessage {
-				t.Errorf("Execute() Message = %v, want %v", resp.Message, tt.wantMessage)
-			}
-
-			if sess.State() != tt.wantState {
-				t.Errorf("Session state = %v, want %v", sess.State(), tt.wantState)
-			}
-		})
-	}
-}
-
-func TestPassCommandNoDomainAuthFallsThrough(t *testing.T) {
-	// With no domain routing, user@domain goes to global auth as-is
-	mockAuth := newSimpleAuth(func(_ context.Context, username, password string) (*auth.AuthSession, error) {
-		if username == "alice@example.com" && password == "pass" {
-			return &auth.AuthSession{
-				User: &auth.User{Username: username, Mailbox: "alice"},
-			}, nil
-		}
-		return nil, errors.New("invalid credentials")
-	})
-
-	sess := newTestSession(config.ModePop3s, true)
-	sess.SetUsername("alice@example.com")
-
-	cmd := &passCommand{auth: mockAuth}
-	conn := newMockConnection()
-
-	resp, err := cmd.Execute(context.Background(), sess, conn, []string{"pass"})
-	if err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-
-	if !resp.OK {
-		t.Errorf("Execute() OK = false, want true (no domain routing should fall through to global auth)")
-	}
-}
-
-func TestAuthCommandDomainAuth(t *testing.T) {
-	domainAuth := &mockDomainAuth{
-		authenticateFn: func(_ context.Context, username, password string) (*domain.AuthResult, error) {
-			local, domainName := domain.SplitUsername(username)
-
-			if domainName == "example.com" {
-				if local == "alice" && password == "secret" {
-					return &domain.AuthResult{
-						Session: &auth.AuthSession{
-							User: &auth.User{Username: local, Mailbox: local},
-						},
-						Domain: &domain.Domain{Name: "example.com"},
-					}, nil
-				}
-				return nil, errors.New("invalid credentials")
-			}
-
-			return nil, errors.New("invalid credentials")
-		},
-	}
-
-	tests := []struct {
-		name        string
-		args        []string
-		wantOK      bool
-		wantMessage string
-		wantState   State
-	}{
-		{
-			name: "AUTH PLAIN with domain user succeeds",
-			// Base64 of "\x00alice@example.com\x00secret"
-			args:        []string{"PLAIN", "AGFsaWNlQGV4YW1wbGUuY29tAHNlY3JldA=="},
-			wantOK:      true,
-			wantMessage: "Logged in as alice@example.com",
-			wantState:   StateTransaction,
-		},
-		{
-			name: "AUTH PLAIN with unknown domain fails",
-			// Base64 of "\x00alice@unknown.org\x00secret"
-			args:        []string{"PLAIN", "AGFsaWNlQHVua25vd24ub3JnAHNlY3JldA=="},
-			wantOK:      false,
-			wantMessage: "Authentication failed",
-			wantState:   StateAuthorization,
-		},
-		{
-			name: "AUTH PLAIN with domain user wrong password fails",
-			// Base64 of "\x00alice@example.com\x00wrong"
-			args:        []string{"PLAIN", "AGFsaWNlQGV4YW1wbGUuY29tAHdyb25n"},
-			wantOK:      false,
-			wantMessage: "Authentication failed",
-			wantState:   StateAuthorization,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			sess := newTestSession(config.ModePop3s, true)
-
-			cmd := &authCommand{auth: domainAuth}
-
-			conn := newMockConnection()
-			resp, err := cmd.Execute(context.Background(), sess, conn, tt.args)
-
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
-
-			if resp.OK != tt.wantOK {
-				t.Errorf("Execute() OK = %v, want %v", resp.OK, tt.wantOK)
-			}
-
-			if !resp.Continuation && resp.Message != tt.wantMessage {
-				t.Errorf("Execute() Message = %v, want %v", resp.Message, tt.wantMessage)
-			}
-
-			if sess.State() != tt.wantState {
-				t.Errorf("Session state = %v, want %v", sess.State(), tt.wantState)
 			}
 		})
 	}

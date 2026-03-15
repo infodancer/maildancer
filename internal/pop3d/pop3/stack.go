@@ -9,9 +9,6 @@ import (
 	"log/slog"
 	"net"
 
-	"github.com/infodancer/maildancer/auth"
-	"github.com/infodancer/maildancer/auth/domain"
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/metrics"
 	"github.com/infodancer/maildancer/internal/pop3d/server"
@@ -22,9 +19,8 @@ import (
 type StackConfig struct {
 	Config    config.Config
 	TLSConfig *tls.Config
-	MsgStore  msgstore.MessageStore // overrides config.Maildir when non-nil
-	Collector metrics.Collector     // nil → NoopCollector
-	Logger    *slog.Logger          // nil → slog.Default()
+	Collector metrics.Collector // nil → NoopCollector
+	Logger    *slog.Logger      // nil → slog.Default()
 }
 
 // Stack owns all components of a running pop3d instance and manages their lifecycle.
@@ -35,6 +31,8 @@ type Stack struct {
 }
 
 // NewStack creates a Stack from the given configuration, wiring up all components.
+// Session-manager is required — pop3d delegates all authentication and mailbox
+// operations to it.
 func NewStack(cfg StackConfig) (*Stack, error) {
 	logger := cfg.Logger
 	if logger == nil {
@@ -48,87 +46,19 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 
 	s := &Stack{logger: logger}
 
-	// Create authentication agent if configured.
-	var authAgent auth.AuthenticationAgent
-	if cfg.Config.Auth.IsConfigured() {
-		agentConfig := auth.AuthAgentConfig{
-			Type:              cfg.Config.Auth.Type,
-			CredentialBackend: cfg.Config.Auth.CredentialBackend,
-			KeyBackend:        cfg.Config.Auth.KeyBackend,
-			Options:           cfg.Config.Auth.Options,
-		}
-		var err error
-		authAgent, err = auth.OpenAuthAgent(agentConfig)
-		if err != nil {
-			return nil, err
-		}
-		s.closers = append(s.closers, authAgent)
-		logger.Info("authentication enabled", "type", cfg.Config.Auth.Type)
+	// Session-manager is required.
+	if !cfg.Config.SessionManager.IsEnabled() {
+		return nil, fmt.Errorf("session-manager configuration is required")
 	}
 
-	// Create message store: caller-supplied store takes priority over config.
-	var msgStore msgstore.MessageStore
-	if cfg.MsgStore != nil {
-		msgStore = cfg.MsgStore
-		logger.Info("message store enabled", "type", "caller-supplied")
-	} else if cfg.Config.Maildir != "" {
-		store, err := msgstore.Open(msgstore.StoreConfig{
-			Type:     "maildir",
-			BasePath: cfg.Config.Maildir,
-		})
-		if err != nil {
-			s.Close() //nolint:errcheck
-			return nil, err
-		}
-		msgStore = store
-		if c, ok := store.(io.Closer); ok {
-			s.closers = append(s.closers, c)
-		}
-		logger.Info("message store enabled", "type", "maildir", "path", cfg.Config.Maildir)
+	smClient, err := NewSessionManagerClient(cfg.Config.SessionManager, logger)
+	if err != nil {
+		return nil, fmt.Errorf("session-manager: %w", err)
 	}
-
-	// Create domain provider if configured.
-	var domainProvider domain.DomainProvider
-	if cfg.Config.DomainsPath != "" {
-		dp := domain.NewFilesystemDomainProvider(cfg.Config.DomainsPath, logger)
-		if cfg.Config.DomainsDataPath != "" {
-			dp = dp.WithDataPath(cfg.Config.DomainsDataPath)
-		}
-		domainProvider = dp.WithDefaults(domain.DomainConfig{
-			Auth: domain.DomainAuthConfig{
-				Type:              "passwd",
-				CredentialBackend: "passwd",
-				KeyBackend:        "keys",
-			},
-			MsgStore: domain.DomainMsgStoreConfig{
-				Type:     "maildir",
-				BasePath: "users",
-			},
-		})
-		s.closers = append(s.closers, domainProvider)
-		logger.Info("domain provider enabled", "path", cfg.Config.DomainsPath)
-	}
-
-	// Create auth router (centralizes domain-aware auth routing).
-	authRouter := domain.NewAuthRouter(domainProvider, authAgent).
-		WithRateLimit(domain.DefaultRateLimitConfig())
-	s.closers = append(s.closers, authRouter)
-
-	// Create session-manager client if configured. When enabled, it takes over
-	// authentication and mailbox operations from the domain auth router.
-	var smClient *SessionManagerClient
-	if cfg.Config.SessionManager.IsEnabled() {
-		var err error
-		smClient, err = NewSessionManagerClient(cfg.Config.SessionManager, logger)
-		if err != nil {
-			s.Close() //nolint:errcheck
-			return nil, fmt.Errorf("session-manager: %w", err)
-		}
-		s.closers = append(s.closers, smClient)
-		logger.Info("session-manager enabled",
-			"socket", cfg.Config.SessionManager.Socket,
-			"address", cfg.Config.SessionManager.Address)
-	}
+	s.closers = append(s.closers, smClient)
+	logger.Info("session-manager enabled",
+		"socket", cfg.Config.SessionManager.Socket,
+		"address", cfg.Config.SessionManager.Address)
 
 	// Create server.
 	srv, err := server.New(server.Config{
@@ -142,7 +72,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 
 	// Set POP3 protocol handler.
-	handler := Handler(cfg.Config.Hostname, authRouter, msgStore, smClient, cfg.TLSConfig, collector)
+	handler := Handler(cfg.Config.Hostname, smClient, cfg.TLSConfig, collector)
 	srv.SetHandler(handler)
 
 	s.server = srv

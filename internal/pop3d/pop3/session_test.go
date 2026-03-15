@@ -4,7 +4,6 @@ import (
 	"crypto/tls"
 	"testing"
 
-	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 )
 
@@ -137,8 +136,8 @@ func TestSessionAuthentication(t *testing.T) {
 		t.Error("Session should not be authenticated initially")
 	}
 
-	if sess.AuthSession() != nil {
-		t.Error("AuthSession() should return nil when not authenticated")
+	if sess.AuthenticatedUser() != nil {
+		t.Error("AuthenticatedUser() should return nil when not authenticated")
 	}
 
 	// Set username
@@ -148,13 +147,10 @@ func TestSessionAuthentication(t *testing.T) {
 	}
 
 	// Authenticate
-	authSession := &auth.AuthSession{
-		User: &auth.User{
-			Username: "testuser",
-			Mailbox:  "/var/mail/testuser",
-		},
-	}
-	sess.SetAuthenticated(authSession)
+	sess.SetAuthenticated(AuthenticatedUser{
+		Username: "testuser",
+		Mailbox:  "/var/mail/testuser",
+	})
 
 	// Should now be authenticated
 	if !sess.IsAuthenticated() {
@@ -165,8 +161,15 @@ func TestSessionAuthentication(t *testing.T) {
 		t.Errorf("State = %v, want %v", sess.State(), StateTransaction)
 	}
 
-	if sess.AuthSession() != authSession {
-		t.Error("AuthSession() should return the authenticated session")
+	user := sess.AuthenticatedUser()
+	if user == nil {
+		t.Fatal("AuthenticatedUser() should not be nil")
+	}
+	if user.Username != "testuser" {
+		t.Errorf("AuthenticatedUser().Username = %v, want testuser", user.Username)
+	}
+	if user.Mailbox != "/var/mail/testuser" {
+		t.Errorf("AuthenticatedUser().Mailbox = %v, want /var/mail/testuser", user.Mailbox)
 	}
 }
 
@@ -179,10 +182,7 @@ func TestSessionStateTransitions(t *testing.T) {
 	}
 
 	// Authenticate -> TRANSACTION
-	authSession := &auth.AuthSession{
-		User: &auth.User{Username: "test"},
-	}
-	sess.SetAuthenticated(authSession)
+	sess.SetAuthenticated(AuthenticatedUser{Username: "test"})
 
 	if sess.State() != StateTransaction {
 		t.Errorf("After SetAuthenticated state = %v, want %v", sess.State(), StateTransaction)
@@ -203,49 +203,49 @@ func TestSessionStateTransitions(t *testing.T) {
 
 func TestCapabilities(t *testing.T) {
 	tests := []struct {
-		name          string
-		mode          config.ListenerMode
-		isTLS         bool
-		tlsConfig     *tls.Config
-		wantCapCount  int
-		wantHasUser   bool
-		wantHasSTLS   bool
+		name         string
+		mode         config.ListenerMode
+		isTLS        bool
+		tlsConfig    *tls.Config
+		wantCapCount int
+		wantHasUser  bool
+		wantHasSTLS  bool
 	}{
 		{
-			name:          "ModePop3 without TLS config",
-			mode:          config.ModePop3,
-			isTLS:         false,
-			tlsConfig:     nil,
-			wantCapCount:  3, // TOP, UIDL, RESP-CODES
-			wantHasUser:   false,
-			wantHasSTLS:   false,
+			name:         "ModePop3 without TLS config",
+			mode:         config.ModePop3,
+			isTLS:        false,
+			tlsConfig:    nil,
+			wantCapCount: 3, // TOP, UIDL, RESP-CODES
+			wantHasUser:  false,
+			wantHasSTLS:  false,
 		},
 		{
-			name:          "ModePop3 with TLS config before upgrade",
-			mode:          config.ModePop3,
-			isTLS:         false,
-			tlsConfig:     &tls.Config{},
-			wantCapCount:  4, // TOP, UIDL, RESP-CODES, STLS
-			wantHasUser:   false,
-			wantHasSTLS:   true,
+			name:         "ModePop3 with TLS config before upgrade",
+			mode:         config.ModePop3,
+			isTLS:        false,
+			tlsConfig:    &tls.Config{},
+			wantCapCount: 4, // TOP, UIDL, RESP-CODES, STLS
+			wantHasUser:  false,
+			wantHasSTLS:  true,
 		},
 		{
-			name:          "ModePop3s with implicit TLS",
-			mode:          config.ModePop3s,
-			isTLS:         true,
-			tlsConfig:     &tls.Config{},
-			wantCapCount:  5, // USER, TOP, UIDL, RESP-CODES, SASL PLAIN
-			wantHasUser:   true,
-			wantHasSTLS:   false,
+			name:         "ModePop3s with implicit TLS",
+			mode:         config.ModePop3s,
+			isTLS:        true,
+			tlsConfig:    &tls.Config{},
+			wantCapCount: 5, // USER, TOP, UIDL, RESP-CODES, SASL PLAIN
+			wantHasUser:  true,
+			wantHasSTLS:  false,
 		},
 		{
-			name:          "ModePop3 after STARTTLS",
-			mode:          config.ModePop3,
-			isTLS:         true,
-			tlsConfig:     &tls.Config{},
-			wantCapCount:  5, // USER, TOP, UIDL, RESP-CODES, SASL PLAIN
-			wantHasUser:   true,
-			wantHasSTLS:   false,
+			name:         "ModePop3 after STARTTLS",
+			mode:         config.ModePop3,
+			isTLS:        true,
+			tlsConfig:    &tls.Config{},
+			wantCapCount: 5, // USER, TOP, UIDL, RESP-CODES, SASL PLAIN
+			wantHasUser:  true,
+			wantHasSTLS:  false,
 		},
 	}
 
@@ -284,16 +284,13 @@ func TestSessionCleanup(t *testing.T) {
 	sess := NewSession("test.example.com", config.ModePop3s, nil, true)
 
 	// Authenticate with a session
-	authSession := &auth.AuthSession{
-		User: &auth.User{Username: "test"},
-	}
-	sess.SetAuthenticated(authSession)
+	sess.SetAuthenticated(AuthenticatedUser{Username: "test"})
 
-	// Cleanup should zero the auth session
+	// Cleanup should clear the authenticated user
 	sess.Cleanup()
 
-	if sess.AuthSession() != nil {
-		t.Error("AuthSession should be nil after Cleanup()")
+	if sess.AuthenticatedUser() != nil {
+		t.Error("AuthenticatedUser should be nil after Cleanup()")
 	}
 }
 

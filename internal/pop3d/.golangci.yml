@@ -21,23 +21,25 @@ linters:
         - (*net.TCPListener).Close
     depguard:
       rules:
+        no-direct-auth:
+          files:
+            - "$all"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/auth"
+              desc: "authentication goes through session-manager, not the auth library"
+            - pkg: "github.com/infodancer/maildancer/auth/domain"
+              desc: "domain routing goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/errors"
+              desc: "auth errors are not used; session-manager handles authentication"
+            - pkg: "github.com/infodancer/maildancer/auth/passwd"
+              desc: "passwd backend is not used directly; session-manager handles authentication"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-session/client"
+              desc: "no direct subprocess spawning; use session-manager"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "mail-deliver is archived; delivery goes through session-manager or mail-session"
         session-manager-boundary:
           files:
             - "**/smclient*.go"
           deny:
             - pkg: "github.com/infodancer/maildancer/msgstore"
               desc: "session-manager code must use mail-session proto types, not msgstore"
-            - pkg: "github.com/infodancer/maildancer/auth"
-              desc: "authentication is the session-manager's responsibility"
-            - pkg: "github.com/infodancer/maildancer/auth/domain"
-              desc: "domain routing is the session-manager's responsibility"
-            - pkg: "github.com/infodancer/maildancer/internal/mail-session/client"
-              desc: "use proto types directly, not the convenience client"
-            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
-              desc: "mail-deliver is archived; use session-manager"
-        no-mail-deliver:
-          files:
-            - "$all"
-          deny:
-            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
-              desc: "mail-deliver is archived; delivery goes through session-manager or mail-session"

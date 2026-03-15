@@ -11,6 +11,20 @@ linters:
   settings:
     depguard:
       rules:
+        no-direct-auth:
+          deny:
+            - pkg: "github.com/infodancer/maildancer/auth"
+              desc: "imapd must not import auth — use session-manager for authentication"
+            - pkg: "github.com/infodancer/maildancer/auth/domain"
+              desc: "imapd must not import auth/domain — use session-manager for domain routing"
+            - pkg: "github.com/infodancer/maildancer/auth/errors"
+              desc: "imapd must not import auth/errors — use session-manager for authentication"
+            - pkg: "github.com/infodancer/maildancer/auth/passwd"
+              desc: "imapd must not import auth/passwd — use session-manager for authentication"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-session/client"
+              desc: "imapd must not import mail-session/client — use session-manager gRPC directly"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "imapd must not import mail-deliver — use session-manager for delivery"
         backend-no-maildir:
           files:
             - "**/internal/backend/**"
@@ -25,15 +39,3 @@ linters:
           deny:
             - pkg: "github.com/infodancer/maildancer/msgstore"
               desc: "smclient must not import msgstore — use raw gRPC types only"
-            - pkg: "github.com/infodancer/maildancer/auth"
-              desc: "smclient must not import auth — session-manager handles auth"
-            - pkg: "github.com/infodancer/maildancer/auth/domain"
-              desc: "smclient must not import auth/domain — session-manager handles domain routing"
-            - pkg: "github.com/infodancer/maildancer/internal/mail-session/client"
-              desc: "smclient must not import mail-session/client — use session-manager gRPC directly"
-            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
-              desc: "smclient must not import mail-deliver"
-        no-mail-deliver:
-          deny:
-            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
-              desc: "mail-deliver is deprecated — use session-manager for delivery"

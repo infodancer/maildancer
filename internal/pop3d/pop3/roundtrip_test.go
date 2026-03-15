@@ -1,14 +1,7 @@
 // Package pop3_test contains round-trip integration tests for the POP3 server.
 //
-// These tests wire the full stack — filesystem domain provider, passwd auth agent,
-// maildir message store, and POP3 protocol handler — and exercise the protocol
-// over a real TLS connection.
-//
-// Key regression covered: TestRoundTrip_MaildirCreatedAtAbsolutePath verifies that
-// an absolute base_path in a domain config.toml is used verbatim and not re-joined
-// with the domain config directory. The production bug (auth module predating the
-// filepath.IsAbs fix) caused writes to land in the read-only /etc config mount
-// instead of the writable /opt data mount.
+// These tests wire the full stack — mock session-manager gRPC server and POP3
+// protocol handler — and exercise the protocol over a real TLS connection.
 package pop3_test
 
 import (
@@ -26,124 +19,234 @@ import (
 	"math/big"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	authdomain "github.com/infodancer/maildancer/auth/domain"
-	"github.com/infodancer/maildancer/auth/passwd"
-	_ "github.com/infodancer/maildancer/auth/passwd"
-	"github.com/infodancer/maildancer/msgstore"
-	_ "github.com/infodancer/maildancer/msgstore/maildir"
+	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/metrics"
 	"github.com/infodancer/maildancer/internal/pop3d/pop3"
 	"github.com/infodancer/maildancer/internal/pop3d/server"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 // testEnv holds all the pieces needed to run a round-trip integration test.
-// The directory layout deliberately mirrors production:
-//
-//	configDir/   ← simulates read-only /etc/infodancer/domains (domain config)
-//	  test.local/
-//	    config.toml
-//	    passwd
-//	    keys/
-//	mailDir/     ← simulates writable /opt/infodancer/domains (mail data)
-//	  alice/Maildir/{cur,new,tmp}
-//	  bob/Maildir/{cur,new,tmp}
-//
-// The domain config.toml specifies base_path as the absolute path to mailDir.
-// This separation is what the production bug violated.
+// Authentication and mailbox operations are backed by a mock gRPC
+// session-manager server.
 type testEnv struct {
-	addr      string            // "127.0.0.1:PORT" of the POP3S listener
-	configDir string            // domains root (simulates /etc/infodancer/domains)
-	mailDir   string            // mail storage root (simulates /opt/infodancer/domains/users)
-	domain    string            // test domain name
-	store     msgstore.MsgStore // pre-opened store for delivering test messages
-	clientTLS *tls.Config       // client TLS config for test connections
+	addr      string       // "127.0.0.1:PORT" of the POP3S listener
+	clientTLS *tls.Config  // client TLS config for test connections
+	mockSM    *testSMState // shared state backing the mock session-manager
 
 	ln     net.Listener
 	wg     sync.WaitGroup
 	cancel context.CancelFunc
 }
 
-// newTestEnv starts a full POP3S server backed by real filesystem auth and maildir
-// storage. The server listens on a random localhost port. t.Cleanup handles teardown.
+// testSMState holds the in-memory state for the mock session-manager.
+type testSMState struct {
+	mu       sync.Mutex
+	users    map[string]string          // username -> password
+	messages map[string][]*testMessage  // username -> messages
+	deleted  map[string]map[uint32]bool // username -> set of deleted UIDs
+	nextUID  map[string]uint32          // username -> next UID to assign
+}
+
+type testMessage struct {
+	uid  uint32
+	data []byte
+}
+
+func newTestSMState() *testSMState {
+	return &testSMState{
+		users:    make(map[string]string),
+		messages: make(map[string][]*testMessage),
+		deleted:  make(map[string]map[uint32]bool),
+		nextUID:  make(map[string]uint32),
+	}
+}
+
+func (s *testSMState) addUser(username, password string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.users[username] = password
+	if _, ok := s.nextUID[username]; !ok {
+		s.nextUID[username] = 1
+	}
+}
+
+func (s *testSMState) deliverMessage(username, subject, body string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	uid := s.nextUID[username]
+	s.nextUID[username] = uid + 1
+	msg := fmt.Sprintf(
+		"From: sender@test.local\r\nTo: %s\r\nSubject: %s\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\n%s\r\n",
+		username, subject, body,
+	)
+	s.messages[username] = append(s.messages[username], &testMessage{uid: uid, data: []byte(msg)})
+}
+
+// testSessionService implements the session-manager's SessionService.
+type testSessionService struct {
+	smpb.UnimplementedSessionServiceServer
+	state *testSMState
+}
+
+func (s *testSessionService) Login(ctx context.Context, req *smpb.LoginRequest) (*smpb.LoginResponse, error) {
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+
+	pass, ok := s.state.users[req.Username]
+	if !ok || pass != req.Password {
+		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
+	}
+
+	// Session token is just the username for test purposes.
+	return &smpb.LoginResponse{
+		SessionToken: req.Username,
+		Mailbox:      req.Username,
+	}, nil
+}
+
+func (s *testSessionService) Logout(ctx context.Context, req *smpb.LogoutRequest) (*smpb.LogoutResponse, error) {
+	return &smpb.LogoutResponse{}, nil
+}
+
+// testMailboxService implements the mail-session's MailboxService.
+type testMailboxService struct {
+	pb.UnimplementedMailboxServiceServer
+	state *testSMState
+}
+
+func (s *testMailboxService) tokenUser(ctx context.Context) string {
+	// Extract session token from gRPC metadata (set by tokenCtx in smclient).
+	md, ok := metadata.FromIncomingContext(ctx)
+	if ok {
+		vals := md.Get("session-token")
+		if len(vals) > 0 {
+			return vals[0]
+		}
+	}
+	return ""
+}
+
+func (s *testMailboxService) List(ctx context.Context, req *pb.ListRequest) (*pb.ListResponse, error) {
+	user := s.tokenUser(ctx)
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+
+	var msgs []*pb.MessageInfo
+	deleted := s.state.deleted[user]
+	for _, m := range s.state.messages[user] {
+		if deleted != nil && deleted[m.uid] {
+			continue
+		}
+		msgs = append(msgs, &pb.MessageInfo{
+			Uid:  m.uid,
+			Size: int64(len(m.data)),
+		})
+	}
+	return &pb.ListResponse{Messages: msgs}, nil
+}
+
+func (s *testMailboxService) Stat(ctx context.Context, req *pb.StatRequest) (*pb.StatResponse, error) {
+	user := s.tokenUser(ctx)
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+
+	var count int32
+	var total int64
+	deleted := s.state.deleted[user]
+	for _, m := range s.state.messages[user] {
+		if deleted != nil && deleted[m.uid] {
+			continue
+		}
+		count++
+		total += int64(len(m.data))
+	}
+	return &pb.StatResponse{Count: count, TotalBytes: total}, nil
+}
+
+func (s *testMailboxService) Fetch(req *pb.FetchRequest, stream grpc.ServerStreamingServer[pb.FetchResponse]) error {
+	ctx := stream.Context()
+	user := s.tokenUser(ctx)
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+
+	for _, m := range s.state.messages[user] {
+		if m.uid == req.Uid {
+			return stream.Send(&pb.FetchResponse{Data: m.data})
+		}
+	}
+	return status.Error(codes.NotFound, "message not found")
+}
+
+func (s *testMailboxService) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb.DeleteResponse, error) {
+	user := s.tokenUser(ctx)
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+
+	if s.state.deleted[user] == nil {
+		s.state.deleted[user] = make(map[uint32]bool)
+	}
+	s.state.deleted[user][req.Uid] = true
+	return &pb.DeleteResponse{}, nil
+}
+
+func (s *testMailboxService) Expunge(ctx context.Context, req *pb.ExpungeRequest) (*pb.ExpungeResponse, error) {
+	user := s.tokenUser(ctx)
+	s.state.mu.Lock()
+	defer s.state.mu.Unlock()
+
+	deleted := s.state.deleted[user]
+	if deleted == nil {
+		return &pb.ExpungeResponse{}, nil
+	}
+
+	var remaining []*testMessage
+	for _, m := range s.state.messages[user] {
+		if !deleted[m.uid] {
+			remaining = append(remaining, m)
+		}
+	}
+	s.state.messages[user] = remaining
+	delete(s.state.deleted, user)
+	return &pb.ExpungeResponse{}, nil
+}
+
+// newTestEnv starts a full POP3S server backed by a mock session-manager gRPC server.
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 
-	dir := t.TempDir()
+	smState := newTestSMState()
 
-	// configDir is the domain config root — read-only in production (/etc mount).
-	configDir := filepath.Join(dir, "config", "domains")
-	// mailDir is the mail data root — writable in production (/opt mount).
-	mailDir := filepath.Join(dir, "mail", "users")
-
-	const domainName = "test.local"
-	domainConfigDir := filepath.Join(configDir, domainName)
-
-	for _, d := range []string{
-		domainConfigDir,
-		filepath.Join(domainConfigDir, "keys"),
-		mailDir,
-	} {
-		if err := os.MkdirAll(d, 0755); err != nil {
-			t.Fatalf("mkdir %s: %v", d, err)
-		}
+	// Start mock session-manager gRPC server.
+	smDir := t.TempDir()
+	smSocket := smDir + "/sm.sock"
+	smLn, err := net.Listen("unix", smSocket)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
 	}
-
-	// Write domain config.toml with an ABSOLUTE base_path pointing into mailDir.
-	// The critical invariant: mailDir is completely separate from domainConfigDir.
-	// If the auth module incorrectly joins an absolute path with domainConfigDir,
-	// the Maildir will be created inside the config tree instead of here.
-	configTOML := fmt.Sprintf(`[auth]
-type = "passwd"
-credential_backend = "passwd"
-key_backend = "keys"
-
-[msgstore]
-type = "maildir"
-base_path = %q
-
-[msgstore.options]
-maildir_subdir = "Maildir"
-path_template = "{localpart}"
-`, mailDir)
-	if err := os.WriteFile(filepath.Join(domainConfigDir, "config.toml"), []byte(configTOML), 0644); err != nil {
-		t.Fatalf("write config.toml: %v", err)
-	}
-
-	// Create an empty passwd file (users are added via env.addUser).
-	passwdPath := filepath.Join(domainConfigDir, "passwd")
-	if f, err := os.Create(passwdPath); err != nil {
-		t.Fatalf("create passwd: %v", err)
-	} else {
-		_ = f.Close()
-	}
+	smSrv := grpc.NewServer()
+	smpb.RegisterSessionServiceServer(smSrv, &testSessionService{state: smState})
+	pb.RegisterMailboxServiceServer(smSrv, &testMailboxService{state: smState})
+	go func() { _ = smSrv.Serve(smLn) }()
+	t.Cleanup(func() { smSrv.GracefulStop(); _ = os.RemoveAll(smDir) })
 
 	serverTLS, clientTLS := generateTestTLS(t)
 
-	// Wire the domain provider and auth router.
-	logger := logging.NewLogger("error")
-	domainProvider := authdomain.NewFilesystemDomainProvider(configDir, logger)
-	authRouter := authdomain.NewAuthRouter(domainProvider, nil)
+	smCfg := config.SessionManagerConfig{Socket: smSocket}
 
-	// Open a local store for delivering messages in test setup. This uses the
-	// same configuration as the domain provider's store so paths match.
-	store, err := msgstore.Open(msgstore.StoreConfig{
-		Type:     "maildir",
-		BasePath: mailDir,
-		Options:  map[string]string{"maildir_subdir": "Maildir"},
-	})
-	if err != nil {
-		t.Fatalf("open test store: %v", err)
-	}
-
-	handler := pop3.Handler("mail.test.local", authRouter, nil, nil, serverTLS, &metrics.NoopCollector{})
+	handler := pop3.Handler("mail.test.local", mustSMClient(t, smCfg), serverTLS, &metrics.NoopCollector{})
 
 	// Bind on a random localhost port.
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)
@@ -155,11 +258,8 @@ path_template = "{localpart}"
 
 	env := &testEnv{
 		addr:      ln.Addr().String(),
-		configDir: configDir,
-		mailDir:   mailDir,
-		domain:    domainName,
-		store:     store,
 		clientTLS: clientTLS,
+		mockSM:    smState,
 		ln:        ln,
 		cancel:    cancel,
 	}
@@ -197,27 +297,27 @@ path_template = "{localpart}"
 	return env
 }
 
-// addUser adds a user to the domain's passwd file.
-// Must be called before the first connection (domain is cached after first auth).
-func (e *testEnv) addUser(t *testing.T, username, password string) {
+// mustSMClient creates a SessionManagerClient or fails the test.
+func mustSMClient(t *testing.T, cfg config.SessionManagerConfig) *pop3.SessionManagerClient {
 	t.Helper()
-	passwdPath := filepath.Join(e.configDir, e.domain, "passwd")
-	if err := passwd.AddUser(passwdPath, username, password); err != nil {
-		t.Fatalf("addUser(%s): %v", username, err)
+	client, err := pop3.NewSessionManagerClient(cfg, nil)
+	if err != nil {
+		t.Fatalf("NewSessionManagerClient: %v", err)
 	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
 }
 
-// deliverMessage places a test message in the specified mailbox via the store.
+// addUser adds a user to the mock session-manager.
+func (e *testEnv) addUser(t *testing.T, username, password string) {
+	t.Helper()
+	e.mockSM.addUser(username+"@test.local", password)
+}
+
+// deliverMessage places a test message for the specified user.
 func (e *testEnv) deliverMessage(t *testing.T, mailbox, subject, body string) {
 	t.Helper()
-	msg := fmt.Sprintf(
-		"From: sender@test.local\r\nTo: %s@%s\r\nSubject: %s\r\nDate: Mon, 01 Jan 2024 00:00:00 +0000\r\n\r\n%s\r\n",
-		mailbox, e.domain, subject, body,
-	)
-	env := msgstore.Envelope{Recipients: []string{mailbox}}
-	if err := e.store.Deliver(context.Background(), env, strings.NewReader(msg)); err != nil {
-		t.Fatalf("deliverMessage(%s): %v", mailbox, err)
-	}
+	e.mockSM.deliverMessage(mailbox+"@test.local", subject, body)
 }
 
 // dial opens a TLS connection to the test server and wraps it in a pop3TestClient.
@@ -365,16 +465,6 @@ func (c *pop3TestClient) Auth(t *testing.T, user, pass string) {
 	c.mustOK(t)
 }
 
-// AuthExpectFail performs USER/PASS and expects -ERR on PASS.
-func (c *pop3TestClient) AuthExpectFail(t *testing.T, user, pass string) string {
-	t.Helper()
-	c.send(t, "USER "+user)
-	// USER may succeed or fail depending on whether the user exists at that point
-	c.readLine() // consume USER response
-	c.send(t, "PASS "+pass)
-	return c.mustErr(t)
-}
-
 // AuthPlain authenticates using AUTH PLAIN with inline credentials.
 func (c *pop3TestClient) AuthPlain(t *testing.T, user, pass string) {
 	t.Helper()
@@ -516,48 +606,6 @@ func TestRoundTrip_AuthUserPass_Success(t *testing.T) {
 	c.Quit(t)
 }
 
-// TestRoundTrip_MaildirCreatedAtAbsolutePath is the primary regression test for
-// the production bug where the auth module joined an absolute base_path with the
-// domain config directory instead of using it verbatim.
-//
-// Production symptom: "mkdir /etc/infodancer/domains/triggerfinger.blog/opt: read-only
-// file system" because /etc was a read-only config mount and the path was being
-// constructed as configDir + absoluteDataPath instead of just absoluteDataPath.
-//
-// The test verifies:
-//  1. Maildir is created under mailDir (the absolute path in config.toml).
-//  2. Maildir is NOT created anywhere under configDir.
-func TestRoundTrip_MaildirCreatedAtAbsolutePath(t *testing.T) {
-	env := newTestEnv(t)
-	env.addUser(t, "alice", "testpass")
-
-	c := env.dial(t)
-	c.Greet(t)
-	c.Auth(t, "alice@test.local", "testpass")
-	c.Quit(t)
-
-	// The Maildir MUST be at the correct absolute path.
-	wantMaildir := filepath.Join(env.mailDir, "alice", "Maildir")
-	if _, err := os.Stat(wantMaildir); os.IsNotExist(err) {
-		t.Errorf("Maildir not created at expected absolute path %q", wantMaildir)
-	}
-
-	// The Maildir MUST NOT have been created under the domain config directory.
-	// The buggy path would be: configDir/test.local/<tail of absolute path>
-	domainDir := filepath.Join(env.configDir, env.domain)
-	entries, err := os.ReadDir(domainDir)
-	if err != nil {
-		t.Fatalf("read domain dir: %v", err)
-	}
-	unexpected := map[string]bool{"opt": true, "users": true, "Maildir": true, "alice": true}
-	for _, e := range entries {
-		if unexpected[e.Name()] {
-			t.Errorf("unexpected entry %q in domain config dir (basePath bug): entries=%v",
-				e.Name(), entries)
-		}
-	}
-}
-
 func TestRoundTrip_AuthUserPass_WrongPassword(t *testing.T) {
 	env := newTestEnv(t)
 	env.addUser(t, "alice", "correctpass")
@@ -576,17 +624,6 @@ func TestRoundTrip_AuthUserPass_UnknownUser(t *testing.T) {
 	c := env.dial(t)
 	c.Greet(t)
 	c.send(t, "USER nobody@test.local")
-	c.mustOK(t)
-	c.send(t, "PASS anypass")
-	c.mustErr(t)
-}
-
-func TestRoundTrip_AuthUserPass_UnknownDomain(t *testing.T) {
-	env := newTestEnv(t)
-
-	c := env.dial(t)
-	c.Greet(t)
-	c.send(t, "USER alice@nosuchdomain.org")
 	c.mustOK(t)
 	c.send(t, "PASS anypass")
 	c.mustErr(t)
@@ -651,7 +688,6 @@ func TestRoundTrip_CommandsRequireAuth(t *testing.T) {
 	c := env.dial(t)
 	c.Greet(t)
 
-	// NOOP is allowed in AUTHORIZATION state (RFC 1939 does not restrict it)
 	cmds := []string{"STAT", "LIST", "RETR 1", "DELE 1", "RSET", "UIDL", "TOP 1 0"}
 	for _, cmd := range cmds {
 		c.send(t, cmd)
@@ -837,7 +873,6 @@ func TestRoundTrip_MultiMessage_ListRetrUidl(t *testing.T) {
 	// Retrieve all messages and verify content.
 	for i := 1; i <= n; i++ {
 		content := c.Retr(t, i)
-		// Note: message order from maildir is not guaranteed; just verify non-empty.
 		if content == "" {
 			t.Errorf("message %d: empty content", i)
 		}
@@ -944,7 +979,7 @@ func TestRoundTrip_Quit_BeforeAuth(t *testing.T) {
 }
 
 func TestRoundTrip_DomainIsolation(t *testing.T) {
-	// Two users in the same domain; each sees only their own messages.
+	// Two users; each sees only their own messages.
 	env := newTestEnv(t)
 	env.addUser(t, "alice", "alicepass")
 	env.addUser(t, "bob", "bobpass")

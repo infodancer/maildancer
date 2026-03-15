@@ -7,63 +7,46 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/infodancer/maildancer/auth/passwd"      // Register passwd backend
-	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir backend
-
+	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/pop3"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestStack_POP3FullStack(t *testing.T) {
-	// Create temp dir tree: domainsDir/test.local/{config.toml, passwd, keys/, users/alice/{new,cur,tmp}/}
-	domainsDir := t.TempDir()
-	domainDir := filepath.Join(domainsDir, "test.local")
-	keysDir := filepath.Join(domainDir, "keys")
-	aliceNewDir := filepath.Join(domainDir, "users", "alice", "new")
-	aliceCurDir := filepath.Join(domainDir, "users", "alice", "cur")
-	aliceTmpDir := filepath.Join(domainDir, "users", "alice", "tmp")
-
-	for _, d := range []string{keysDir, aliceNewDir, aliceCurDir, aliceTmpDir} {
-		if err := os.MkdirAll(d, 0700); err != nil {
-			t.Fatalf("mkdir %s: %v", d, err)
-		}
-	}
-
-	// Write domain config.toml.
-	configTOML := `[auth]
-type = "passwd"
-credential_backend = "passwd"
-key_backend = "keys"
-
-[msgstore]
-type = "maildir"
-base_path = "users"
-`
-	if err := os.WriteFile(filepath.Join(domainDir, "config.toml"), []byte(configTOML), 0600); err != nil {
-		t.Fatalf("write config.toml: %v", err)
-	}
-
-	// Generate argon2id hash for "testpass" and write passwd file.
-	hash, err := hashPassword("testpass")
+	// Start mock session-manager gRPC server.
+	smDir := t.TempDir()
+	smSocket := smDir + "/sm.sock"
+	smLn, err := net.Listen("unix", smSocket)
 	if err != nil {
-		t.Fatalf("hashPassword: %v", err)
-	}
-	passwdContent := fmt.Sprintf("alice:%s:alice\n", hash)
-	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwdContent), 0600); err != nil {
-		t.Fatalf("write passwd: %v", err)
+		t.Fatalf("listen unix: %v", err)
 	}
 
-	// Pre-populate alice's new/ with a test message.
-	testMsg := "From: sender@example.com\r\nTo: alice@test.local\r\nSubject: Test\r\n\r\nHello, world!\r\n"
-	if err := os.WriteFile(filepath.Join(aliceNewDir, "testmsg"), []byte(testMsg), 0600); err != nil {
-		t.Fatalf("write testmsg: %v", err)
+	sessionSvc := &integrationSessionService{
+		users: map[string]string{"alice@test.local": "testpass"},
 	}
+	mailboxSvc := &integrationMailboxService{
+		messages: map[string][]*pb.MessageInfo{
+			"alice@test.local": {{Uid: 1, Size: 42}},
+		},
+		bodies: map[uint32][]byte{
+			1: []byte("From: sender@example.com\r\nTo: alice@test.local\r\nSubject: Test\r\n\r\nHello, world!\r\n"),
+		},
+	}
+
+	smSrv := grpc.NewServer()
+	smpb.RegisterSessionServiceServer(smSrv, sessionSvc)
+	pb.RegisterMailboxServiceServer(smSrv, mailboxSvc)
+	go func() { _ = smSrv.Serve(smLn) }()
+	t.Cleanup(func() { smSrv.GracefulStop() })
 
 	// Pick a free port.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -76,7 +59,7 @@ base_path = "users"
 	// Build config.
 	cfg := config.Default()
 	cfg.Hostname = "test.local"
-	cfg.DomainsPath = domainsDir
+	cfg.SessionManager = config.SessionManagerConfig{Socket: smSocket}
 	cfg.Listeners = []config.ListenerConfig{
 		{Address: addr, Mode: config.ModePop3},
 	}
@@ -177,4 +160,66 @@ base_path = "users"
 	// QUIT.
 	sendLine("QUIT")
 	readLine()
+}
+
+// integrationSessionService is a simple session service for integration tests.
+type integrationSessionService struct {
+	smpb.UnimplementedSessionServiceServer
+	users map[string]string
+}
+
+func (s *integrationSessionService) Login(ctx context.Context, req *smpb.LoginRequest) (*smpb.LoginResponse, error) {
+	pass, ok := s.users[req.Username]
+	if !ok || pass != req.Password {
+		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
+	}
+	return &smpb.LoginResponse{
+		SessionToken: req.Username,
+		Mailbox:      req.Username,
+	}, nil
+}
+
+func (s *integrationSessionService) Logout(ctx context.Context, req *smpb.LogoutRequest) (*smpb.LogoutResponse, error) {
+	return &smpb.LogoutResponse{}, nil
+}
+
+// integrationMailboxService is a simple mailbox service for integration tests.
+type integrationMailboxService struct {
+	pb.UnimplementedMailboxServiceServer
+	messages map[string][]*pb.MessageInfo
+	bodies   map[uint32][]byte
+}
+
+func (s *integrationMailboxService) List(ctx context.Context, req *pb.ListRequest) (*pb.ListResponse, error) {
+	user := tokenFromCtx(ctx)
+	return &pb.ListResponse{Messages: s.messages[user]}, nil
+}
+
+func (s *integrationMailboxService) Stat(ctx context.Context, req *pb.StatRequest) (*pb.StatResponse, error) {
+	user := tokenFromCtx(ctx)
+	msgs := s.messages[user]
+	var total int64
+	for _, m := range msgs {
+		total += m.Size
+	}
+	return &pb.StatResponse{Count: int32(len(msgs)), TotalBytes: total}, nil
+}
+
+func (s *integrationMailboxService) Fetch(req *pb.FetchRequest, stream grpc.ServerStreamingServer[pb.FetchResponse]) error {
+	body, ok := s.bodies[req.Uid]
+	if !ok {
+		return status.Error(codes.NotFound, "message not found")
+	}
+	return stream.Send(&pb.FetchResponse{Data: body})
+}
+
+func tokenFromCtx(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if ok {
+		vals := md.Get("session-token")
+		if len(vals) > 0 {
+			return vals[0]
+		}
+	}
+	return ""
 }

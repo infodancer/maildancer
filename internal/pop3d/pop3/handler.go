@@ -8,7 +8,6 @@ import (
 	"net"
 	"strings"
 
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/metrics"
@@ -16,21 +15,18 @@ import (
 )
 
 // Handler creates a POP3 protocol handler with the given configuration.
-// When smClient is non-nil, authentication and mailbox operations are delegated
-// to the session-manager instead of the domain auth router and local store.
-func Handler(hostname string, auth DomainAuthenticator, msgStore msgstore.MessageStore, smClient *SessionManagerClient, tlsConfig *tls.Config, collector metrics.Collector) server.ConnectionHandler {
-	// Register authentication commands with the auth router and message store
-	RegisterAuthCommands(auth, msgStore, smClient)
-	// Register transaction commands
+// Authentication and mailbox operations are delegated to the session-manager.
+func Handler(hostname string, smClient *SessionManagerClient, tlsConfig *tls.Config, collector metrics.Collector) server.ConnectionHandler {
+	RegisterAuthCommands(smClient)
 	RegisterTransactionCommands()
 
 	return func(ctx context.Context, conn *server.Connection) {
-		handleConnection(ctx, conn, hostname, msgStore, tlsConfig, collector)
+		handleConnection(ctx, conn, hostname, tlsConfig, collector)
 	}
 }
 
 // handleConnection manages a single POP3 connection.
-func handleConnection(ctx context.Context, conn *server.Connection, hostname string, msgStore msgstore.MessageStore, tlsConfig *tls.Config, collector metrics.Collector) {
+func handleConnection(ctx context.Context, conn *server.Connection, hostname string, tlsConfig *tls.Config, collector metrics.Collector) {
 	logger := logging.FromContext(ctx)
 
 	// Record connection opened

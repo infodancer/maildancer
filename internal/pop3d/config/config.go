@@ -54,51 +54,20 @@ func (c *SessionManagerConfig) IsEnabled() bool {
 // ServerConfig holds shared settings used by all mail services.
 // These are read from the [server] section of the shared config file.
 type ServerConfig struct {
-	Hostname        string    `toml:"hostname"`
-	Maildir         string    `toml:"maildir"`
-	DomainsPath     string    `toml:"domains_path"`
-	DomainsDataPath string    `toml:"domains_data_path"`
-	TLS             TLSConfig `toml:"tls"`
+	Hostname string    `toml:"hostname"`
+	TLS      TLSConfig `toml:"tls"`
 }
 
 // Config holds the POP3-specific server configuration.
 type Config struct {
-	Hostname        string               `toml:"hostname"`
-	LogLevel        string               `toml:"log_level"`
-	Listeners       []ListenerConfig     `toml:"listeners"`
-	TLS             TLSConfig            `toml:"tls"`
-	Timeouts        TimeoutsConfig       `toml:"timeouts"`
-	Limits          LimitsConfig         `toml:"limits"`
-	Metrics         MetricsConfig        `toml:"metrics"`
-	Maildir         string               `toml:"maildir"`
-	DomainsPath     string               `toml:"domains_path"`
-	DomainsDataPath string               `toml:"domains_data_path"`
-	MailSessionPath string               `toml:"mail_session"` // path to the mail-session binary
-	Auth            AuthConfig           `toml:"auth"`
-	SessionManager  SessionManagerConfig `toml:"-"` // populated from [session-manager] top-level section
-}
-
-// AuthConfig holds configuration for the authentication agent.
-type AuthConfig struct {
-	// Type is the authentication backend type (e.g., "passwd", "ldap", "database").
-	Type string `toml:"type"`
-
-	// CredentialBackend is the path or connection string for credential storage.
-	// For passwd: path to the passwd file (e.g., "/etc/mail/passwd")
-	// For LDAP: connection URL (e.g., "ldaps://ldap.example.com")
-	CredentialBackend string `toml:"credential_backend"`
-
-	// KeyBackend is the path or connection string for key storage.
-	// For passwd/LDAP: path to key directory (e.g., "/etc/mail/keys")
-	KeyBackend string `toml:"key_backend"`
-
-	// Options contains implementation-specific settings.
-	Options map[string]string `toml:"options"`
-}
-
-// IsConfigured returns true if auth configuration is specified.
-func (c *AuthConfig) IsConfigured() bool {
-	return c.Type != ""
+	Hostname       string               `toml:"hostname"`
+	LogLevel       string               `toml:"log_level"`
+	Listeners      []ListenerConfig     `toml:"listeners"`
+	TLS            TLSConfig            `toml:"tls"`
+	Timeouts       TimeoutsConfig       `toml:"timeouts"`
+	Limits         LimitsConfig         `toml:"limits"`
+	Metrics        MetricsConfig        `toml:"metrics"`
+	SessionManager SessionManagerConfig `toml:"-"` // populated from [session-manager] top-level section
 }
 
 // ListenerConfig defines settings for a single listener.
@@ -213,16 +182,6 @@ func (c *Config) Validate() error {
 		}
 		if c.Metrics.Path == "" {
 			return errors.New("metrics path is required when metrics are enabled")
-		}
-	}
-
-	// Validate auth config if type is specified
-	if c.Auth.Type != "" {
-		if c.Auth.CredentialBackend == "" {
-			return errors.New("auth.credential_backend is required when auth.type is set")
-		}
-		if c.Auth.KeyBackend == "" {
-			return errors.New("auth.key_backend is required when auth.type is set")
 		}
 	}
 

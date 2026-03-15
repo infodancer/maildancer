@@ -6,10 +6,17 @@ import (
 	"io"
 
 	"github.com/emersion/go-sasl"
-	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 )
+
+// AuthenticatedUser holds the identity of a successfully authenticated user.
+// This replaces auth.AuthSession — pop3d no longer depends on the auth library
+// directly; authentication is delegated to the session-manager.
+type AuthenticatedUser struct {
+	Username string
+	Mailbox  string
+}
 
 // State represents the current state in the POP3 state machine.
 type State int
@@ -75,9 +82,9 @@ type Session struct {
 	insecureAuth bool // true when no TLS is configured (allows plaintext auth)
 
 	// Authentication state
-	clientIP    string // Client IP for rate limiting
-	username    string
-	authSession *auth.AuthSession
+	clientIP          string // Client IP for rate limiting
+	username          string
+	authenticatedUser *AuthenticatedUser
 
 	// SASL state (for multi-step authentication exchanges)
 	saslServer sasl.Server // Active SASL server during exchange
@@ -170,10 +177,9 @@ func (s *Session) Username() string {
 }
 
 // SetAuthenticated transitions to StateTransaction after successful authentication.
-// Stores the AuthSession for later use.
-func (s *Session) SetAuthenticated(authSession *auth.AuthSession) {
+func (s *Session) SetAuthenticated(user AuthenticatedUser) {
 	s.state = StateTransaction
-	s.authSession = authSession
+	s.authenticatedUser = &user
 }
 
 // IsAuthenticated returns true if in StateTransaction or StateUpdate.
@@ -181,9 +187,9 @@ func (s *Session) IsAuthenticated() bool {
 	return s.state == StateTransaction || s.state == StateUpdate
 }
 
-// AuthSession returns the authentication session, or nil if not authenticated.
-func (s *Session) AuthSession() *auth.AuthSession {
-	return s.authSession
+// AuthenticatedUser returns the authenticated user, or nil if not authenticated.
+func (s *Session) AuthenticatedUser() *AuthenticatedUser {
+	return s.authenticatedUser
 }
 
 // EnterUpdate transitions to StateUpdate (called when QUIT is received in Transaction).
@@ -244,7 +250,6 @@ func (s *Session) Capabilities() []string {
 }
 
 // Cleanup performs cleanup when the session ends.
-// Zeros sensitive key material if authenticated.
 // If the store implements io.Closer (e.g. session-manager store), it is closed
 // to release the remote session.
 func (s *Session) Cleanup() {
@@ -252,10 +257,7 @@ func (s *Session) Cleanup() {
 		_ = c.Close()
 		s.store = nil
 	}
-	if s.authSession != nil {
-		s.authSession.Clear()
-		s.authSession = nil
-	}
+	s.authenticatedUser = nil
 }
 
 // InitializeMailbox loads the message list for the authenticated user's mailbox.
@@ -267,11 +269,11 @@ func (s *Session) Cleanup() {
 // If the folder does not exist or the store does not support folders, the session
 // falls back to the normal inbox — consistent with delivery behavior.
 func (s *Session) InitializeMailbox(ctx context.Context, store msgstore.MessageStore, folder string) error {
-	if s.authSession == nil || s.authSession.User == nil {
+	if s.authenticatedUser == nil {
 		return ErrMailboxNotInitialized
 	}
 
-	s.mailbox = s.authSession.User.Mailbox
+	s.mailbox = s.authenticatedUser.Mailbox
 	s.deletedSet = make(map[int]bool)
 
 	// If a +extension was specified, try to route to the corresponding folder.

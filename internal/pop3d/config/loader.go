@@ -17,8 +17,6 @@ type Flags struct {
 	TLSCert        string
 	TLSKey         string
 	MaxConnections int
-	Maildir        string
-	DomainsPath    string
 }
 
 // ParseFlags parses command-line flags and returns a Flags struct.
@@ -32,8 +30,6 @@ func ParseFlags() *Flags {
 	flag.StringVar(&f.TLSCert, "tls-cert", "", "TLS certificate file path")
 	flag.StringVar(&f.TLSKey, "tls-key", "", "TLS key file path")
 	flag.IntVar(&f.MaxConnections, "max-connections", 0, "Maximum concurrent connections")
-	flag.StringVar(&f.Maildir, "maildir", "", "Maildir path for message storage")
-	flag.StringVar(&f.DomainsPath, "domains", "", "Path to per-domain configuration directory")
 
 	flag.Parse()
 	return f
@@ -41,7 +37,7 @@ func ParseFlags() *Flags {
 
 // Load parses a TOML configuration file and returns the Config.
 // If the file does not exist, returns the default configuration.
-// The loader reads from [server] for global settings (hostname, paths, TLS) and
+// The loader reads from [server] for global settings (hostname, TLS) and
 // [pop3d] for protocol-specific settings (log_level, listeners, timeouts, limits).
 func Load(path string) (Config, error) {
 	cfg := Default()
@@ -101,14 +97,6 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 		cfg.Limits.MaxConnections = f.MaxConnections
 	}
 
-	if f.Maildir != "" {
-		cfg.Maildir = f.Maildir
-	}
-
-	if f.DomainsPath != "" {
-		cfg.DomainsPath = f.DomainsPath
-	}
-
 	return cfg
 }
 
@@ -128,21 +116,6 @@ func mergeServerConfig(dst Config, src ServerConfig) Config {
 		dst.Hostname = src.Hostname
 	}
 
-	if src.Maildir != "" {
-		dst.Maildir = src.Maildir
-	}
-
-	if src.DomainsPath != "" {
-		dst.DomainsPath = src.DomainsPath
-	}
-
-	// Maildir is a webadmin-facing alias for DomainsDataPath.
-	if src.DomainsDataPath != "" {
-		dst.DomainsDataPath = src.DomainsDataPath
-	} else if src.Maildir != "" && dst.DomainsDataPath == "" {
-		dst.DomainsDataPath = src.Maildir
-	}
-
 	if src.TLS.CertFile != "" {
 		dst.TLS.CertFile = src.TLS.CertFile
 	}
@@ -159,8 +132,8 @@ func mergeServerConfig(dst Config, src ServerConfig) Config {
 }
 
 // mergeConfig merges pop3d-specific values from [pop3d] into dst.
-// Global settings (hostname, domains_path, domains_data_path, maildir, TLS)
-// come from [server] via mergeServerConfig and are not read from [pop3d].
+// Global settings (hostname, TLS) come from [server] via mergeServerConfig
+// and are not read from [pop3d].
 func mergeConfig(dst, src Config) Config {
 	if src.LogLevel != "" {
 		dst.LogLevel = src.LogLevel
@@ -197,25 +170,6 @@ func mergeConfig(dst, src Config) Config {
 
 	if src.Metrics.Path != "" {
 		dst.Metrics.Path = src.Metrics.Path
-	}
-
-	// Merge auth config
-	if src.Auth.Type != "" {
-		dst.Auth.Type = src.Auth.Type
-	}
-	if src.Auth.CredentialBackend != "" {
-		dst.Auth.CredentialBackend = src.Auth.CredentialBackend
-	}
-	if src.Auth.KeyBackend != "" {
-		dst.Auth.KeyBackend = src.Auth.KeyBackend
-	}
-	if src.Auth.Options != nil {
-		if dst.Auth.Options == nil {
-			dst.Auth.Options = make(map[string]string)
-		}
-		for k, v := range src.Auth.Options {
-			dst.Auth.Options[k] = v
-		}
 	}
 
 	return dst

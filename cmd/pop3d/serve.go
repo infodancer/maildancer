@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/infodancer/maildancer/internal/pop3d/config"
@@ -30,20 +30,6 @@ func runServe() {
 
 	logger := logging.NewLogger(cfg.LogLevel)
 
-	// Resolve config path to absolute so subprocesses find it regardless of cwd.
-	configPath, err := filepath.Abs(flags.ConfigPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error resolving config path: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Locate our own executable for subprocess spawning.
-	execPath, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error determining executable path: %v\n", err)
-		os.Exit(1)
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -55,8 +41,21 @@ func runServe() {
 		cancel()
 	}()
 
-	// Metrics HTTP server runs in the parent process. Per-connection metrics
-	// are not aggregated from subprocesses in this release.
+	// Load TLS configuration if specified.
+	var tlsConfig *tls.Config
+	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading TLS certificate: %v\n", err)
+			os.Exit(1)
+		}
+		tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   cfg.TLS.MinTLSVersion(),
+		}
+	}
+
+	// Metrics HTTP server.
 	if cfg.Metrics.Enabled {
 		metricsServer := metrics.NewPrometheusServer(cfg.Metrics.Address, cfg.Metrics.Path)
 		go func() {
@@ -68,11 +67,24 @@ func runServe() {
 
 	logger.Info("starting pop3d",
 		"hostname", cfg.Hostname,
-		"listeners", len(cfg.Listeners),
-		"exec", execPath)
+		"listeners", len(cfg.Listeners))
 
-	srv := pop3.NewSubprocessServer(cfg.Listeners, execPath, configPath, cfg.DomainsPath, cfg.MailSessionPath, logger)
-	if err := srv.Run(ctx); err != nil && err != context.Canceled {
+	stack, err := pop3.NewStack(pop3.StackConfig{
+		Config:    cfg,
+		TLSConfig: tlsConfig,
+		Logger:    logger,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error creating stack: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := stack.Close(); err != nil {
+			logger.Error("error closing stack", "error", err)
+		}
+	}()
+
+	if err := stack.Run(ctx); err != nil && err != context.Canceled {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)
 	}

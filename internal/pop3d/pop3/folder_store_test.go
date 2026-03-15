@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 )
@@ -119,11 +118,9 @@ func (m *mockFolderStore) UIDNext(_ context.Context, _, _ string) (uint32, error
 // helper: authenticated session ready for InitializeMailbox
 func newAuthenticatedSession() *Session {
 	sess := NewSession("test.example.com", config.ModePop3s, nil, true)
-	sess.SetAuthenticated(&auth.AuthSession{
-		User: &auth.User{
-			Username: "testuser",
-			Mailbox:  "/var/mail/testuser",
-		},
+	sess.SetAuthenticated(AuthenticatedUser{
+		Username: "testuser",
+		Mailbox:  "/var/mail/testuser",
 	})
 	return sess
 }

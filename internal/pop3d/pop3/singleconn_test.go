@@ -9,22 +9,36 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/infodancer/maildancer/auth/passwd"
-	_ "github.com/infodancer/maildancer/msgstore/maildir"
+	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/metrics"
 	"github.com/infodancer/maildancer/internal/pop3d/pop3"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
+	"google.golang.org/grpc"
 )
 
-// newSingleConnStack creates a minimal Stack (no listeners) for use with
-// RunSingleConn tests.
+// newSingleConnStack creates a minimal Stack (no listeners) backed by a mock
+// session-manager for use with RunSingleConn tests.
 func newSingleConnStack(t *testing.T) *pop3.Stack {
 	t.Helper()
 
+	// Start a mock session-manager gRPC server.
+	smDir := t.TempDir()
+	smSocket := smDir + "/sm.sock"
+	smLn, err := net.Listen("unix", smSocket)
+	if err != nil {
+		t.Fatalf("listen unix: %v", err)
+	}
+	smSrv := grpc.NewServer()
+	smpb.RegisterSessionServiceServer(smSrv, &smpb.UnimplementedSessionServiceServer{})
+	pb.RegisterMailboxServiceServer(smSrv, &pb.UnimplementedMailboxServiceServer{})
+	go func() { _ = smSrv.Serve(smLn) }()
+	t.Cleanup(func() { smSrv.GracefulStop() })
+
 	cfg := config.Default()
 	cfg.Hostname = "single.local"
-	// No auth, no maildir — sufficient for greeting+QUIT tests.
+	cfg.SessionManager = config.SessionManagerConfig{Socket: smSocket}
 
 	logger := logging.NewLogger("error")
 	stack, err := pop3.NewStack(pop3.StackConfig{

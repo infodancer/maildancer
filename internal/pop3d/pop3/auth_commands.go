@@ -2,23 +2,11 @@ package pop3
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/emersion/go-sasl"
-	"github.com/infodancer/maildancer/auth"
-	"github.com/infodancer/maildancer/auth/domain"
-	autherrors "github.com/infodancer/maildancer/auth/errors"
-	"github.com/infodancer/maildancer/msgstore"
 )
-
-// DomainAuthenticator handles authentication with optional domain routing.
-// Implementations split user@domain usernames and route to the appropriate
-// auth agent internally. Callers always pass the full username.
-type DomainAuthenticator interface {
-	AuthenticateWithDomain(ctx context.Context, username, password string) (*domain.AuthResult, error)
-}
 
 // capaCommand implements the CAPA command (RFC 2449).
 type capaCommand struct{}
@@ -108,9 +96,7 @@ func (u *userCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 // passCommand implements the PASS command (RFC 1939).
 type passCommand struct {
-	auth     DomainAuthenticator
-	msgStore msgstore.MessageStore
-	smClient *SessionManagerClient // nil = legacy auth path
+	smClient *SessionManagerClient
 }
 
 func (p *passCommand) Name() string {
@@ -141,14 +127,6 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 	password := args[0]
 
-	if p.smClient != nil {
-		return p.executeSessionManager(ctx, sess, conn, username, password)
-	}
-	return p.executeLegacy(ctx, sess, conn, username, password)
-}
-
-// executeSessionManager authenticates via the session-manager service.
-func (p *passCommand) executeSessionManager(ctx context.Context, sess *Session, conn ConnectionLogger, username, password string) (Response, error) {
 	token, mailbox, err := p.smClient.Login(ctx, username, password)
 	if err != nil {
 		conn.Logger().Info("authentication failed",
@@ -158,7 +136,7 @@ func (p *passCommand) executeSessionManager(ctx context.Context, sess *Session, 
 		return Response{OK: false, Message: "Authentication failed"}, nil
 	}
 
-	sess.SetAuthenticated(&auth.AuthSession{User: &auth.User{Mailbox: mailbox}})
+	sess.SetAuthenticated(AuthenticatedUser{Username: username, Mailbox: mailbox})
 
 	store := newSessionManagerStore(p.smClient, token)
 	if err := sess.InitializeMailbox(ctx, store, ""); err != nil {
@@ -173,54 +151,7 @@ func (p *passCommand) executeSessionManager(ctx context.Context, sess *Session, 
 	conn.Logger().Info("authentication successful",
 		"username", username,
 		"mailbox", mailbox,
-		"via", "session-manager",
 	)
-	return Response{OK: true, Message: fmt.Sprintf("Logged in as %s", username)}, nil
-}
-
-// executeLegacy authenticates via the domain auth router.
-func (p *passCommand) executeLegacy(ctx context.Context, sess *Session, conn ConnectionLogger, username, password string) (Response, error) {
-	// Pass client IP for rate limiting.
-	if ip := sess.ClientIP(); ip != "" {
-		ctx = domain.WithClientIP(ctx, ip)
-	}
-
-	// Authenticate via the router (handles domain splitting internally)
-	result, err := p.auth.AuthenticateWithDomain(ctx, username, password)
-	if err != nil {
-		conn.Logger().Info("authentication failed",
-			"username", username,
-			"error", err.Error(),
-		)
-		if errors.Is(err, autherrors.ErrRateLimited) {
-			return Response{OK: false, Message: "Too many failed authentication attempts, try again later"}, nil
-		}
-		return Response{OK: false, Message: "Authentication failed"}, nil
-	}
-
-	sess.SetAuthenticated(result.Session)
-
-	// Initialize mailbox: prefer domain-specific store, fall back to global
-	store := p.msgStore
-	if result.Domain != nil && result.Domain.MessageStore != nil {
-		store = result.Domain.MessageStore
-	}
-	if store != nil {
-		if err := sess.InitializeMailbox(ctx, store, result.Extension); err != nil {
-			conn.Logger().Error("failed to initialize mailbox",
-				"username", username,
-				"mailbox", result.Session.User.Mailbox,
-				"error", err.Error(),
-			)
-			return Response{OK: false, Message: "Failed to access mailbox"}, nil
-		}
-	}
-
-	conn.Logger().Info("authentication successful",
-		"username", username,
-		"mailbox", result.Session.User.Mailbox,
-	)
-
 	return Response{OK: true, Message: fmt.Sprintf("Logged in as %s", username)}, nil
 }
 
@@ -258,9 +189,7 @@ func (q *quitCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 // authCommand implements the AUTH command (RFC 5034).
 type authCommand struct {
-	auth     DomainAuthenticator
-	msgStore msgstore.MessageStore
-	smClient *SessionManagerClient // nil = legacy auth path
+	smClient *SessionManagerClient
 }
 
 func (a *authCommand) Name() string {
@@ -302,10 +231,7 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 	switch mechanism {
 	case sasl.Plain:
 		server = sasl.NewPlainServer(func(identity, username, password string) error {
-			if a.smClient != nil {
-				return a.saslSessionManager(ctx, sess, conn, mechanism, username, password)
-			}
-			return a.saslLegacy(ctx, sess, conn, mechanism, username, password)
+			return a.saslAuthenticate(ctx, sess, conn, mechanism, username, password)
 		})
 	default:
 		return Response{OK: false, Message: fmt.Sprintf("Unsupported mechanism: %s", mechanism)}, nil
@@ -337,8 +263,8 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 	return Response{Continuation: true, Challenge: ""}, nil
 }
 
-// saslSessionManager handles SASL PLAIN via session-manager.
-func (a *authCommand) saslSessionManager(ctx context.Context, sess *Session, conn ConnectionLogger, mechanism, username, password string) error {
+// saslAuthenticate handles SASL PLAIN via session-manager.
+func (a *authCommand) saslAuthenticate(ctx context.Context, sess *Session, conn ConnectionLogger, mechanism, username, password string) error {
 	token, mailbox, err := a.smClient.Login(ctx, username, password)
 	if err != nil {
 		conn.Logger().Info("SASL authentication failed",
@@ -349,7 +275,7 @@ func (a *authCommand) saslSessionManager(ctx context.Context, sess *Session, con
 		return err
 	}
 
-	sess.SetAuthenticated(&auth.AuthSession{User: &auth.User{Mailbox: mailbox}})
+	sess.SetAuthenticated(AuthenticatedUser{Username: username, Mailbox: mailbox})
 	sess.SetUsername(username)
 
 	store := newSessionManagerStore(a.smClient, token)
@@ -367,51 +293,6 @@ func (a *authCommand) saslSessionManager(ctx context.Context, sess *Session, con
 		"mechanism", mechanism,
 		"username", username,
 		"mailbox", mailbox,
-		"via", "session-manager",
-	)
-	return nil
-}
-
-// saslLegacy handles SASL PLAIN via the domain auth router.
-func (a *authCommand) saslLegacy(ctx context.Context, sess *Session, conn ConnectionLogger, mechanism, username, password string) error {
-	// Pass client IP for rate limiting.
-	if ip := sess.ClientIP(); ip != "" {
-		ctx = domain.WithClientIP(ctx, ip)
-	}
-
-	result, err := a.auth.AuthenticateWithDomain(ctx, username, password)
-	if err != nil {
-		conn.Logger().Info("SASL authentication failed",
-			"mechanism", mechanism,
-			"username", username,
-			"error", err.Error(),
-		)
-		return err
-	}
-
-	sess.SetAuthenticated(result.Session)
-	sess.SetUsername(username)
-
-	store := a.msgStore
-	if result.Domain != nil && result.Domain.MessageStore != nil {
-		store = result.Domain.MessageStore
-	}
-	if store != nil {
-		if err := sess.InitializeMailbox(ctx, store, result.Extension); err != nil {
-			conn.Logger().Error("failed to initialize mailbox",
-				"mechanism", mechanism,
-				"username", username,
-				"mailbox", result.Session.User.Mailbox,
-				"error", err.Error(),
-			)
-			return err
-		}
-	}
-
-	conn.Logger().Info("SASL authentication successful",
-		"mechanism", mechanism,
-		"username", username,
-		"mailbox", result.Session.User.Mailbox,
 	)
 	return nil
 }
@@ -460,13 +341,12 @@ func (a *authCommand) ProcessSASLResponse(ctx context.Context, sess *Session, co
 }
 
 // RegisterAuthCommands registers all authentication-related commands.
-// When smClient is non-nil, authentication is delegated to the session-manager
-// instead of the domain auth router.
-func RegisterAuthCommands(domainAuth DomainAuthenticator, msgStore msgstore.MessageStore, smClient *SessionManagerClient) {
+// Authentication is delegated to the session-manager via smClient.
+func RegisterAuthCommands(smClient *SessionManagerClient) {
 	RegisterCommand(&capaCommand{})
 	RegisterCommand(&stlsCommand{})
 	RegisterCommand(&userCommand{})
-	RegisterCommand(&passCommand{auth: domainAuth, msgStore: msgStore, smClient: smClient})
-	RegisterCommand(&authCommand{auth: domainAuth, msgStore: msgStore, smClient: smClient})
+	RegisterCommand(&passCommand{smClient: smClient})
+	RegisterCommand(&authCommand{smClient: smClient})
 	RegisterCommand(&quitCommand{})
 }

@@ -85,8 +85,10 @@ func TestLoadNonExistentFileReturnsDefaults(t *testing.T) {
 // TestLoadFromTOML verifies TOML parsing of imapd-specific settings.
 func TestLoadFromTOML(t *testing.T) {
 	const tomlContent = `
-[imapd]
+[server]
 hostname = "mail.example.com"
+
+[imapd]
 log_level = "debug"
 
 [[imapd.listeners]]
@@ -157,14 +159,23 @@ key_file  = "/etc/ssl/key.pem"
 	}
 }
 
-// TestImapSectionOverridesServerSection verifies [imapd] takes precedence over [server].
-func TestImapSectionOverridesServerSection(t *testing.T) {
+// TestImapDoesNotOverrideServer verifies [server] wins for global settings.
+func TestImapDoesNotOverrideServer(t *testing.T) {
 	const tomlContent = `
 [server]
 hostname = "shared.example.com"
+domains_path = "/etc/mail/domains"
+
+[server.tls]
+cert_file = "/etc/ssl/shared-cert.pem"
 
 [imapd]
 hostname = "imap.example.com"
+domains_path = "/etc/imap/domains"
+log_level = "warn"
+
+[imapd.tls]
+cert_file = "/etc/ssl/imap-cert.pem"
 `
 	path := writeTempTOML(t, tomlContent)
 	cfg, err := Load(path)
@@ -172,8 +183,20 @@ hostname = "imap.example.com"
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	if cfg.Hostname != "imap.example.com" {
-		t.Errorf("hostname = %q, want imapd-specific %q", cfg.Hostname, "imap.example.com")
+	// Server values should win for global settings
+	if cfg.Hostname != "shared.example.com" {
+		t.Errorf("hostname = %q, want %q ([server] should win)", cfg.Hostname, "shared.example.com")
+	}
+	if cfg.DomainsPath != "/etc/mail/domains" {
+		t.Errorf("domains_path = %q, want %q ([server] should win)", cfg.DomainsPath, "/etc/mail/domains")
+	}
+	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want %q ([server] should win)", cfg.TLS.CertFile, "/etc/ssl/shared-cert.pem")
+	}
+
+	// Imapd-specific settings still apply
+	if cfg.LogLevel != "warn" {
+		t.Errorf("log_level = %q, want %q (imapd-specific)", cfg.LogLevel, "warn")
 	}
 }
 
@@ -445,13 +468,16 @@ func TestTimeoutHelpers(t *testing.T) {
 	})
 }
 
-// TestAuthConfigIsConfigured verifies the IsConfigured helper.
-func TestMergeConfigDomainsDataPathAndRspamd(t *testing.T) {
+// TestServerDomainsDataPathAndImapRspamd verifies global paths come from
+// [server] while imapd-specific settings (rspamd, mail_session) come from [imapd].
+func TestServerDomainsDataPathAndImapRspamd(t *testing.T) {
 	const tomlContent = `
-[imapd]
+[server]
 hostname = "mail.example.com"
 domains_path = "/etc/domains"
 domains_data_path = "/opt/domains"
+
+[imapd]
 mail_session = "/usr/bin/mail-session"
 
 [imapd.rspamd]
@@ -470,6 +496,9 @@ mode = "imap"
 
 	if cfg.DomainsDataPath != "/opt/domains" {
 		t.Errorf("domains_data_path = %q, want %q", cfg.DomainsDataPath, "/opt/domains")
+	}
+	if cfg.DomainsPath != "/etc/domains" {
+		t.Errorf("domains_path = %q, want %q", cfg.DomainsPath, "/etc/domains")
 	}
 	if cfg.MailSessionCmd != "/usr/bin/mail-session" {
 		t.Errorf("mail_session = %q, want %q", cfg.MailSessionCmd, "/usr/bin/mail-session")

@@ -61,7 +61,7 @@ func runServe() {
 		os.Exit(2)
 	}
 
-	authRouter, err := manager.SetupAuth(cfg)
+	authRouter, domainProvider, err := manager.SetupAuth(cfg)
 	if err != nil {
 		slog.Error("setup auth", "error", err)
 		os.Exit(1)
@@ -73,7 +73,7 @@ func runServe() {
 		Path:    cfg.Metrics.Path,
 	})
 
-	mgr := manager.New(cfg, authRouter, mc)
+	mgr := manager.New(cfg, authRouter, domainProvider, mc)
 	defer mgr.Close()
 
 	srv, err := grpcserver.New(mgr, cfg, mc)

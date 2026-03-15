@@ -44,9 +44,10 @@ type sessionEntry struct {
 
 // Manager handles mail-session lifecycle.
 type Manager struct {
-	cfg        *config.Config
-	authRouter *domain.AuthRouter
-	metrics    metrics.Collector
+	cfg            *config.Config
+	authRouter     *domain.AuthRouter
+	domainProvider domain.DomainProvider
+	metrics        metrics.Collector
 
 	mu sync.Mutex
 	// byToken maps session tokens to session entries.
@@ -60,19 +61,32 @@ type Manager struct {
 }
 
 // New creates a new Manager.
-func New(cfg *config.Config, authRouter *domain.AuthRouter, mc metrics.Collector) *Manager {
+func New(cfg *config.Config, authRouter *domain.AuthRouter, dp domain.DomainProvider, mc metrics.Collector) *Manager {
 	return &Manager{
-		cfg:        cfg,
-		authRouter: authRouter,
-		metrics:    mc,
-		byToken:    make(map[string]*sessionEntry),
-		byUser:     make(map[string]*sessionEntry),
+		cfg:            cfg,
+		authRouter:     authRouter,
+		domainProvider: dp,
+		metrics:        mc,
+		byToken:        make(map[string]*sessionEntry),
+		byUser:         make(map[string]*sessionEntry),
 	}
 }
 
+// LoginResult holds the results of a successful Login call.
+type LoginResult struct {
+	Token           string
+	Mailbox         string
+	Extension       string
+	MaxSendsPerHour int
+}
+
 // Login authenticates a user, spawns (or reuses) a mail-session, and returns
-// a session token.
-func (m *Manager) Login(ctx context.Context, username, password string) (token, mailbox string, err error) {
+// a LoginResult with session token, mailbox, subaddress extension, and rate limit.
+func (m *Manager) Login(ctx context.Context, username, password string) (*LoginResult, error) {
+	var mailbox, extension string
+	var maxSendsPerHour int
+	var err error
+
 	if m.authFn != nil {
 		mailbox, err = m.authFn(ctx, username, password)
 	} else {
@@ -80,10 +94,23 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token, 
 		result, err = m.authRouter.AuthenticateWithDomain(ctx, username, password)
 		if err == nil {
 			mailbox = result.Session.User.Mailbox
+			extension = result.Extension
+			if result.Domain != nil {
+				maxSendsPerHour = result.Domain.Limits.MaxSendsPerHour
+			}
 		}
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("authentication failed: %w", err)
+		return nil, fmt.Errorf("authentication failed: %w", err)
+	}
+
+	mkResult := func(token string) *LoginResult {
+		return &LoginResult{
+			Token:           token,
+			Mailbox:         mailbox,
+			Extension:       extension,
+			MaxSendsPerHour: maxSendsPerHour,
+		}
 	}
 
 	// Fast path: reuse existing session under short lock.
@@ -100,12 +127,12 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token, 
 				entry.idleTimer = nil
 			}
 			entry.refCount++
-			token = m.generateTokenLocked(entry)
+			tok := m.generateTokenLocked(entry)
 			m.mu.Unlock()
 			slog.Debug("session reused",
 				"username", username,
 				"ref_count", entry.refCount)
-			return token, mailbox, nil
+			return mkResult(tok), nil
 		}
 	}
 	m.mu.Unlock()
@@ -118,7 +145,7 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token, 
 		entry, err = m.spawnSession(username, mailbox)
 	}
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 
 	// Re-acquire lock and check for race (another goroutine may have
@@ -134,15 +161,15 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token, 
 			existing.idleTimer = nil
 		}
 		existing.refCount++
-		token = m.generateTokenLocked(existing)
+		tok := m.generateTokenLocked(existing)
 		slog.Debug("session reused (race resolved)",
 			"username", username,
 			"ref_count", existing.refCount)
-		return token, mailbox, nil
+		return mkResult(tok), nil
 	}
 
 	m.byUser[username] = entry
-	token = m.generateTokenLocked(entry)
+	tok := m.generateTokenLocked(entry)
 
 	var pid int
 	if entry.cmd != nil && entry.cmd.Process != nil {
@@ -153,7 +180,7 @@ func (m *Manager) Login(ctx context.Context, username, password string) (token, 
 
 	go m.monitorProcess(entry)
 
-	return token, mailbox, nil
+	return mkResult(tok), nil
 }
 
 // Logout decrements the ref count for a session token. When the last
@@ -541,10 +568,40 @@ func (m *Manager) AuthRouter() *domain.AuthRouter {
 	return m.authRouter
 }
 
+// ValidateRecipient checks whether a recipient address is deliverable.
+// Returns whether the domain is local, whether the user exists, and
+// the per-domain rejection policy.
+func (m *Manager) ValidateRecipient(ctx context.Context, address string) (domainIsLocal, userExists, deferRejection bool, err error) {
+	_, domainName, ok := strings.Cut(address, "@")
+	if !ok || domainName == "" {
+		return false, false, false, fmt.Errorf("invalid address %q: missing @domain", address)
+	}
+
+	if m.domainProvider == nil {
+		return false, false, false, nil
+	}
+
+	d := m.domainProvider.GetDomain(domainName)
+	if d == nil {
+		return false, false, false, nil
+	}
+
+	domainIsLocal = true
+	deferRejection = d.RecipientRejection == "data"
+
+	userExists, err = m.authRouter.UserExists(ctx, address)
+	if err != nil {
+		return true, false, deferRejection, nil
+	}
+
+	return domainIsLocal, userExists, deferRejection, nil
+}
+
 // SetupAuth creates the domain provider and auth router from config.
-func SetupAuth(cfg *config.Config) (*domain.AuthRouter, error) {
+// Returns both so the caller can pass the domain provider to New().
+func SetupAuth(cfg *config.Config) (*domain.AuthRouter, domain.DomainProvider, error) {
 	if cfg.DomainsPath == "" {
-		return nil, fmt.Errorf("domains_path is required")
+		return nil, nil, fmt.Errorf("domains_path is required")
 	}
 
 	agentType := cfg.Auth.AgentType
@@ -578,8 +635,8 @@ func SetupAuth(cfg *config.Config) (*domain.AuthRouter, error) {
 		KeyBackend:        cfg.Auth.KeyBackend,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("open auth agent: %w", err)
+		return nil, nil, fmt.Errorf("open auth agent: %w", err)
 	}
 
-	return domain.NewAuthRouter(domainProvider, authAgent), nil
+	return domain.NewAuthRouter(domainProvider, authAgent), domainProvider, nil
 }

@@ -47,15 +47,15 @@ func newTestManager(idleTimeout time.Duration) *Manager {
 func TestLogin_NewSession(t *testing.T) {
 	m := newTestManager(5 * time.Minute)
 
-	token, mailbox, err := m.Login(context.Background(), "alice@example.com", "pass")
+	result, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("Login() error: %v", err)
 	}
-	if token == "" {
+	if result.Token == "" {
 		t.Fatal("expected non-empty token")
 	}
-	if mailbox != "alice@example.com" {
-		t.Errorf("mailbox = %q, want %q", mailbox, "alice@example.com")
+	if result.Mailbox != "alice@example.com" {
+		t.Errorf("mailbox = %q, want %q", result.Mailbox, "alice@example.com")
 	}
 
 	// Verify internal state.
@@ -69,7 +69,7 @@ func TestLogin_NewSession(t *testing.T) {
 	if entry.refCount != 1 {
 		t.Errorf("refCount = %d, want 1", entry.refCount)
 	}
-	if _, ok := m.byToken[token]; !ok {
+	if _, ok := m.byToken[result.Token]; !ok {
 		t.Fatal("expected token in byToken")
 	}
 }
@@ -77,17 +77,17 @@ func TestLogin_NewSession(t *testing.T) {
 func TestLogin_ReusesExisting(t *testing.T) {
 	m := newTestManager(5 * time.Minute)
 
-	token1, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	r1, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("first Login() error: %v", err)
 	}
 
-	token2, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	r2, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("second Login() error: %v", err)
 	}
 
-	if token1 == token2 {
+	if r1.Token == r2.Token {
 		t.Error("expected different tokens for each login")
 	}
 
@@ -100,7 +100,7 @@ func TestLogin_ReusesExisting(t *testing.T) {
 	}
 
 	// Both tokens should map to the same entry.
-	if m.byToken[token1] != m.byToken[token2] {
+	if m.byToken[r1.Token] != m.byToken[r2.Token] {
 		t.Error("expected both tokens to map to the same entry")
 	}
 }
@@ -111,7 +111,7 @@ func TestLogin_AuthFailure(t *testing.T) {
 		return "", fmt.Errorf("bad credentials")
 	}
 
-	_, _, err := m.Login(context.Background(), "alice@example.com", "wrong")
+	_, err := m.Login(context.Background(), "alice@example.com", "wrong")
 	if err == nil {
 		t.Fatal("expected error for auth failure")
 	}
@@ -123,7 +123,7 @@ func TestLogin_SpawnFailure(t *testing.T) {
 		return nil, fmt.Errorf("spawn failed")
 	}
 
-	_, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	_, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err == nil {
 		t.Fatal("expected error for spawn failure")
 	}
@@ -149,14 +149,14 @@ func TestLogin_RaceReconciliation(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	var tokens [2]string
+	var results [2]*LoginResult
 	var errs [2]error
 
 	for i := range 2 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			tokens[idx], _, errs[idx] = m.Login(context.Background(), "alice@example.com", "pass")
+			results[idx], errs[idx] = m.Login(context.Background(), "alice@example.com", "pass")
 		}(i)
 	}
 
@@ -174,7 +174,7 @@ func TestLogin_RaceReconciliation(t *testing.T) {
 	}
 
 	// Both should succeed with different tokens.
-	if tokens[0] == tokens[1] {
+	if results[0].Token == results[1].Token {
 		t.Error("expected different tokens")
 	}
 
@@ -193,19 +193,19 @@ func TestLogin_RaceReconciliation(t *testing.T) {
 func TestLogout_RemovesToken(t *testing.T) {
 	m := newTestManager(5 * time.Minute)
 
-	token, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	result, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("Login() error: %v", err)
 	}
 
-	if err := m.Logout(context.Background(), token); err != nil {
+	if err := m.Logout(context.Background(), result.Token); err != nil {
 		t.Fatalf("Logout() error: %v", err)
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, ok := m.byToken[token]; ok {
+	if _, ok := m.byToken[result.Token]; ok {
 		t.Error("expected token to be removed after logout")
 	}
 }
@@ -213,12 +213,12 @@ func TestLogout_RemovesToken(t *testing.T) {
 func TestLogout_StartsIdleTimer(t *testing.T) {
 	m := newTestManager(1 * time.Hour) // long timeout so it doesn't fire
 
-	token, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	result, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("Login() error: %v", err)
 	}
 
-	if err := m.Logout(context.Background(), token); err != nil {
+	if err := m.Logout(context.Background(), result.Token); err != nil {
 		t.Fatalf("Logout() error: %v", err)
 	}
 
@@ -252,18 +252,18 @@ func TestLogout_UnknownToken(t *testing.T) {
 func TestLogout_MultipleRefs(t *testing.T) {
 	m := newTestManager(5 * time.Minute)
 
-	token1, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	r1, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("first Login() error: %v", err)
 	}
 
-	token2, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	r2, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("second Login() error: %v", err)
 	}
 
 	// First logout should not start timer (refCount still > 0).
-	if err := m.Logout(context.Background(), token1); err != nil {
+	if err := m.Logout(context.Background(), r1.Token); err != nil {
 		t.Fatalf("Logout(token1) error: %v", err)
 	}
 
@@ -278,7 +278,7 @@ func TestLogout_MultipleRefs(t *testing.T) {
 	m.mu.Unlock()
 
 	// Second logout should start timer.
-	if err := m.Logout(context.Background(), token2); err != nil {
+	if err := m.Logout(context.Background(), r2.Token); err != nil {
 		t.Fatalf("Logout(token2) error: %v", err)
 	}
 
@@ -293,12 +293,12 @@ func TestLogout_MultipleRefs(t *testing.T) {
 func TestReapSession_Idle(t *testing.T) {
 	m := newTestManager(20 * time.Millisecond)
 
-	token, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	result, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("Login() error: %v", err)
 	}
 
-	if err := m.Logout(context.Background(), token); err != nil {
+	if err := m.Logout(context.Background(), result.Token); err != nil {
 		t.Fatalf("Logout() error: %v", err)
 	}
 
@@ -319,17 +319,17 @@ func TestReapSession_Idle(t *testing.T) {
 func TestReapSession_Recovered(t *testing.T) {
 	m := newTestManager(50 * time.Millisecond)
 
-	token1, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	r1, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("Login() error: %v", err)
 	}
 
-	if err := m.Logout(context.Background(), token1); err != nil {
+	if err := m.Logout(context.Background(), r1.Token); err != nil {
 		t.Fatalf("Logout() error: %v", err)
 	}
 
 	// Login again before the reaper fires.
-	token2, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	r2, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("second Login() error: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestReapSession_Recovered(t *testing.T) {
 	if entry.refCount != 1 {
 		t.Errorf("refCount = %d, want 1", entry.refCount)
 	}
-	if _, ok := m.byToken[token2]; !ok {
+	if _, ok := m.byToken[r2.Token]; !ok {
 		t.Error("expected token2 to still exist")
 	}
 }
@@ -355,12 +355,12 @@ func TestReapSession_Recovered(t *testing.T) {
 func TestSessionForToken_Valid(t *testing.T) {
 	m := newTestManager(5 * time.Minute)
 
-	token, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	result, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("Login() error: %v", err)
 	}
 
-	mailbox, folders, watch, err := m.SessionForToken(token)
+	mailbox, folders, watch, err := m.SessionForToken(result.Token)
 	if err != nil {
 		t.Fatalf("SessionForToken() error: %v", err)
 	}
@@ -383,7 +383,7 @@ func TestClose_TerminatesAll(t *testing.T) {
 
 	// Create sessions for multiple users.
 	for _, user := range []string{"alice@example.com", "bob@example.com"} {
-		if _, _, err := m.Login(context.Background(), user, "pass"); err != nil {
+		if _, err := m.Login(context.Background(), user, "pass"); err != nil {
 			t.Fatalf("Login(%s) error: %v", user, err)
 		}
 	}
@@ -429,18 +429,18 @@ func TestGenerateToken_Unique(t *testing.T) {
 func TestLogin_CancelsIdleTimerOnReuse(t *testing.T) {
 	m := newTestManager(50 * time.Millisecond)
 
-	token1, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	r1, err := m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("Login() error: %v", err)
 	}
 
 	// Logout to start idle timer.
-	if err := m.Logout(context.Background(), token1); err != nil {
+	if err := m.Logout(context.Background(), r1.Token); err != nil {
 		t.Fatalf("Logout() error: %v", err)
 	}
 
 	// Login again before reap — should cancel the idle timer.
-	token2, _, err := m.Login(context.Background(), "alice@example.com", "pass")
+	_, err = m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("second Login() error: %v", err)
 	}
@@ -463,6 +463,4 @@ func TestLogin_CancelsIdleTimerOnReuse(t *testing.T) {
 	if _, ok := m.byUser["alice@example.com"]; !ok {
 		t.Error("expected entry to survive (timer was cancelled)")
 	}
-
-	_ = token2
 }

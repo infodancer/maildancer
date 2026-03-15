@@ -19,18 +19,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SessionService_Login_FullMethodName  = "/sessionmanager.v1.SessionService/Login"
-	SessionService_Logout_FullMethodName = "/sessionmanager.v1.SessionService/Logout"
+	SessionService_Login_FullMethodName             = "/sessionmanager.v1.SessionService/Login"
+	SessionService_Logout_FullMethodName            = "/sessionmanager.v1.SessionService/Logout"
+	SessionService_ValidateRecipient_FullMethodName = "/sessionmanager.v1.SessionService/ValidateRecipient"
 )
 
 // SessionServiceClient is the client API for SessionService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// SessionService handles authentication and session lifecycle.
-// Protocol handlers call Login() after authenticating the user, and Logout()
-// when the protocol session ends. The returned session token is passed as
-// gRPC metadata ("session-token") on all proxied RPCs.
+// SessionService handles authentication, session lifecycle, and domain
+// validation. Protocol handlers call Login() for SMTP AUTH, ValidateRecipient()
+// for RCPT TO checks, and Logout() when the protocol session ends.
 type SessionServiceClient interface {
 	// Login authenticates a user and establishes a mail-session.
 	// If the user already has an active mail-session, it is reused
@@ -41,6 +41,10 @@ type SessionServiceClient interface {
 	// if no new Login arrives before it fires, the mail-session
 	// process is terminated.
 	Logout(ctx context.Context, in *LogoutRequest, opts ...grpc.CallOption) (*LogoutResponse, error)
+	// ValidateRecipient checks whether a recipient address is deliverable.
+	// Used by smtpd at RCPT TO time to determine if the domain is local
+	// and whether the user exists.
+	ValidateRecipient(ctx context.Context, in *ValidateRecipientRequest, opts ...grpc.CallOption) (*ValidateRecipientResponse, error)
 }
 
 type sessionServiceClient struct {
@@ -71,14 +75,23 @@ func (c *sessionServiceClient) Logout(ctx context.Context, in *LogoutRequest, op
 	return out, nil
 }
 
+func (c *sessionServiceClient) ValidateRecipient(ctx context.Context, in *ValidateRecipientRequest, opts ...grpc.CallOption) (*ValidateRecipientResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateRecipientResponse)
+	err := c.cc.Invoke(ctx, SessionService_ValidateRecipient_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SessionServiceServer is the server API for SessionService service.
 // All implementations must embed UnimplementedSessionServiceServer
 // for forward compatibility.
 //
-// SessionService handles authentication and session lifecycle.
-// Protocol handlers call Login() after authenticating the user, and Logout()
-// when the protocol session ends. The returned session token is passed as
-// gRPC metadata ("session-token") on all proxied RPCs.
+// SessionService handles authentication, session lifecycle, and domain
+// validation. Protocol handlers call Login() for SMTP AUTH, ValidateRecipient()
+// for RCPT TO checks, and Logout() when the protocol session ends.
 type SessionServiceServer interface {
 	// Login authenticates a user and establishes a mail-session.
 	// If the user already has an active mail-session, it is reused
@@ -89,6 +102,10 @@ type SessionServiceServer interface {
 	// if no new Login arrives before it fires, the mail-session
 	// process is terminated.
 	Logout(context.Context, *LogoutRequest) (*LogoutResponse, error)
+	// ValidateRecipient checks whether a recipient address is deliverable.
+	// Used by smtpd at RCPT TO time to determine if the domain is local
+	// and whether the user exists.
+	ValidateRecipient(context.Context, *ValidateRecipientRequest) (*ValidateRecipientResponse, error)
 	mustEmbedUnimplementedSessionServiceServer()
 }
 
@@ -104,6 +121,9 @@ func (UnimplementedSessionServiceServer) Login(context.Context, *LoginRequest) (
 }
 func (UnimplementedSessionServiceServer) Logout(context.Context, *LogoutRequest) (*LogoutResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Logout not implemented")
+}
+func (UnimplementedSessionServiceServer) ValidateRecipient(context.Context, *ValidateRecipientRequest) (*ValidateRecipientResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateRecipient not implemented")
 }
 func (UnimplementedSessionServiceServer) mustEmbedUnimplementedSessionServiceServer() {}
 func (UnimplementedSessionServiceServer) testEmbeddedByValue()                        {}
@@ -162,6 +182,24 @@ func _SessionService_Logout_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SessionService_ValidateRecipient_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateRecipientRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).ValidateRecipient(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_ValidateRecipient_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).ValidateRecipient(ctx, req.(*ValidateRecipientRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SessionService_ServiceDesc is the grpc.ServiceDesc for SessionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -176,6 +214,10 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Logout",
 			Handler:    _SessionService_Logout_Handler,
+		},
+		{
+			MethodName: "ValidateRecipient",
+			Handler:    _SessionService_ValidateRecipient_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

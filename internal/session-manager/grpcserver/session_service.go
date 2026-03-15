@@ -20,15 +20,35 @@ func (s *sessionServer) Login(ctx context.Context, req *smpb.LoginRequest) (*smp
 		return nil, status.Error(codes.InvalidArgument, "username and password required")
 	}
 
-	token, mailbox, err := s.mgr.Login(ctx, req.Username, req.Password)
+	result, err := s.mgr.Login(ctx, req.Username, req.Password)
 	if err != nil {
 		slog.Warn("login failed", "username", req.Username, "error", err)
 		return nil, status.Error(codes.Unauthenticated, "authentication failed")
 	}
 
 	return &smpb.LoginResponse{
-		SessionToken: token,
-		Mailbox:      mailbox,
+		SessionToken:    result.Token,
+		Mailbox:         result.Mailbox,
+		Extension:       result.Extension,
+		MaxSendsPerHour: int32(result.MaxSendsPerHour),
+	}, nil
+}
+
+func (s *sessionServer) ValidateRecipient(ctx context.Context, req *smpb.ValidateRecipientRequest) (*smpb.ValidateRecipientResponse, error) {
+	if req.Address == "" {
+		return nil, status.Error(codes.InvalidArgument, "address required")
+	}
+
+	domainIsLocal, userExists, deferRejection, err := s.mgr.ValidateRecipient(ctx, req.Address)
+	if err != nil {
+		slog.Warn("validate recipient failed", "address", req.Address, "error", err)
+		return nil, status.Errorf(codes.Internal, "validate recipient: %v", err)
+	}
+
+	return &smpb.ValidateRecipientResponse{
+		DomainIsLocal:  domainIsLocal,
+		UserExists:     userExists,
+		DeferRejection: deferRejection,
 	}, nil
 }
 

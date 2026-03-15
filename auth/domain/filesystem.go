@@ -206,16 +206,18 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		}
 	}
 
-	// Create auth agent (absolute paths used as-is, relative paths joined with domainPath).
-	authCfg := auth.AuthAgentConfig{
-		Type:              cfg.Auth.Type,
-		CredentialBackend: resolvePath(domainPath, cfg.Auth.CredentialBackend),
-		KeyBackend:        resolvePath(domainPath, cfg.Auth.KeyBackend),
-		Options:           cfg.Auth.Options,
-	}
-	authAgent, err := auth.OpenAuthAgent(authCfg)
-	if err != nil {
-		return nil, fmt.Errorf("create auth agent: %w", err)
+	// Create lazy auth agent — defers OpenAuthAgent() until the first
+	// auth-related call (Authenticate, UserExists, etc.). This allows
+	// privilege-dropped processes (e.g., mail-session oneshot delivery)
+	// to use GetDomain() for forwarding/spam/sieve without needing read
+	// access to credential files.
+	authAgent := &lazyAuthAgent{
+		cfg: auth.AuthAgentConfig{
+			Type:              cfg.Auth.Type,
+			CredentialBackend: resolvePath(domainPath, cfg.Auth.CredentialBackend),
+			KeyBackend:        resolvePath(domainPath, cfg.Auth.KeyBackend),
+			Options:           cfg.Auth.Options,
+		},
 	}
 
 	// Create message store. The data path comes from (highest priority first):

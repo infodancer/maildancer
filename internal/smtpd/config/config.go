@@ -44,10 +44,14 @@ type RedisConfig struct {
 }
 
 // ServerConfig holds shared settings used by all mail services.
+// These are read from the [server] section of the shared config file.
 type ServerConfig struct {
-	Hostname string         `toml:"hostname"`
-	Delivery DeliveryConfig `toml:"delivery"`
-	TLS      TLSConfig      `toml:"tls"`
+	Hostname        string         `toml:"hostname"`
+	DomainsPath     string         `toml:"domains_path"`
+	DomainsDataPath string         `toml:"domains_data_path"`
+	Maildir         string         `toml:"maildir"` // alias for domains_data_path (used by webadmin)
+	Delivery        DeliveryConfig `toml:"delivery"`
+	TLS             TLSConfig      `toml:"tls"`
 }
 
 // RejectionMode controls when unknown recipients are rejected.

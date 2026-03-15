@@ -148,6 +148,17 @@ func mergeServerConfig(dst Config, src ServerConfig) Config {
 		dst.Hostname = src.Hostname
 	}
 
+	if src.DomainsPath != "" {
+		dst.DomainsPath = src.DomainsPath
+	}
+
+	// Maildir is a webadmin-facing alias for DomainsDataPath.
+	if src.DomainsDataPath != "" {
+		dst.DomainsDataPath = src.DomainsDataPath
+	} else if src.Maildir != "" {
+		dst.DomainsDataPath = src.Maildir
+	}
+
 	if src.Delivery.Type != "" {
 		dst.Delivery.Type = src.Delivery.Type
 	}
@@ -180,38 +191,16 @@ func mergeServerConfig(dst Config, src ServerConfig) Config {
 	return dst
 }
 
-// mergeConfig merges non-zero values from src into dst.
+// mergeConfig merges smtpd-specific values from [smtpd] into dst.
+// Global settings (hostname, domains_path, domains_data_path, TLS) come from
+// [server] via mergeServerConfig and are not read from [smtpd].
 func mergeConfig(dst, src Config) Config {
-	if src.Hostname != "" {
-		dst.Hostname = src.Hostname
-	}
-
 	if src.LogLevel != "" {
 		dst.LogLevel = src.LogLevel
 	}
 
-	if src.DomainsPath != "" {
-		dst.DomainsPath = src.DomainsPath
-	}
-
-	if src.DomainsDataPath != "" {
-		dst.DomainsDataPath = src.DomainsDataPath
-	}
-
 	if len(src.Listeners) > 0 {
 		dst.Listeners = src.Listeners
-	}
-
-	if src.TLS.CertFile != "" {
-		dst.TLS.CertFile = src.TLS.CertFile
-	}
-
-	if src.TLS.KeyFile != "" {
-		dst.TLS.KeyFile = src.TLS.KeyFile
-	}
-
-	if src.TLS.MinVersion != "" {
-		dst.TLS.MinVersion = src.TLS.MinVersion
 	}
 
 	if src.Limits.MaxMessageSize > 0 {

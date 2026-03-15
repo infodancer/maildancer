@@ -69,6 +69,89 @@ mail_session_cmd = "/usr/local/bin/mail-session"
 	}
 }
 
+func TestLoad_DomainsPathFromServer(t *testing.T) {
+	// domains_path and domains_data_path should come from [server] when
+	// not set in [session-manager].
+	content := `
+[server]
+domains_path = "/etc/infodancer/domains"
+domains_data_path = "/opt/infodancer/domains"
+
+[session-manager]
+socket = "/tmp/test.sock"
+mail_session_cmd = "/usr/local/bin/mail-session"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.DomainsPath != "/etc/infodancer/domains" {
+		t.Errorf("DomainsPath = %q, want %q (from [server])", cfg.DomainsPath, "/etc/infodancer/domains")
+	}
+	if cfg.DomainsDataPath != "/opt/infodancer/domains" {
+		t.Errorf("DomainsDataPath = %q, want %q (from [server])", cfg.DomainsDataPath, "/opt/infodancer/domains")
+	}
+}
+
+func TestLoad_DomainsPathFromServerMaildir(t *testing.T) {
+	// maildir in [server] acts as a fallback alias for domains_data_path.
+	content := `
+[server]
+domains_path = "/etc/mail/domains"
+maildir = "/var/mail/data"
+
+[session-manager]
+socket = "/tmp/test.sock"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.DomainsDataPath != "/var/mail/data" {
+		t.Errorf("DomainsDataPath = %q, want %q (from [server].maildir)", cfg.DomainsDataPath, "/var/mail/data")
+	}
+}
+
+func TestLoad_SessionManagerPathsOverrideServer(t *testing.T) {
+	// If [session-manager] sets paths, they take precedence over [server].
+	content := `
+[server]
+domains_path = "/etc/shared/domains"
+
+[session-manager]
+socket = "/tmp/test.sock"
+domains_path = "/etc/sm/domains"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.DomainsPath != "/etc/sm/domains" {
+		t.Errorf("DomainsPath = %q, want %q ([session-manager] should win)", cfg.DomainsPath, "/etc/sm/domains")
+	}
+}
+
 func TestLoad_InvalidIdleTimeout(t *testing.T) {
 	content := `
 [session-manager]

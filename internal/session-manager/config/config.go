@@ -115,21 +115,46 @@ type AuthConfig struct {
 	KeyBackend string `toml:"key_backend"`
 }
 
+// ServerConfig holds shared settings from the [server] section.
+type ServerConfig struct {
+	Hostname        string `toml:"hostname"`
+	DomainsPath     string `toml:"domains_path"`
+	DomainsDataPath string `toml:"domains_data_path"`
+	Maildir         string `toml:"maildir"` // alias for domains_data_path (used by webadmin)
+}
+
+// fileConfig is the parse target for the shared config file.
+type fileConfig struct {
+	Server         ServerConfig `toml:"server"`
+	SessionManager Config       `toml:"session-manager"`
+}
+
 // Load reads the config from a TOML file.
+// Global settings (domains_path, domains_data_path) are read from [server];
+// session-manager-specific settings come from [session-manager].
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	// Wrap in a top-level section.
-	var wrapper struct {
-		SessionManager Config `toml:"session-manager"`
-	}
-	if err := toml.Unmarshal(data, &wrapper); err != nil {
+	var fc fileConfig
+	if err := toml.Unmarshal(data, &fc); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
-	cfg := &wrapper.SessionManager
+	cfg := &fc.SessionManager
+
+	// Merge [server] globals into session-manager config.
+	if cfg.DomainsPath == "" && fc.Server.DomainsPath != "" {
+		cfg.DomainsPath = fc.Server.DomainsPath
+	}
+	if cfg.DomainsDataPath == "" {
+		if fc.Server.DomainsDataPath != "" {
+			cfg.DomainsDataPath = fc.Server.DomainsDataPath
+		} else if fc.Server.Maildir != "" {
+			cfg.DomainsDataPath = fc.Server.Maildir
+		}
+	}
 
 	// Parse idle timeout.
 	if cfg.IdleTimeoutStr != "" {

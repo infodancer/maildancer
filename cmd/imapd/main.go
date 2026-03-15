@@ -9,12 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd backend
 	"github.com/infodancer/maildancer/internal/imapd/backend"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/logging"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
-	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir backend
 	"github.com/prometheus/client_golang/prometheus"
 )
 

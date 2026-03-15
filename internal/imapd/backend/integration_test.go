@@ -5,94 +5,104 @@ package backend_test
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/infodancer/maildancer/auth/passwd" // Register passwd backend
+	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
+	"google.golang.org/grpc"
+
 	"github.com/infodancer/maildancer/internal/imapd/backend"
 	"github.com/infodancer/maildancer/internal/imapd/config"
-	_ "github.com/infodancer/maildancer/msgstore/maildir" // Register maildir backend
-	"golang.org/x/crypto/argon2"
 )
 
-// hashPassword generates an argon2id hash in the format the passwd agent expects.
-func hashPassword(password string) (string, error) {
-	salt := make([]byte, 32)
-	if _, err := rand.Read(salt); err != nil {
-		return "", err
+// mockIntegrationSession implements SessionService for integration tests.
+type mockIntegrationSession struct {
+	smpb.UnimplementedSessionServiceServer
+}
+
+func (m *mockIntegrationSession) Login(_ context.Context, req *smpb.LoginRequest) (*smpb.LoginResponse, error) {
+	if req.Username == "alice@test.local" && req.Password == "testpass" {
+		return &smpb.LoginResponse{
+			SessionToken: "integration-tok",
+			Mailbox:      "alice@test.local",
+		}, nil
 	}
-	hash := argon2.IDKey([]byte(password), salt, 3, 64*1024, 4, 32)
-	return fmt.Sprintf("$argon2id$v=19$m=65536,t=3,p=4$%s$%s",
-		base64.RawStdEncoding.EncodeToString(salt),
-		base64.RawStdEncoding.EncodeToString(hash)), nil
+	return nil, fmt.Errorf("bad credentials")
+}
+
+func (m *mockIntegrationSession) Logout(_ context.Context, _ *smpb.LogoutRequest) (*smpb.LogoutResponse, error) {
+	return &smpb.LogoutResponse{}, nil
+}
+
+// mockIntegrationMailbox implements MailboxService for integration tests.
+type mockIntegrationMailbox struct {
+	pb.UnimplementedMailboxServiceServer
+}
+
+func (m *mockIntegrationMailbox) List(_ context.Context, _ *pb.ListRequest) (*pb.ListResponse, error) {
+	return &pb.ListResponse{
+		Messages: []*pb.MessageInfo{
+			{Uid: 1, Size: 100, Flags: []string{}},
+		},
+	}, nil
+}
+
+func (m *mockIntegrationMailbox) Stat(_ context.Context, _ *pb.StatRequest) (*pb.StatResponse, error) {
+	return &pb.StatResponse{Count: 1, TotalBytes: 100}, nil
+}
+
+func (m *mockIntegrationMailbox) UIDValidity(_ context.Context, _ *pb.UIDValidityRequest) (*pb.UIDValidityResponse, error) {
+	return &pb.UIDValidityResponse{UidValidity: 1, UidNext: 2}, nil
+}
+
+// mockIntegrationFolder implements FolderService for integration tests.
+type mockIntegrationFolder struct {
+	pb.UnimplementedFolderServiceServer
+}
+
+func (m *mockIntegrationFolder) ListFolders(_ context.Context, _ *pb.ListFoldersRequest) (*pb.ListFoldersResponse, error) {
+	return &pb.ListFoldersResponse{Folders: []string{"INBOX", "Sent", "Drafts", "Junk", "Trash"}}, nil
+}
+
+func (m *mockIntegrationFolder) CreateFolder(_ context.Context, _ *pb.CreateFolderRequest) (*pb.CreateFolderResponse, error) {
+	return &pb.CreateFolderResponse{}, nil
 }
 
 func TestStack_IMAPFullStack(t *testing.T) {
-	// Create a temp dir tree mirroring the testdata fixture.
-	// domainsDir/test.local/{config.toml, passwd, keys/, users/alice/new/}
-	domainsDir := t.TempDir()
-	domainDir := filepath.Join(domainsDir, "test.local")
-	keysDir := filepath.Join(domainDir, "keys")
-	usersDir := filepath.Join(domainDir, "users")
-	aliceNewDir := filepath.Join(usersDir, "alice", "new")
-	aliceCurDir := filepath.Join(usersDir, "alice", "cur")
-	aliceTmpDir := filepath.Join(usersDir, "alice", "tmp")
+	// Start a mock gRPC session-manager server.
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "sm.sock")
 
-	for _, d := range []string{keysDir, aliceNewDir, aliceCurDir, aliceTmpDir} {
-		if err := os.MkdirAll(d, 0700); err != nil {
-			t.Fatalf("mkdir %s: %v", d, err)
-		}
-	}
-
-	// Write domain config.toml.
-	configTOML := `[auth]
-type = "passwd"
-credential_backend = "passwd"
-key_backend = "keys"
-
-[msgstore]
-type = "maildir"
-base_path = "users"
-`
-	if err := os.WriteFile(filepath.Join(domainDir, "config.toml"), []byte(configTOML), 0600); err != nil {
-		t.Fatalf("write config.toml: %v", err)
-	}
-
-	// Generate argon2id hash for "testpass" and write passwd file.
-	hash, err := hashPassword("testpass")
+	ln, err := net.Listen("unix", sock)
 	if err != nil {
-		t.Fatalf("hashPassword: %v", err)
-	}
-	passwdContent := fmt.Sprintf("alice:%s:alice\n", hash)
-	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwdContent), 0600); err != nil {
-		t.Fatalf("write passwd: %v", err)
+		t.Fatalf("listen unix: %v", err)
 	}
 
-	// Pre-populate alice's new/ with a test message.
-	testMsg := "From: sender@example.com\r\nTo: alice@test.local\r\nSubject: Test\r\n\r\nHello, world!\r\n"
-	if err := os.WriteFile(filepath.Join(aliceNewDir, "testmsg"), []byte(testMsg), 0600); err != nil {
-		t.Fatalf("write testmsg: %v", err)
-	}
+	srv := grpc.NewServer()
+	smpb.RegisterSessionServiceServer(srv, &mockIntegrationSession{})
+	pb.RegisterMailboxServiceServer(srv, &mockIntegrationMailbox{})
+	pb.RegisterFolderServiceServer(srv, &mockIntegrationFolder{})
 
-	// Pick a free port for the test listener.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { srv.Stop() })
+
+	// Pick a free port for the IMAP listener.
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("get free port: %v", err)
 	}
-	addr := ln.Addr().String()
-	ln.Close()
+	addr := tcpLn.Addr().String()
+	tcpLn.Close()
 
 	// Build config.
 	cfg := config.Default()
 	cfg.Hostname = "test.local"
-	cfg.DomainsPath = domainsDir
+	cfg.SessionManager = config.SessionManagerConfig{Socket: sock}
 	cfg.Listeners = []config.ListenerConfig{
 		{Address: addr, Mode: config.ModeImap},
 	}
@@ -162,7 +172,7 @@ base_path = "users"
 		return lines
 	}
 
-	// LOGIN — must use fully-qualified address; bare localpart has no domain for AuthRouter to route.
+	// LOGIN
 	loginResp := sendCmd("A1", "LOGIN alice@test.local testpass")
 	tagged := loginResp[len(loginResp)-1]
 	if !strings.HasPrefix(tagged, "A1 OK") {

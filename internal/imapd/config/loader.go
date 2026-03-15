@@ -3,7 +3,6 @@ package config
 import (
 	"flag"
 	"fmt"
-	"maps"
 	"os"
 
 	toml "github.com/pelletier/go-toml/v2"
@@ -18,7 +17,6 @@ type Flags struct {
 	TLSCert        string
 	TLSKey         string
 	MaxConnections int
-	DomainsPath    string
 }
 
 // ParseFlags parses command-line flags and returns a Flags struct.
@@ -32,7 +30,6 @@ func ParseFlags() *Flags {
 	flag.StringVar(&f.TLSCert, "tls-cert", "", "TLS certificate file path")
 	flag.StringVar(&f.TLSKey, "tls-key", "", "TLS key file path")
 	flag.IntVar(&f.MaxConnections, "max-connections", 0, "Maximum concurrent connections")
-	flag.StringVar(&f.DomainsPath, "domains", "", "Path to per-domain configuration directory")
 
 	flag.Parse()
 	return f
@@ -108,10 +105,6 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 		cfg.Limits.MaxConnections = f.MaxConnections
 	}
 
-	if f.DomainsPath != "" {
-		cfg.DomainsPath = f.DomainsPath
-	}
-
 	return cfg
 }
 
@@ -123,7 +116,6 @@ func LoadWithFlags(f *Flags) (Config, error) {
 		return cfg, err
 	}
 	cfg = ApplyFlags(cfg, f)
-	cfg.ConfigPath = f.ConfigPath
 	return cfg, nil
 }
 
@@ -131,17 +123,6 @@ func LoadWithFlags(f *Flags) (Config, error) {
 func mergeServerConfig(dst Config, src ServerConfig) Config {
 	if src.Hostname != "" {
 		dst.Hostname = src.Hostname
-	}
-
-	if src.DomainsPath != "" {
-		dst.DomainsPath = src.DomainsPath
-	}
-
-	// Maildir is a webadmin-facing alias for DomainsDataPath.
-	if src.DomainsDataPath != "" {
-		dst.DomainsDataPath = src.DomainsDataPath
-	} else if src.Maildir != "" && dst.DomainsDataPath == "" {
-		dst.DomainsDataPath = src.Maildir
 	}
 
 	if src.TLS.CertFile != "" {
@@ -224,10 +205,6 @@ func mergeConfig(dst, src Config) Config {
 		dst.Metrics.Path = src.Metrics.Path
 	}
 
-	if src.MailSessionCmd != "" {
-		dst.MailSessionCmd = src.MailSessionCmd
-	}
-
 	if src.Rspamd.Controller != "" {
 		dst.Rspamd.Controller = src.Rspamd.Controller
 	}
@@ -241,37 +218,6 @@ func mergeConfig(dst, src Config) Config {
 	}
 	if src.Redis.Password != "" {
 		dst.Redis.Password = src.Redis.Password
-	}
-
-	// Merge auth config
-	if src.Auth.Type != "" {
-		dst.Auth.Type = src.Auth.Type
-	}
-	if src.Auth.CredentialBackend != "" {
-		dst.Auth.CredentialBackend = src.Auth.CredentialBackend
-	}
-	if src.Auth.KeyBackend != "" {
-		dst.Auth.KeyBackend = src.Auth.KeyBackend
-	}
-	if src.Auth.Options != nil {
-		if dst.Auth.Options == nil {
-			dst.Auth.Options = make(map[string]string)
-		}
-		maps.Copy(dst.Auth.Options, src.Auth.Options)
-	}
-
-	// Merge store config
-	if src.Store.Type != "" {
-		dst.Store.Type = src.Store.Type
-	}
-	if src.Store.BasePath != "" {
-		dst.Store.BasePath = src.Store.BasePath
-	}
-	if src.Store.Options != nil {
-		if dst.Store.Options == nil {
-			dst.Store.Options = make(map[string]string)
-		}
-		maps.Copy(dst.Store.Options, src.Store.Options)
 	}
 
 	return dst

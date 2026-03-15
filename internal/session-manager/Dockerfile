@@ -8,7 +8,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o session-manager ./cmd/
 
 # Build stage: mail-session
 FROM golang:1.26-alpine AS mail-session-builder
-RUN CGO_ENABLED=0 go install github.com/infodancer/maildancer/internal/mail-session/cmd/mail-session@v0.1.4
+RUN CGO_ENABLED=0 go install github.com/infodancer/maildancer/internal/mail-session/cmd/mail-session@v0.1.5
 
 # Create /tmp with sticky bit for child process use in the scratch runtime
 RUN mkdir -p /tmp && chmod 1777 /tmp

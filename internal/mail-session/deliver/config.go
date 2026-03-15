@@ -129,7 +129,7 @@ func (s SpamConfig) Merge(override SpamConfig) SpamConfig {
 func LoadSpamConfig(path string) (SpamConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) || os.IsPermission(err) {
 			return SpamConfig{}, nil
 		}
 		return SpamConfig{}, err

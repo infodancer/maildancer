@@ -21,14 +21,16 @@ func TestLoadMissingFile(t *testing.T) {
 
 func TestLoadValidTOML(t *testing.T) {
 	content := `
-[pop3d]
+[server]
 hostname = "mail.example.com"
-log_level = "debug"
 
-[pop3d.tls]
+[server.tls]
 cert_file = "/etc/ssl/cert.pem"
 key_file = "/etc/ssl/key.pem"
 min_version = "1.3"
+
+[pop3d]
+log_level = "debug"
 
 [pop3d.limits]
 max_connections = 50
@@ -119,7 +121,7 @@ hostname = "broken
 
 func TestLoadPartialConfig(t *testing.T) {
 	content := `
-[pop3d]
+[server]
 hostname = "partial.example.com"
 `
 
@@ -191,11 +193,14 @@ log_level = "warn"
 	}
 }
 
-func TestLoadPop3dOverridesServer(t *testing.T) {
+func TestLoadPop3dDoesNotOverrideServer(t *testing.T) {
+	// Global settings (hostname, maildir, TLS) come from [server] only.
+	// [pop3d] values for these fields are ignored.
 	content := `
 [server]
 hostname = "shared.example.com"
 maildir = "/var/mail"
+domains_path = "/etc/mail/domains"
 
 [server.tls]
 cert_file = "/etc/ssl/shared-cert.pem"
@@ -204,6 +209,7 @@ key_file = "/etc/ssl/shared-key.pem"
 [pop3d]
 hostname = "pop3.example.com"
 maildir = "/var/pop3mail"
+log_level = "warn"
 
 [pop3d.tls]
 cert_file = "/etc/ssl/pop3-cert.pem"
@@ -216,22 +222,30 @@ cert_file = "/etc/ssl/pop3-cert.pem"
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	// Pop3d values should override server values
-	if cfg.Hostname != "pop3.example.com" {
-		t.Errorf("hostname = %q, want 'pop3.example.com' (pop3d should override server)", cfg.Hostname)
+	// Server values should win — pop3d does not override global settings
+	if cfg.Hostname != "shared.example.com" {
+		t.Errorf("hostname = %q, want 'shared.example.com' ([server] should win)", cfg.Hostname)
 	}
 
-	if cfg.Maildir != "/var/pop3mail" {
-		t.Errorf("maildir = %q, want '/var/pop3mail' (pop3d should override server)", cfg.Maildir)
+	if cfg.Maildir != "/var/mail" {
+		t.Errorf("maildir = %q, want '/var/mail' ([server] should win)", cfg.Maildir)
 	}
 
-	if cfg.TLS.CertFile != "/etc/ssl/pop3-cert.pem" {
-		t.Errorf("tls.cert_file = %q, want '/etc/ssl/pop3-cert.pem' (pop3d should override server)", cfg.TLS.CertFile)
+	if cfg.DomainsPath != "/etc/mail/domains" {
+		t.Errorf("domains_path = %q, want '/etc/mail/domains' ([server] should win)", cfg.DomainsPath)
 	}
 
-	// Server value should be used when pop3d doesn't override
+	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want '/etc/ssl/shared-cert.pem' ([server] should win)", cfg.TLS.CertFile)
+	}
+
 	if cfg.TLS.KeyFile != "/etc/ssl/shared-key.pem" {
-		t.Errorf("tls.key_file = %q, want '/etc/ssl/shared-key.pem' (server value should be inherited)", cfg.TLS.KeyFile)
+		t.Errorf("tls.key_file = %q, want '/etc/ssl/shared-key.pem'", cfg.TLS.KeyFile)
+	}
+
+	// Pop3d-specific settings still apply
+	if cfg.LogLevel != "warn" {
+		t.Errorf("log_level = %q, want 'warn' (pop3d-specific setting)", cfg.LogLevel)
 	}
 }
 
@@ -432,8 +446,9 @@ max_connections = 100
 }
 
 func TestLoadDomainsPath(t *testing.T) {
+	// DomainsPath comes from [server], not [pop3d].
 	content := `
-[pop3d]
+[server]
 hostname = "mail.example.com"
 domains_path = "/etc/mail/domains"
 `
@@ -471,13 +486,13 @@ hostname = "mail.example.com"
 	}
 }
 
-func TestLoadDomainsPathPop3dOverridesServer(t *testing.T) {
+func TestLoadDomainsPathPop3dDoesNotOverrideServer(t *testing.T) {
+	// domains_path in [pop3d] should be ignored; [server] wins.
 	content := `
 [server]
 domains_path = "/etc/mail/shared-domains"
 
 [pop3d]
-hostname = "mail.example.com"
 domains_path = "/etc/mail/pop3-domains"
 `
 
@@ -488,8 +503,8 @@ domains_path = "/etc/mail/pop3-domains"
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if cfg.DomainsPath != "/etc/mail/pop3-domains" {
-		t.Errorf("domains_path = %q, want '/etc/mail/pop3-domains' (pop3d should override server)", cfg.DomainsPath)
+	if cfg.DomainsPath != "/etc/mail/shared-domains" {
+		t.Errorf("domains_path = %q, want '/etc/mail/shared-domains' ([server] should win)", cfg.DomainsPath)
 	}
 }
 

@@ -42,10 +42,13 @@ type FileConfig struct {
 }
 
 // ServerConfig holds shared settings used by all mail services.
+// These are read from the [server] section of the shared config file.
 type ServerConfig struct {
-	Hostname    string    `toml:"hostname"`
-	DomainsPath string    `toml:"domains_path"`
-	TLS         TLSConfig `toml:"tls"`
+	Hostname        string    `toml:"hostname"`
+	DomainsPath     string    `toml:"domains_path"`
+	DomainsDataPath string    `toml:"domains_data_path"`
+	Maildir         string    `toml:"maildir"` // alias for domains_data_path (used by webadmin)
+	TLS             TLSConfig `toml:"tls"`
 }
 
 // RedisConfig holds Redis connection settings for pub/sub notifications.

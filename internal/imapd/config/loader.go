@@ -40,8 +40,8 @@ func ParseFlags() *Flags {
 
 // Load parses a TOML configuration file and returns the Config.
 // If the file does not exist, returns the default configuration.
-// The loader reads from both [server] (shared settings) and [imapd] (specific settings),
-// with [imapd] values taking precedence over [server] values.
+// The loader reads from [server] for global settings (hostname, paths, TLS) and
+// [imapd] for protocol-specific settings (log_level, listeners, timeouts, limits).
 func Load(path string) (Config, error) {
 	cfg := Default()
 
@@ -137,6 +137,13 @@ func mergeServerConfig(dst Config, src ServerConfig) Config {
 		dst.DomainsPath = src.DomainsPath
 	}
 
+	// Maildir is a webadmin-facing alias for DomainsDataPath.
+	if src.DomainsDataPath != "" {
+		dst.DomainsDataPath = src.DomainsDataPath
+	} else if src.Maildir != "" && dst.DomainsDataPath == "" {
+		dst.DomainsDataPath = src.Maildir
+	}
+
 	if src.TLS.CertFile != "" {
 		dst.TLS.CertFile = src.TLS.CertFile
 	}
@@ -172,30 +179,16 @@ func mergeSessionManagerConfig(dst Config, src SessionManagerConfig) Config {
 	return dst
 }
 
-// mergeConfig merges non-zero values from src into dst.
+// mergeConfig merges imapd-specific values from [imapd] into dst.
+// Global settings (hostname, domains_path, domains_data_path, TLS) come from
+// [server] via mergeServerConfig and are not read from [imapd].
 func mergeConfig(dst, src Config) Config {
-	if src.Hostname != "" {
-		dst.Hostname = src.Hostname
-	}
-
 	if src.LogLevel != "" {
 		dst.LogLevel = src.LogLevel
 	}
 
 	if len(src.Listeners) > 0 {
 		dst.Listeners = src.Listeners
-	}
-
-	if src.TLS.CertFile != "" {
-		dst.TLS.CertFile = src.TLS.CertFile
-	}
-
-	if src.TLS.KeyFile != "" {
-		dst.TLS.KeyFile = src.TLS.KeyFile
-	}
-
-	if src.TLS.MinVersion != "" {
-		dst.TLS.MinVersion = src.TLS.MinVersion
 	}
 
 	if src.Timeouts.Connection != "" {
@@ -229,14 +222,6 @@ func mergeConfig(dst, src Config) Config {
 
 	if src.Metrics.Path != "" {
 		dst.Metrics.Path = src.Metrics.Path
-	}
-
-	if src.DomainsPath != "" {
-		dst.DomainsPath = src.DomainsPath
-	}
-
-	if src.DomainsDataPath != "" {
-		dst.DomainsDataPath = src.DomainsDataPath
 	}
 
 	if src.MailSessionCmd != "" {

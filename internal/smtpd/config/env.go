@@ -11,34 +11,12 @@ func ApplyEnv(cfg Config) Config {
 	if v := os.Getenv("SMTPD_LOG_LEVEL"); v != "" {
 		cfg.LogLevel = v
 	}
-	if v := os.Getenv("SMTPD_DOMAINS_PATH"); v != "" {
-		cfg.DomainsPath = v
-	}
 	if v := os.Getenv("SMTPD_TLS_CERT_FILE"); v != "" {
 		cfg.TLS.CertFile = v
 	}
 	if v := os.Getenv("SMTPD_TLS_KEY_FILE"); v != "" {
 		cfg.TLS.KeyFile = v
 	}
-	if v := os.Getenv("SMTPD_DELIVERY_TYPE"); v != "" {
-		cfg.Delivery.Type = v
-	}
-	if v := os.Getenv("SMTPD_DELIVERY_PATH"); v != "" {
-		cfg.Delivery.BasePath = v
-	}
-	if v := os.Getenv("SMTPD_DELIVERY_PATH_TEMPLATE"); v != "" {
-		if cfg.Delivery.Options == nil {
-			cfg.Delivery.Options = make(map[string]string)
-		}
-		cfg.Delivery.Options["path_template"] = v
-	}
-	if v := os.Getenv("SMTPD_DELIVERY_MAILDIR_SUBDIR"); v != "" {
-		if cfg.Delivery.Options == nil {
-			cfg.Delivery.Options = make(map[string]string)
-		}
-		cfg.Delivery.Options["maildir_subdir"] = v
-	}
-
 	// Apply shared Redis overrides
 	if v := os.Getenv("REDIS_URL"); v != "" {
 		cfg.Redis.URL = v

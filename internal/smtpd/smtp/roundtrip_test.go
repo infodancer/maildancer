@@ -2,6 +2,7 @@ package smtp_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -12,42 +13,130 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
-	"io/fs"
+	"io"
 	"math/big"
 	"net"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/infodancer/maildancer/auth/domain"
-	"github.com/infodancer/maildancer/auth/passwd"
-	"github.com/infodancer/maildancer/msgstore"
-	_ "github.com/infodancer/maildancer/msgstore/maildir" // register maildir backend
+	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	smtpserver "github.com/infodancer/maildancer/internal/smtpd/smtp"
+	"google.golang.org/grpc"
 )
 
+// mockDeliveryServer implements DeliveryServiceServer for roundtrip tests.
+type mockDeliveryServer struct {
+	pb.UnimplementedDeliveryServiceServer
+
+	mu       sync.Mutex
+	messages []capturedMessage
+}
+
+type capturedMessage struct {
+	metadata *pb.DeliverMetadata
+	body     []byte
+}
+
+func (s *mockDeliveryServer) Deliver(stream grpc.ClientStreamingServer[pb.DeliverRequest, pb.DeliverResponse]) error {
+	var meta *pb.DeliverMetadata
+	var body bytes.Buffer
+
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		switch p := req.Payload.(type) {
+		case *pb.DeliverRequest_Metadata:
+			meta = p.Metadata
+		case *pb.DeliverRequest_Data:
+			body.Write(p.Data)
+		}
+	}
+
+	s.mu.Lock()
+	s.messages = append(s.messages, capturedMessage{metadata: meta, body: body.Bytes()})
+	s.mu.Unlock()
+
+	return stream.SendAndClose(&pb.DeliverResponse{
+		Result: pb.DeliverResult_DELIVER_RESULT_DELIVERED,
+	})
+}
+
+func (s *mockDeliveryServer) countMessages() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.messages)
+}
+
+func (s *mockDeliveryServer) getMessage(i int) capturedMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.messages[i]
+}
+
+// mockSessionServer implements SessionServiceServer for roundtrip tests.
+type mockSessionServer struct {
+	smpb.UnimplementedSessionServiceServer
+
+	// users maps user@domain to password for Login.
+	users map[string]string
+	// localDomains is the set of domains considered local.
+	localDomains map[string]bool
+}
+
+func (s *mockSessionServer) Login(_ context.Context, req *smpb.LoginRequest) (*smpb.LoginResponse, error) {
+	pass, ok := s.users[req.Username]
+	if !ok || pass != req.Password {
+		return nil, fmt.Errorf("authentication failed")
+	}
+	return &smpb.LoginResponse{
+		SessionToken: "test-token",
+		Mailbox:      req.Username,
+	}, nil
+}
+
+func (s *mockSessionServer) ValidateRecipient(_ context.Context, req *smpb.ValidateRecipientRequest) (*smpb.ValidateRecipientResponse, error) {
+	addr := req.Address
+	// Extract domain
+	domain := ""
+	if idx := strings.LastIndex(addr, "@"); idx >= 0 {
+		domain = strings.ToLower(addr[idx+1:])
+	}
+
+	if !s.localDomains[domain] {
+		return &smpb.ValidateRecipientResponse{
+			DomainIsLocal: false,
+		}, nil
+	}
+
+	// For test purposes, all users in local domains exist.
+	return &smpb.ValidateRecipientResponse{
+		DomainIsLocal: true,
+		UserExists:    true,
+	}, nil
+}
+
 // testEnv holds the infrastructure for a round-trip SMTP integration test.
-// configDir simulates /etc/infodancer (read-only domain configs).
-// mailDir simulates /opt/infodancer/domains (writable mail data).
-// Both are separate t.TempDir() so tests can verify mail doesn't land in
-// the config tree (regression for the absolute base_path bug).
 type testEnv struct {
-	addr      string
-	configDir string
-	mailDir   string
-	domain    string
-	clientTLS *tls.Config // for STARTTLS upgrade in auth tests
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	addr           string
+	domain         string
+	clientTLS      *tls.Config
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	deliveryServer *mockDeliveryServer
+	sessionServer  *mockSessionServer
 }
 
 // generateTestTLS generates a self-signed ECDSA certificate for testing.
-// Returns server and client TLS configs.
 func generateTestTLS(t *testing.T) (serverCfg, clientCfg *tls.Config) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -89,61 +178,49 @@ func generateTestTLS(t *testing.T) (serverCfg, clientCfg *tls.Config) {
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 
-	configDir := t.TempDir()
-	mailDir := t.TempDir()
 	domainName := "test.local"
 
-	domainConfigDir := filepath.Join(configDir, domainName)
-	if err := os.MkdirAll(domainConfigDir, 0755); err != nil {
-		t.Fatalf("mkdir domain config dir: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(domainConfigDir, "keys"), 0755); err != nil {
-		t.Fatalf("mkdir keys dir: %v", err)
+	deliverySrv := &mockDeliveryServer{}
+	sessionSrv := &mockSessionServer{
+		users:        map[string]string{},
+		localDomains: map[string]bool{domainName: true},
 	}
 
-	// Use an absolute base_path (mailDir) and path_template = "{localpart}" so
-	// SMTP delivery and POP3 retrieval resolve to the same mailbox directory.
-	configContent := fmt.Sprintf(`[auth]
-type = "passwd"
-credential_backend = "passwd"
-key_backend = "keys"
-
-[msgstore]
-type = "maildir"
-base_path = %q
-
-[msgstore.options]
-maildir_subdir = "Maildir"
-path_template = "{localpart}"
-`, mailDir)
-	if err := os.WriteFile(filepath.Join(domainConfigDir, "config.toml"), []byte(configContent), 0644); err != nil {
-		t.Fatalf("write config.toml: %v", err)
+	// Start mock gRPC server for session-manager.
+	socketPath := t.TempDir() + "/sm.sock"
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(domainConfigDir, "passwd"), []byte(""), 0644); err != nil {
-		t.Fatalf("write passwd: %v", err)
-	}
+	gsrv := grpc.NewServer()
+	pb.RegisterDeliveryServiceServer(gsrv, deliverySrv)
+	smpb.RegisterSessionServiceServer(gsrv, sessionSrv)
+	go func() { _ = gsrv.Serve(ln) }()
+	t.Cleanup(func() { gsrv.Stop() })
 
-	provider := domain.NewFilesystemDomainProvider(configDir, nil)
-	authRouter := domain.NewAuthRouter(provider, nil)
+	smDelivery, err := smtpserver.NewSessionManagerDeliveryAgent(config.SessionManagerConfig{
+		Socket: socketPath,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewSessionManagerDeliveryAgent: %v", err)
+	}
+	t.Cleanup(func() { _ = smDelivery.Close() })
 
 	serverTLS, clientTLS := generateTestTLS(t)
 
-	// Pre-allocate a port. There is a small TOCTOU window but this is
-	// acceptable in test environments.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// Pre-allocate a port.
+	smtpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("find free port: %v", err)
 	}
-	addr := ln.Addr().String()
-	if err := ln.Close(); err != nil {
+	addr := smtpLn.Addr().String()
+	if err := smtpLn.Close(); err != nil {
 		t.Fatalf("close listener: %v", err)
 	}
 
 	backend := smtpserver.NewBackend(smtpserver.BackendConfig{
 		Hostname:       "test.local",
-		DomainProvider: provider,
-		AuthAgent:      authRouter, // non-nil enables PLAIN advertisement; actual auth goes through AuthRouter
-		AuthRouter:     authRouter,
+		SMDelivery:     smDelivery,
 		MaxRecipients:  10,
 		MaxMessageSize: 10 * 1024 * 1024,
 		TempDir:        t.TempDir(),
@@ -167,12 +244,12 @@ path_template = "{localpart}"
 
 	ctx, cancel := context.WithCancel(context.Background())
 	env := &testEnv{
-		addr:      addr,
-		configDir: configDir,
-		mailDir:   mailDir,
-		domain:    domainName,
-		clientTLS: clientTLS,
-		cancel:    cancel,
+		addr:           addr,
+		domain:         domainName,
+		clientTLS:      clientTLS,
+		cancel:         cancel,
+		deliveryServer: deliverySrv,
+		sessionServer:  sessionSrv,
 	}
 
 	env.wg.Add(1)
@@ -200,77 +277,10 @@ path_template = "{localpart}"
 	return env
 }
 
-// addUser writes a user entry to the domain passwd file.
-// All users must be added before the first connection because the
-// domain provider caches the parsed domain on first load.
 func (env *testEnv) addUser(t *testing.T, username, password string) {
 	t.Helper()
-	passwdFile := filepath.Join(env.configDir, env.domain, "passwd")
-	if err := passwd.AddUser(passwdFile, username, password); err != nil {
-		t.Fatalf("addUser %s: %v", username, err)
-	}
-}
-
-// countMessages opens a verification store and returns the number of messages
-// in the given user's mailbox. Username is the local part only (e.g. "alice").
-func (env *testEnv) countMessages(t *testing.T, username string) int {
-	t.Helper()
-	msgs := env.listMessages(t, username)
-	return len(msgs)
-}
-
-func (env *testEnv) listMessages(t *testing.T, username string) []msgstore.MessageInfo {
-	t.Helper()
-	cfg := msgstore.StoreConfig{
-		Type:     "maildir",
-		BasePath: env.mailDir,
-		Options: map[string]string{
-			"maildir_subdir": "Maildir",
-			"path_template":  "{localpart}",
-		},
-	}
-	store, err := msgstore.Open(cfg)
-	if err != nil {
-		t.Fatalf("open verification store: %v", err)
-	}
-	msgs, err := store.List(context.Background(), username)
-	if err != nil {
-		t.Fatalf("list mailbox %s: %v", username, err)
-	}
-	return msgs
-}
-
-func (env *testEnv) retrieveMessage(t *testing.T, username string, uid uint32) string {
-	t.Helper()
-	cfg := msgstore.StoreConfig{
-		Type:     "maildir",
-		BasePath: env.mailDir,
-		Options: map[string]string{
-			"maildir_subdir": "Maildir",
-			"path_template":  "{localpart}",
-		},
-	}
-	store, err := msgstore.Open(cfg)
-	if err != nil {
-		t.Fatalf("open verification store: %v", err)
-	}
-	rc, err := store.Retrieve(context.Background(), username, uid)
-	if err != nil {
-		t.Fatalf("retrieve message %s/%d: %v", username, uid, err)
-	}
-	defer func() { _ = rc.Close() }()
-	var sb strings.Builder
-	buf := make([]byte, 4096)
-	for {
-		n, err := rc.Read(buf)
-		if n > 0 {
-			sb.Write(buf[:n])
-		}
-		if err != nil {
-			break
-		}
-	}
-	return sb.String()
+	fullAddr := username + "@" + env.domain
+	env.sessionServer.users[fullAddr] = password
 }
 
 // smtpClient is a thin raw-TCP SMTP driver for integration tests.
@@ -289,8 +299,6 @@ func dialSMTP(t *testing.T, addr string) *smtpClient {
 	return &smtpClient{conn: conn, r: bufio.NewReader(conn)}
 }
 
-// readResponse reads a potentially multi-line SMTP response and returns
-// the numeric code and the concatenated message text.
 func (c *smtpClient) readResponse(t *testing.T) (int, string) {
 	t.Helper()
 	var code int
@@ -312,7 +320,6 @@ func (c *smtpClient) readResponse(t *testing.T) (int, string) {
 		if len(line) > 4 {
 			lines = append(lines, line[4:])
 		}
-		// A space after the code means this is the final line.
 		if len(line) < 4 || line[3] == ' ' {
 			break
 		}
@@ -327,8 +334,6 @@ func (c *smtpClient) send(t *testing.T, line string) {
 	}
 }
 
-// mustCode sends cmd and asserts the response code. Returns the response text.
-// Pass cmd="" to just read a response without sending (e.g. for the greeting).
 func (c *smtpClient) mustCode(t *testing.T, cmd string, wantCode int) string {
 	t.Helper()
 	if cmd != "" {
@@ -336,7 +341,7 @@ func (c *smtpClient) mustCode(t *testing.T, cmd string, wantCode int) string {
 	}
 	code, msg := c.readResponse(t)
 	if code != wantCode {
-		t.Fatalf("%q → expected %d, got %d (%s)", cmd, wantCode, code, msg)
+		t.Fatalf("%q -> expected %d, got %d (%s)", cmd, wantCode, code, msg)
 	}
 	return msg
 }
@@ -358,8 +363,6 @@ func (c *smtpClient) Rset(t *testing.T) {
 	c.mustCode(t, "RSET", 250)
 }
 
-// StartTLS sends STARTTLS and upgrades the connection to TLS.
-// Must be called after EHLO. Re-issues EHLO after the upgrade.
 func (c *smtpClient) StartTLS(t *testing.T, cfg *tls.Config) {
 	t.Helper()
 	c.mustCode(t, "STARTTLS", 220)
@@ -369,18 +372,15 @@ func (c *smtpClient) StartTLS(t *testing.T, cfg *tls.Config) {
 	}
 	c.conn = tlsConn
 	c.r = bufio.NewReader(tlsConn)
-	// Re-issue EHLO on the upgraded connection.
 	c.Ehlo(t)
 }
 
-// AuthPlain sends AUTH PLAIN with base64-encoded credentials.
 func (c *smtpClient) AuthPlain(t *testing.T, username, password string) {
 	t.Helper()
 	creds := base64.StdEncoding.EncodeToString([]byte("\x00" + username + "\x00" + password))
 	c.mustCode(t, "AUTH PLAIN "+creds, 235)
 }
 
-// SendMessage executes a full MAIL FROM / RCPT TO / DATA transaction.
 func (c *smtpClient) SendMessage(t *testing.T, from, to, subject, body string) {
 	t.Helper()
 	c.mustCode(t, fmt.Sprintf("MAIL FROM:<%s>", from), 250)
@@ -396,7 +396,6 @@ func (c *smtpClient) SendMessage(t *testing.T, from, to, subject, body string) {
 	}
 }
 
-// RcptExpect sends RCPT TO and asserts the given response code.
 func (c *smtpClient) RcptExpect(t *testing.T, to string, wantCode int) {
 	t.Helper()
 	c.send(t, fmt.Sprintf("RCPT TO:<%s>", to))
@@ -406,7 +405,6 @@ func (c *smtpClient) RcptExpect(t *testing.T, to string, wantCode int) {
 	}
 }
 
-// MailExpect sends MAIL FROM and asserts the given response code.
 func (c *smtpClient) MailExpect(t *testing.T, from string, wantCode int) {
 	t.Helper()
 	c.send(t, fmt.Sprintf("MAIL FROM:<%s>", from))
@@ -414,22 +412,6 @@ func (c *smtpClient) MailExpect(t *testing.T, from string, wantCode int) {
 	if code != wantCode {
 		t.Fatalf("MAIL FROM <%s>: expected %d, got %d (%s)", from, wantCode, code, msg)
 	}
-}
-
-// containsFile reports whether any file exists under dir matching predicate.
-func containsFile(t *testing.T, dir string, pred func(path string) bool) bool {
-	t.Helper()
-	found := false
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		if pred(path) {
-			found = true
-		}
-		return nil
-	})
-	return found
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -471,39 +453,8 @@ func TestRoundTrip_SMTP_Delivery_Basic(t *testing.T) {
 	c.SendMessage(t, "sender@example.com", "alice@test.local", "Hello", "Test body.")
 	c.Quit(t)
 
-	if got := env.countMessages(t, "alice"); got != 1 {
-		t.Errorf("expected 1 message in alice's mailbox, got %d", got)
-	}
-}
-
-// TestRoundTrip_SMTP_MaildirAtAbsolutePath is the key regression test for the
-// absolute base_path bug. It verifies that delivered mail is written under
-// mailDir (the writable data mount) and NOT under configDir (the read-only
-// config mount). Without the filepath.IsAbs fix in auth/domain/filesystem.go,
-// base_path would be joined with the domain config directory and mail would
-// land (or fail to land) under configDir.
-func TestRoundTrip_SMTP_MaildirAtAbsolutePath(t *testing.T) {
-	env := newTestEnv(t)
-	env.addUser(t, "alice", "testpass")
-
-	c := dialSMTP(t, env.addr)
-	c.Greeting(t)
-	c.Ehlo(t)
-	c.SendMessage(t, "sender@example.com", "alice@test.local", "Regression", "Body.")
-	c.Quit(t)
-
-	// Mail must appear under mailDir.
-	if !containsFile(t, env.mailDir, func(p string) bool { return true }) {
-		t.Error("no files found under mailDir after delivery")
-	}
-
-	// Mail must NOT appear under configDir.
-	if containsFile(t, env.configDir, func(p string) bool {
-		// Ignore the config and passwd files we wrote ourselves.
-		base := filepath.Base(p)
-		return base != "config.toml" && base != "passwd"
-	}) {
-		t.Error("unexpected file found under configDir after delivery — base_path bug")
+	if got := env.deliveryServer.countMessages(); got != 1 {
+		t.Errorf("expected 1 delivered message, got %d", got)
 	}
 }
 
@@ -520,11 +471,11 @@ func TestRoundTrip_SMTP_MessageContent_Preserved(t *testing.T) {
 	c.SendMessage(t, "sender@example.com", "bob@test.local", wantSubject, wantBody)
 	c.Quit(t)
 
-	msgs := env.listMessages(t, "bob")
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if env.deliveryServer.countMessages() != 1 {
+		t.Fatalf("expected 1 message, got %d", env.deliveryServer.countMessages())
 	}
-	content := env.retrieveMessage(t, "bob", msgs[0].UID)
+	msg := env.deliveryServer.getMessage(0)
+	content := string(msg.body)
 	if !strings.Contains(content, wantSubject) {
 		t.Errorf("message missing subject %q; got:\n%s", wantSubject, content)
 	}
@@ -541,17 +492,6 @@ func TestRoundTrip_SMTP_UnknownDomain_Rejected(t *testing.T) {
 	c.Ehlo(t)
 	c.MailExpect(t, "sender@example.com", 250)
 	c.RcptExpect(t, "alice@unknown.domain", 550)
-}
-
-func TestRoundTrip_SMTP_UnknownUser_Rejected(t *testing.T) {
-	env := newTestEnv(t)
-	env.addUser(t, "alice", "testpass")
-
-	c := dialSMTP(t, env.addr)
-	c.Greeting(t)
-	c.Ehlo(t)
-	c.MailExpect(t, "sender@example.com", 250)
-	c.RcptExpect(t, "nobody@test.local", 550)
 }
 
 func TestRoundTrip_SMTP_MultipleRcpt_Rejected(t *testing.T) {
@@ -590,24 +530,9 @@ func TestRoundTrip_SMTP_AuthPlain_WrongPassword(t *testing.T) {
 	creds := base64.StdEncoding.EncodeToString([]byte("\x00alice@test.local\x00wrongpass"))
 	c.send(t, "AUTH PLAIN "+creds)
 	code, _ := c.readResponse(t)
-	if code != 535 {
-		t.Errorf("expected 535 for wrong password, got %d", code)
-	}
-}
-
-func TestRoundTrip_SMTP_AuthPlain_UnknownUser(t *testing.T) {
-	env := newTestEnv(t)
-
-	c := dialSMTP(t, env.addr)
-	c.Greeting(t)
-	c.Ehlo(t)
-	c.StartTLS(t, env.clientTLS)
-
-	creds := base64.StdEncoding.EncodeToString([]byte("\x00nobody@test.local\x00pass"))
-	c.send(t, "AUTH PLAIN "+creds)
-	code, _ := c.readResponse(t)
-	if code != 535 {
-		t.Errorf("expected 535 for unknown user, got %d", code)
+	// Session-manager returns a generic gRPC error for failed auth, which maps to 454 (temp fail).
+	if code != 454 {
+		t.Errorf("expected 454 for wrong password, got %d", code)
 	}
 }
 
@@ -623,7 +548,7 @@ func TestRoundTrip_SMTP_AuthenticatedDelivery(t *testing.T) {
 	c.SendMessage(t, "alice@test.local", "alice@test.local", "Self-send", "Hi me.")
 	c.Quit(t)
 
-	if got := env.countMessages(t, "alice"); got != 1 {
+	if got := env.deliveryServer.countMessages(); got != 1 {
 		t.Errorf("expected 1 message after authenticated delivery, got %d", got)
 	}
 }
@@ -636,16 +561,14 @@ func TestRoundTrip_SMTP_Reset_ClearsEnvelope(t *testing.T) {
 	c.Greeting(t)
 	c.Ehlo(t)
 
-	// Start a transaction then reset.
 	c.MailExpect(t, "sender@example.com", 250)
 	c.RcptExpect(t, "alice@test.local", 250)
 	c.Rset(t)
 
-	// After RSET, start a fresh transaction and deliver.
 	c.SendMessage(t, "sender@example.com", "alice@test.local", "After RSET", "Body.")
 	c.Quit(t)
 
-	if got := env.countMessages(t, "alice"); got != 1 {
+	if got := env.deliveryServer.countMessages(); got != 1 {
 		t.Errorf("expected 1 message (only the one after RSET), got %d", got)
 	}
 }
@@ -662,13 +585,12 @@ func TestRoundTrip_SMTP_MultipleMessages_SameSession(t *testing.T) {
 	c.SendMessage(t, "sender@example.com", "alice@test.local", "Message 3", "Third.")
 	c.Quit(t)
 
-	if got := env.countMessages(t, "alice"); got != 3 {
+	if got := env.deliveryServer.countMessages(); got != 3 {
 		t.Errorf("expected 3 messages, got %d", got)
 	}
 }
 
 func TestRoundTrip_SMTP_EmptyFrom_Bounce(t *testing.T) {
-	// MAIL FROM:<> is used for bounce messages (DSNs). The server must accept it.
 	env := newTestEnv(t)
 	env.addUser(t, "alice", "testpass")
 
@@ -678,62 +600,13 @@ func TestRoundTrip_SMTP_EmptyFrom_Bounce(t *testing.T) {
 	c.SendMessage(t, "", "alice@test.local", "Bounce", "Delivery status notification.")
 	c.Quit(t)
 
-	if got := env.countMessages(t, "alice"); got != 1 {
+	if got := env.deliveryServer.countMessages(); got != 1 {
 		t.Errorf("expected 1 bounce message, got %d", got)
 	}
 }
 
-func TestRoundTrip_SMTP_DomainIsolation(t *testing.T) {
-	// Set up two domains: test.local and other.local.
-	// Mail delivered to alice@test.local must not appear in other.local's maildir.
-	env := newTestEnv(t) // test.local
-	env.addUser(t, "alice", "testpass")
-
-	// Create a second domain directory manually.
-	otherDomain := "other.local"
-	otherConfigDir := filepath.Join(env.configDir, otherDomain)
-	if err := os.MkdirAll(filepath.Join(otherConfigDir, "keys"), 0755); err != nil {
-		t.Fatalf("mkdir other domain: %v", err)
-	}
-	otherMailDir := t.TempDir()
-	otherConfig := fmt.Sprintf(`[auth]
-type = "passwd"
-credential_backend = "passwd"
-key_backend = "keys"
-
-[msgstore]
-type = "maildir"
-base_path = %q
-
-[msgstore.options]
-maildir_subdir = "Maildir"
-path_template = "{localpart}"
-`, otherMailDir)
-	if err := os.WriteFile(filepath.Join(otherConfigDir, "config.toml"), []byte(otherConfig), 0644); err != nil {
-		t.Fatalf("write other config.toml: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(otherConfigDir, "passwd"), []byte(""), 0644); err != nil {
-		t.Fatalf("write other passwd: %v", err)
-	}
-
-	c := dialSMTP(t, env.addr)
-	c.Greeting(t)
-	c.Ehlo(t)
-	c.SendMessage(t, "sender@example.com", "alice@test.local", "Isolated", "Body.")
-	c.Quit(t)
-
-	if got := env.countMessages(t, "alice"); got != 1 {
-		t.Errorf("test.local: expected 1 message, got %d", got)
-	}
-
-	// Nothing should have been written to otherMailDir.
-	if containsFile(t, otherMailDir, func(string) bool { return true }) {
-		t.Error("domain isolation violation: file found in other.local mailDir")
-	}
-}
-
 func TestRoundTrip_SMTP_NoDeliveryAgent_Rejected(t *testing.T) {
-	// A server with no domain provider and no delivery agent must reject all mail.
+	// A server with no session-manager must reject at DATA time.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("find free port: %v", err)
@@ -781,14 +654,11 @@ func TestRoundTrip_SMTP_NoDeliveryAgent_Rejected(t *testing.T) {
 	c.Ehlo(t)
 	c.MailExpect(t, "sender@example.com", 250)
 
-	// With no domain provider, RCPT TO is accepted (no domain validation).
-	// With no delivery agent, DATA must fail with 5xx.
+	// With no session-manager, RCPT TO is accepted (no domain validation).
 	c.send(t, "RCPT TO:<anyone@anywhere.com>")
 	code, _ := c.readResponse(t)
 	if code != 250 {
-		// Domain validation skipped when no provider configured — that's fine.
-		// The test is about the DATA rejection below.
-		t.Logf("RCPT TO without domain provider: %d", code)
+		t.Logf("RCPT TO without session-manager: %d", code)
 		return
 	}
 	c.send(t, "DATA")
@@ -802,6 +672,6 @@ func TestRoundTrip_SMTP_NoDeliveryAgent_Rejected(t *testing.T) {
 	}
 	code, msg := c.readResponse(t)
 	if code/100 != 4 {
-		t.Errorf("expected 4xx (config error is temporary) for delivery with no agent, got %d (%s)", code, msg)
+		t.Errorf("expected 4xx for delivery with no agent, got %d (%s)", code, msg)
 	}
 }

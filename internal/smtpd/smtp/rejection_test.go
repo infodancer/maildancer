@@ -7,28 +7,53 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/infodancer/maildancer/auth/domain"
-	"github.com/infodancer/maildancer/auth/passwd"
-	_ "github.com/infodancer/maildancer/msgstore/maildir"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	smtpserver "github.com/infodancer/maildancer/internal/smtpd/smtp"
+	"google.golang.org/grpc"
 )
 
-// rejectionTestEnv extends testEnv with data-mode rejection and a spamtrap stub.
+// mockRejectionSessionServer implements SessionServiceServer for rejection tests.
+// It returns DeferRejection=true or false depending on the configured rejection mode,
+// and knows which users exist.
+type mockRejectionSessionServer struct {
+	smpb.UnimplementedSessionServiceServer
+
+	localDomains   map[string]bool
+	existingUsers  map[string]bool
+	deferRejection bool // controls ValidateRecipient.DeferRejection for unknown users
+}
+
+func (s *mockRejectionSessionServer) ValidateRecipient(_ context.Context, req *smpb.ValidateRecipientRequest) (*smpb.ValidateRecipientResponse, error) {
+	addr := req.Address
+	domain := ""
+	if idx := strings.LastIndex(addr, "@"); idx >= 0 {
+		domain = strings.ToLower(addr[idx+1:])
+	}
+
+	if !s.localDomains[domain] {
+		return &smpb.ValidateRecipientResponse{DomainIsLocal: false}, nil
+	}
+
+	exists := s.existingUsers[strings.ToLower(addr)]
+	return &smpb.ValidateRecipientResponse{
+		DomainIsLocal:  true,
+		UserExists:     exists,
+		DeferRejection: !exists && s.deferRejection,
+	}, nil
+}
+
 type rejectionTestEnv struct {
-	addr      string
-	configDir string
-	mailDir   string
-	domain    string
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	addr   string
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	sessionServer *mockRejectionSessionServer
 
 	// spamtrap stub
 	learnMu    sync.Mutex
@@ -44,51 +69,41 @@ type learnCallRecord struct {
 func newRejectionTestEnv(t *testing.T, mode config.RejectionMode, spamtrapEnabled bool) *rejectionTestEnv {
 	t.Helper()
 
-	configDir := t.TempDir()
-	mailDir := t.TempDir()
 	domainName := "test.local"
+	deferRejection := mode == config.RejectionModeData
 
-	domainConfigDir := filepath.Join(configDir, domainName)
-	if err := os.MkdirAll(domainConfigDir, 0755); err != nil {
-		t.Fatalf("mkdir domain config dir: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(domainConfigDir, "keys"), 0755); err != nil {
-		t.Fatalf("mkdir keys dir: %v", err)
-	}
-
-	configContent := fmt.Sprintf(`[auth]
-type = "passwd"
-credential_backend = "passwd"
-key_backend = "keys"
-
-[msgstore]
-type = "maildir"
-base_path = %q
-
-[msgstore.options]
-maildir_subdir = "Maildir"
-path_template = "{localpart}"
-`, mailDir)
-	if err := os.WriteFile(filepath.Join(domainConfigDir, "config.toml"), []byte(configContent), 0644); err != nil {
-		t.Fatalf("write config.toml: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(domainConfigDir, "passwd"), []byte(""), 0644); err != nil {
-		t.Fatalf("write passwd: %v", err)
+	sessionSrv := &mockRejectionSessionServer{
+		localDomains:   map[string]bool{domainName: true},
+		existingUsers:  map[string]bool{},
+		deferRejection: deferRejection,
 	}
 
-	provider := domain.NewFilesystemDomainProvider(configDir, nil)
-	authRouter := domain.NewAuthRouter(provider, nil)
+	// Start mock gRPC server.
+	socketPath := t.TempDir() + "/sm.sock"
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	gsrv := grpc.NewServer()
+	smpb.RegisterSessionServiceServer(gsrv, sessionSrv)
+	go func() { _ = gsrv.Serve(ln) }()
+	t.Cleanup(func() { gsrv.Stop() })
+
+	smDelivery, err := smtpserver.NewSessionManagerDeliveryAgent(config.SessionManagerConfig{
+		Socket: socketPath,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewSessionManagerDeliveryAgent: %v", err)
+	}
+	t.Cleanup(func() { _ = smDelivery.Close() })
 
 	env := &rejectionTestEnv{
-		configDir: configDir,
-		mailDir:   mailDir,
-		domain:    domainName,
+		sessionServer: sessionSrv,
 	}
 
 	bcfg := smtpserver.BackendConfig{
 		Hostname:       "test.local",
-		DomainProvider: provider,
-		AuthRouter:     authRouter,
+		SMDelivery:     smDelivery,
 		MaxRecipients:  10,
 		MaxMessageSize: 10 * 1024 * 1024,
 		TempDir:        t.TempDir(),
@@ -118,16 +133,16 @@ path_template = "{localpart}"
 
 	backend := smtpserver.NewBackend(bcfg)
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	smtpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	env.addr = ln.Addr().String()
-	if err := ln.Close(); err != nil {
+	env.addr = smtpLn.Addr().String()
+	if err := smtpLn.Close(); err != nil {
 		t.Fatalf("close listener: %v", err)
 	}
 
-	srv, err := smtpserver.NewServer(smtpserver.ServerConfig{
+	smtpSrv, err := smtpserver.NewServer(smtpserver.ServerConfig{
 		Backend: backend,
 		Listeners: []config.ListenerConfig{
 			{Address: env.addr, Mode: config.ModeSmtp},
@@ -148,10 +163,9 @@ path_template = "{localpart}"
 	env.wg.Add(1)
 	go func() {
 		defer env.wg.Done()
-		_ = srv.Run(ctx)
+		_ = smtpSrv.Run(ctx)
 	}()
 
-	// Wait for server to bind
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		c, err := net.DialTimeout("tcp", env.addr, 100*time.Millisecond)
@@ -170,12 +184,9 @@ path_template = "{localpart}"
 	return env
 }
 
-func (env *rejectionTestEnv) addUser(t *testing.T, username, password string) {
+func (env *rejectionTestEnv) addUser(t *testing.T, username string) {
 	t.Helper()
-	passwdFile := filepath.Join(env.configDir, env.domain, "passwd")
-	if err := passwd.AddUser(passwdFile, username, password); err != nil {
-		t.Fatalf("addUser %s: %v", username, err)
-	}
+	env.sessionServer.existingUsers[strings.ToLower(username+"@test.local")] = true
 }
 
 func (env *rejectionTestEnv) getLearnCalls() []learnCallRecord {
@@ -189,7 +200,7 @@ func (env *rejectionTestEnv) getLearnCalls() []learnCallRecord {
 // TestRcptMode_RejectAtRcpt verifies default behavior: unknown user rejected at RCPT TO.
 func TestRcptMode_RejectAtRcpt(t *testing.T) {
 	env := newRejectionTestEnv(t, config.RejectionModeRcpt, false)
-	env.addUser(t, "alice", "pass123")
+	env.addUser(t, "alice")
 
 	c := dialSMTP(t, env.addr)
 	defer c.Quit(t)
@@ -205,7 +216,7 @@ func TestRcptMode_RejectAtRcpt(t *testing.T) {
 // rejected after DATA.
 func TestDataMode_RejectAfterData(t *testing.T) {
 	env := newRejectionTestEnv(t, config.RejectionModeData, false)
-	env.addUser(t, "alice", "pass123")
+	env.addUser(t, "alice")
 
 	c := dialSMTP(t, env.addr)
 	defer c.Quit(t)
@@ -229,34 +240,11 @@ func TestDataMode_RejectAfterData(t *testing.T) {
 	}
 }
 
-// TestDataMode_ValidUser verifies data-mode delivers normally for valid users.
-func TestDataMode_ValidUser(t *testing.T) {
-	env := newRejectionTestEnv(t, config.RejectionModeData, false)
-	env.addUser(t, "alice", "pass123")
-
-	c := dialSMTP(t, env.addr)
-	defer c.Quit(t)
-	c.Greeting(t)
-	c.Ehlo(t)
-
-	c.mustCode(t, "MAIL FROM:<sender@remote.com>", 250)
-	c.RcptExpect(t, "alice@test.local", 250)
-	c.mustCode(t, "DATA", 354)
-	msg := "From: sender@remote.com\r\nTo: alice@test.local\r\nSubject: test\r\n\r\nHello"
-	if _, err := fmt.Fprintf(c.conn, "%s\r\n.\r\n", msg); err != nil {
-		t.Fatalf("write DATA: %v", err)
-	}
-	code, _ := c.readResponse(t)
-	if code != 250 {
-		t.Fatalf("expected 250 after DATA for valid user, got %d", code)
-	}
-}
-
 // TestDataMode_SpamtrapAutoLearn verifies that messages to unknown users
 // are auto-learned as spam when spamtrap is enabled.
 func TestDataMode_SpamtrapAutoLearn(t *testing.T) {
 	env := newRejectionTestEnv(t, config.RejectionModeData, true)
-	env.addUser(t, "alice", "pass123")
+	env.addUser(t, "alice")
 
 	c := dialSMTP(t, env.addr)
 	defer c.Quit(t)

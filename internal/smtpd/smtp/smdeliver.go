@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -29,6 +30,7 @@ type SessionManagerDeliveryAgent struct {
 	conn     *grpc.ClientConn
 	delivery pb.DeliveryServiceClient
 	outbound pb.OutboundServiceClient
+	session  smpb.SessionServiceClient
 	logger   *slog.Logger
 }
 
@@ -67,7 +69,63 @@ func NewSessionManagerDeliveryAgent(cfg config.SessionManagerConfig, logger *slo
 		conn:     conn,
 		delivery: pb.NewDeliveryServiceClient(conn),
 		outbound: pb.NewOutboundServiceClient(conn),
+		session:  smpb.NewSessionServiceClient(conn),
 		logger:   logger,
+	}, nil
+}
+
+// LoginResult holds the result of a session-manager Login call.
+type LoginResult struct {
+	Token           string
+	Mailbox         string
+	Extension       string
+	MaxSendsPerHour int
+}
+
+// Login authenticates a user via session-manager and returns the auth result.
+func (a *SessionManagerDeliveryAgent) Login(ctx context.Context, username, password string) (*LoginResult, error) {
+	resp, err := a.session.Login(ctx, &smpb.LoginRequest{
+		Username: username,
+		Password: password,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &LoginResult{
+		Token:           resp.SessionToken,
+		Mailbox:         resp.Mailbox,
+		Extension:       resp.Extension,
+		MaxSendsPerHour: int(resp.MaxSendsPerHour),
+	}, nil
+}
+
+// Logout releases a session token in session-manager.
+func (a *SessionManagerDeliveryAgent) Logout(ctx context.Context, token string) {
+	_, err := a.session.Logout(ctx, &smpb.LogoutRequest{SessionToken: token})
+	if err != nil {
+		a.logger.Debug("session-manager logout error", slog.String("error", err.Error()))
+	}
+}
+
+// ValidateRecipientResult holds the result of a ValidateRecipient call.
+type ValidateRecipientResult struct {
+	DomainIsLocal  bool
+	UserExists     bool
+	DeferRejection bool
+}
+
+// ValidateRecipient checks whether a recipient address is deliverable.
+func (a *SessionManagerDeliveryAgent) ValidateRecipient(ctx context.Context, address string) (*ValidateRecipientResult, error) {
+	resp, err := a.session.ValidateRecipient(ctx, &smpb.ValidateRecipientRequest{
+		Address: address,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &ValidateRecipientResult{
+		DomainIsLocal:  resp.DomainIsLocal,
+		UserExists:     resp.UserExists,
+		DeferRejection: resp.DeferRejection,
 	}, nil
 }
 

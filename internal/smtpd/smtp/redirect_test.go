@@ -41,39 +41,6 @@ func TestRedirectError_Error(t *testing.T) {
 	}
 }
 
-func TestJoinAddresses(t *testing.T) {
-	tests := []struct {
-		name  string
-		addrs []string
-		want  string
-	}{
-		{"empty", nil, "(none)"},
-		{"single", []string{"a@b.com"}, "a@b.com"},
-		{"multiple", []string{"a@b.com", "c@d.com"}, "a@b.com, c@d.com"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := joinAddresses(tt.addrs)
-			if got != tt.want {
-				t.Errorf("joinAddresses(%v) = %q, want %q", tt.addrs, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestNewGrpcDeliveryAgent_Defaults(t *testing.T) {
-	agent := NewGrpcDeliveryAgent(GrpcDeliveryConfig{
-		MailSessionCmd: "/usr/local/bin/mail-session",
-		BasePath:       "/var/mail/store",
-	})
-	if agent.cfg.StoreType != "maildir" {
-		t.Errorf("expected default StoreType 'maildir', got %q", agent.cfg.StoreType)
-	}
-	if agent.cfg.Logger == nil {
-		t.Error("expected non-nil default logger")
-	}
-}
-
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
 }

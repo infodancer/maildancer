@@ -93,17 +93,12 @@ func (c *SessionManagerConfig) IsEnabled() bool {
 type Config struct {
 	Hostname           string               `toml:"hostname"`
 	LogLevel           string               `toml:"log_level"`
-	DomainsPath        string               `toml:"domains_path"`
-	DomainsDataPath    string               `toml:"domains_data_path"`
 	RecipientRejection RejectionMode        `toml:"recipient_rejection"`
 	Listeners          []ListenerConfig     `toml:"listeners"`
 	TLS                TLSConfig            `toml:"tls"`
 	Limits             LimitsConfig         `toml:"limits"`
 	Timeouts           TimeoutsConfig       `toml:"timeouts"`
 	Metrics            MetricsConfig        `toml:"metrics"`
-	Delivery           DeliveryConfig       `toml:"delivery"`
-	Encryption         EncryptionConfig     `toml:"encryption"`
-	Auth               AuthConfig           `toml:"auth"`
 	SpamCheck          SpamCheckConfig      `toml:"spamcheck"`
 	Spamtrap           SpamtrapConfig       `toml:"spamtrap"`
 	Redis              RedisConfig          `toml:"-"` // populated from [redis] top-level section
@@ -132,32 +127,6 @@ func (c *SpamtrapConfig) GetMaxLearnsPerIPPerHour() int {
 		return 10
 	}
 	return c.MaxLearnsPerIPPerHour
-}
-
-// EncryptionConfig holds configuration for message encryption.
-// When enabled, messages are encrypted for recipients that have keys configured.
-type EncryptionConfig struct {
-	// Enabled indicates whether message encryption is enabled.
-	Enabled bool `toml:"enabled"`
-
-	// KeyBackendType is the type of key provider (e.g., "passwd").
-	KeyBackendType string `toml:"key_backend_type"`
-
-	// KeyBackend is the path or connection string for key storage.
-	// For passwd: path to key directory (e.g., "/etc/mail/keys")
-	KeyBackend string `toml:"key_backend"`
-
-	// CredentialBackend is the path for credential storage (needed by some key providers).
-	// For passwd: path to passwd file (e.g., "/etc/mail/passwd")
-	CredentialBackend string `toml:"credential_backend"`
-
-	// Options contains implementation-specific settings.
-	Options map[string]string `toml:"options"`
-}
-
-// IsEnabled returns true if encryption is enabled.
-func (c *EncryptionConfig) IsEnabled() bool {
-	return c.Enabled && c.KeyBackendType != ""
 }
 
 // ListenerConfig defines settings for a single listener.
@@ -194,57 +163,11 @@ type MetricsConfig struct {
 }
 
 // DeliveryConfig holds configuration for message delivery.
-// Uses the msgstore registry pattern for pluggable storage backends.
+// Retained in the shared [server.delivery] section for other daemons.
 type DeliveryConfig struct {
-	Type            string            `toml:"type"`              // Storage backend type (e.g., "maildir")
-	BasePath        string            `toml:"base_path"`         // Base path for storage
-	Options         map[string]string `toml:"options"`           // Backend-specific options
-	UID             int               `toml:"uid"`               // Setuid target for mail-session (0 = no drop)
-	GID             int               `toml:"gid"`               // Setgid target for mail-session (0 = no drop)
-	MailSessionCmd  string            `toml:"mail_session_cmd"`  // Path to mail-session binary
-	DomainsPath     string            `toml:"domains_path"`      // Domains config path (passed to mail-session)
-	DomainsDataPath string            `toml:"domains_data_path"` // Domains data path (passed to mail-session)
-}
-
-// AuthConfig holds configuration for SMTP authentication.
-type AuthConfig struct {
-	Enabled           bool              `toml:"enabled"`
-	AgentType         string            `toml:"agent_type"`         // Auth agent type (e.g., "passwd")
-	CredentialBackend string            `toml:"credential_backend"` // Path to credential store
-	KeyBackend        string            `toml:"key_backend"`        // Path to key store
-	Options           map[string]string `toml:"options"`            // Backend-specific options
-	OAuth             OAuthConfig       `toml:"oauth"`              // OAuth/OAUTHBEARER configuration
-}
-
-// OAuthConfig holds configuration for OAuth 2.0 bearer token authentication (RFC 7628).
-type OAuthConfig struct {
-	// Enabled indicates whether OAUTHBEARER mechanism is available.
-	Enabled bool `toml:"enabled"`
-
-	// JWKSURL is the URL to fetch the JSON Web Key Set for token validation.
-	// Example: "https://login.microsoftonline.com/common/discovery/v2.0/keys"
-	JWKSURL string `toml:"jwks_url"`
-
-	// Issuer is the expected "iss" claim in the JWT.
-	// Example: "https://login.microsoftonline.com/{tenant}/v2.0"
-	Issuer string `toml:"issuer"`
-
-	// Audience is the expected "aud" claim in the JWT.
-	// This is typically your application's client ID or API identifier.
-	Audience string `toml:"audience"`
-
-	// UsernameClaim specifies which JWT claim contains the username.
-	// Common values: "email", "preferred_username", "sub", "upn"
-	// Defaults to "email" if not specified.
-	UsernameClaim string `toml:"username_claim"`
-
-	// JWKSRefreshInterval is how often to refresh the JWKS (e.g., "1h").
-	// Defaults to "1h" if not specified.
-	JWKSRefreshInterval string `toml:"jwks_refresh_interval"`
-
-	// AllowedDomains restricts which email domains can authenticate.
-	// If empty, all domains are allowed.
-	AllowedDomains []string `toml:"allowed_domains"`
+	Type     string            `toml:"type"`      // Storage backend type (e.g., "maildir")
+	BasePath string            `toml:"base_path"` // Base path for storage
+	Options  map[string]string `toml:"options"`   // Backend-specific options
 }
 
 // SpamCheckFailMode defines the behavior when spam checkers are unavailable or error.
@@ -346,37 +269,6 @@ func (c *SpamCheckerConfig) GetTimeout() time.Duration {
 	d, err := time.ParseDuration(c.Timeout)
 	if err != nil {
 		return 10 * time.Second
-	}
-	return d
-}
-
-// IsEnabled returns true if authentication is enabled.
-func (c *AuthConfig) IsEnabled() bool {
-	return c.Enabled && c.AgentType != ""
-}
-
-// IsEnabled returns true if OAuth authentication is enabled and properly configured.
-func (c *OAuthConfig) IsEnabled() bool {
-	return c.Enabled && c.JWKSURL != ""
-}
-
-// GetUsernameClaim returns the configured username claim, defaulting to "email".
-func (c *OAuthConfig) GetUsernameClaim() string {
-	if c.UsernameClaim == "" {
-		return "email"
-	}
-	return c.UsernameClaim
-}
-
-// GetJWKSRefreshInterval returns the JWKS refresh interval as a time.Duration.
-// Returns 1 hour if not configured or invalid.
-func (c *OAuthConfig) GetJWKSRefreshInterval() time.Duration {
-	if c.JWKSRefreshInterval == "" {
-		return 1 * time.Hour
-	}
-	d, err := time.ParseDuration(c.JWKSRefreshInterval)
-	if err != nil {
-		return 1 * time.Hour
 	}
 	return d
 }
@@ -484,44 +376,6 @@ func (c *Config) Validate() error {
 	if c.Spamtrap.Enabled {
 		if c.Spamtrap.ControllerURL == "" {
 			return errors.New("spamtrap.controller_url is required when spamtrap is enabled")
-		}
-	}
-
-	// Validate encryption config
-	if c.Encryption.Enabled {
-		if c.Encryption.KeyBackendType == "" {
-			return errors.New("encryption.key_backend_type is required when encryption is enabled")
-		}
-		if c.Encryption.KeyBackend == "" {
-			return errors.New("encryption.key_backend is required when encryption is enabled")
-		}
-	}
-
-	// Validate auth config
-	if c.Auth.Enabled {
-		if c.Auth.AgentType == "" {
-			return errors.New("auth.agent_type is required when authentication is enabled")
-		}
-		if c.Auth.CredentialBackend == "" {
-			return errors.New("auth.credential_backend is required when authentication is enabled")
-		}
-	}
-
-	// Validate OAuth config
-	if c.Auth.OAuth.Enabled {
-		if c.Auth.OAuth.JWKSURL == "" {
-			return errors.New("auth.oauth.jwks_url is required when OAuth is enabled")
-		}
-		if c.Auth.OAuth.Issuer == "" {
-			return errors.New("auth.oauth.issuer is required when OAuth is enabled")
-		}
-		if c.Auth.OAuth.Audience == "" {
-			return errors.New("auth.oauth.audience is required when OAuth is enabled")
-		}
-		if c.Auth.OAuth.JWKSRefreshInterval != "" {
-			if _, err := time.ParseDuration(c.Auth.OAuth.JWKSRefreshInterval); err != nil {
-				return fmt.Errorf("invalid auth.oauth.jwks_refresh_interval: %w", err)
-			}
 		}
 	}
 

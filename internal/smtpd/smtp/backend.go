@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/emersion/go-smtp"
-	"github.com/infodancer/maildancer/auth/oauth"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/logging"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
@@ -19,7 +18,6 @@ import (
 type Backend struct {
 	hostname            string
 	smDelivery          *SessionManagerDeliveryAgent // session-manager: sole delivery agent
-	oauthAgent          oauth.Agent
 	spamChecker         spamcheck.Checker
 	spamConfig          config.SpamCheckConfig
 	rejectionMode       config.RejectionMode
@@ -39,7 +37,6 @@ type Backend struct {
 type BackendConfig struct {
 	Hostname        string
 	SMDelivery      *SessionManagerDeliveryAgent // session-manager delivery agent
-	OAuthAgent      oauth.Agent
 	SpamChecker     spamcheck.Checker
 	SpamConfig      config.SpamCheckConfig
 	RejectionMode   config.RejectionMode
@@ -66,7 +63,6 @@ func NewBackend(cfg BackendConfig) *Backend {
 	b := &Backend{
 		hostname:        cfg.Hostname,
 		smDelivery:      cfg.SMDelivery,
-		oauthAgent:      cfg.OAuthAgent,
 		spamChecker:     cfg.SpamChecker,
 		spamConfig:      cfg.SpamConfig,
 		rejectionMode:   cfg.RejectionMode,

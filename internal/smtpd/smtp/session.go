@@ -115,11 +115,6 @@ func (s *Session) AuthMechanisms() []string {
 		mechs = append(mechs, sasl.Plain)
 	}
 
-	// Advertise OAUTHBEARER if OAuth is configured
-	if s.backend.oauthAgent != nil {
-		mechs = append(mechs, sasl.OAuthBearer)
-	}
-
 	return mechs
 }
 
@@ -183,48 +178,6 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 
 			s.logger = s.logger.With(slog.String("auth_user", s.authUser))
 			s.logger.Info("authentication successful")
-			return nil
-		}), nil
-
-	case sasl.OAuthBearer:
-		if s.backend.oauthAgent == nil {
-			return nil, smtp.ErrAuthUnsupported
-		}
-
-		return sasl.NewOAuthBearerServer(func(opts sasl.OAuthBearerOptions) *sasl.OAuthBearerError {
-			ctx := context.Background()
-
-			username, err := s.backend.oauthAgent.ValidateToken(ctx, opts.Token)
-			if err != nil {
-				if s.backend.collector != nil {
-					// Use username from options if available, otherwise "unknown"
-					authDomain := "unknown"
-					if opts.Username != "" {
-						authDomain = sessionExtractAuthDomain(opts.Username)
-					}
-					s.backend.collector.AuthAttempt(authDomain, false)
-				}
-
-				s.logger.Debug("OAuth authentication failed",
-					slog.String("username", opts.Username),
-					slog.String("error", err.Error()))
-
-				// Return OAuth-specific error per RFC 7628
-				return &sasl.OAuthBearerError{
-					Status:  "invalid_token",
-					Schemes: "bearer",
-				}
-			}
-
-			s.authUser = username
-
-			if s.backend.collector != nil {
-				domain := sessionExtractAuthDomain(username)
-				s.backend.collector.AuthAttempt(domain, true)
-			}
-
-			s.logger = s.logger.With(slog.String("auth_user", s.authUser))
-			s.logger.Info("OAuth authentication successful")
 			return nil
 		}), nil
 

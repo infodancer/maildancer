@@ -3,40 +3,32 @@ package backend
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"log/slog"
-	"net"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
-	"syscall"
 
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
-	"github.com/infodancer/maildancer/auth/domain"
-	autherrors "github.com/infodancer/maildancer/auth/errors"
-	"github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/logging"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 	"github.com/infodancer/maildancer/internal/imapd/notify"
-	"github.com/infodancer/maildancer/internal/mail-session/client"
 	"github.com/infodancer/maildancer/msgstore"
 	storeerrors "github.com/infodancer/maildancer/msgstore/errors"
 )
+
+// rescanner is satisfied by stores that support incremental rescan (IDLE).
+type rescanner interface {
+	Rescan() ([]msgstore.MessageInfo, error)
+}
 
 // Session implements imapserver.Session backed by the msgstore interface.
 type Session struct {
 	conn        *imapserver.Conn
 	cfg         *config.Config
-	authRouter  *domain.AuthRouter
 	store       msgstore.MessageStore
 	folderStore msgstore.FolderStore
-	smClient    *SessionManagerClient // nil when using legacy auth path
+	smClient    *SessionManagerClient
 
 	username   string
 	mailbox    string // user's mailbox identifier from auth
@@ -61,40 +53,25 @@ type Session struct {
 }
 
 // NewSession creates a new IMAP session for the given connection.
-func NewSession(conn *imapserver.Conn, cfg *config.Config, authRouter *domain.AuthRouter, store msgstore.MessageStore, smClient *SessionManagerClient, subscriber *notify.Subscriber, collector metrics.Collector, logger *slog.Logger) *Session {
-	var folderStore msgstore.FolderStore
-	if store != nil {
-		folderStore, _ = store.(msgstore.FolderStore)
-	}
+func NewSession(conn *imapserver.Conn, cfg *config.Config, smClient *SessionManagerClient, subscriber *notify.Subscriber, collector metrics.Collector, logger *slog.Logger) *Session {
 	var learner *spamLearner
 	if cfg.Rspamd.Controller != "" {
 		learner = newSpamLearner(cfg.Rspamd.Controller, "")
 	}
 
 	return &Session{
-		conn:        conn,
-		cfg:         cfg,
-		authRouter:  authRouter,
-		store:       store,
-		folderStore: folderStore,
-		smClient:    smClient,
-		learner:     learner,
-		subscriber:  subscriber,
-		collector:   collector,
-		logger:      logging.WithConnection(logger, conn.NetConn().RemoteAddr().String()),
+		conn:       conn,
+		cfg:        cfg,
+		smClient:   smClient,
+		learner:    learner,
+		subscriber: subscriber,
+		collector:  collector,
+		logger:     logging.WithConnection(logger, conn.NetConn().RemoteAddr().String()),
 	}
 }
 
-// Login authenticates the user.
+// Login authenticates the user via the session-manager service.
 func (s *Session) Login(username, password string) error {
-	if s.smClient != nil {
-		return s.loginSessionManager(username, password)
-	}
-	return s.loginLegacy(username, password)
-}
-
-// loginSessionManager authenticates via the centralized session-manager service.
-func (s *Session) loginSessionManager(username, password string) error {
 	ctx := context.Background()
 	token, mailbox, err := s.smClient.Login(ctx, username, password)
 	if err != nil {
@@ -117,71 +94,13 @@ func (s *Session) loginSessionManager(username, password string) error {
 	// Ensure default folders exist (idempotent).
 	s.ensureDefaultFolders()
 
-	s.collector.AuthAttempt(s.userDomain, true)
-	s.logger.Info("login success", "username", username, "via", "session-manager")
-	return nil
-}
-
-// loginLegacy authenticates via the domain.AuthRouter (legacy path).
-func (s *Session) loginLegacy(username, password string) error {
-	ctx := context.Background()
-
-	// Pass client IP to the auth router for rate limiting.
-	if s.conn != nil {
-		if host, _, err := net.SplitHostPort(s.conn.NetConn().RemoteAddr().String()); err == nil {
-			ctx = domain.WithClientIP(ctx, host)
-		}
-	}
-
-	result, err := s.authRouter.AuthenticateWithDomain(ctx, username, password)
-	if err != nil {
-		s.logger.Info("login failed", "username", username, "error", err)
-		s.collector.AuthAttempt(extractDomain(username), false)
-		if errors.Is(err, autherrors.ErrRateLimited) {
-			return &imap.Error{
-				Type: imap.StatusResponseTypeNo,
-				Code: imap.ResponseCodeAuthenticationFailed,
-				Text: "Too many failed authentication attempts, try again later",
-			}
-		}
-		return &imap.Error{
-			Type: imap.StatusResponseTypeNo,
-			Code: imap.ResponseCodeAuthenticationFailed,
-			Text: "Authentication failed",
-		}
-	}
-	s.username = username
-	s.userDomain = extractDomain(username)
-	s.mailbox = result.Session.User.Mailbox
-
-	if s.cfg.MailSessionCmd != "" {
-		gs, spawnErr := s.spawnGrpcMailSession(username)
-		if spawnErr != nil {
-			s.logger.Error("failed to spawn mail-session", "username", username, "error", spawnErr)
-			return &imap.Error{
-				Type: imap.StatusResponseTypeNo,
-				Text: "Internal server error",
-			}
-		}
-		s.store = gs
-		s.folderStore = gs
-	} else if result.Domain != nil && result.Domain.MessageStore != nil {
-		s.store = result.Domain.MessageStore
-		s.folderStore, _ = result.Domain.MessageStore.(msgstore.FolderStore)
-	}
-
-	// Ensure default folders exist (idempotent).
-	if s.folderStore != nil {
-		s.ensureDefaultFolders()
-	}
-
 	// Subscribe to Redis new-mail notifications for this user.
 	if s.subscriber != nil {
 		s.subscription = s.subscriber.Subscribe(ctx, username)
 	}
 
 	s.collector.AuthAttempt(s.userDomain, true)
-	s.logger.Info("login success", "username", username)
+	s.logger.Info("login success", "username", username, "via", "session-manager")
 	return nil
 }
 
@@ -274,163 +193,6 @@ func (s *Session) Close() error {
 	}
 	s.collector.ConnectionClosed()
 	return nil
-}
-
-// spawnGrpcMailSession starts mail-session in daemon mode with a gRPC socket,
-// waits for the READY signal, dials gRPC, and returns a grpcStore that manages
-// the subprocess lifecycle.
-func (s *Session) spawnGrpcMailSession(username string) (*grpcStore, error) {
-	localpart, domainName, ok := strings.Cut(username, "@")
-	if !ok {
-		return nil, fmt.Errorf("invalid username %q: missing @domain", username)
-	}
-
-	uid, gid, basePath, storeType, maxMsgSize, err := s.lookupMailSessionParams(localpart, domainName)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create temp directory for the unix domain socket.
-	socketDir, err := os.MkdirTemp("", "imapd-session-*")
-	if err != nil {
-		return nil, fmt.Errorf("create socket dir: %w", err)
-	}
-	socketPath := filepath.Join(socketDir, "session.sock")
-
-	args := []string{
-		"--mode", "daemon",
-		"--socket", socketPath,
-		"--type", storeType,
-		"--basepath", basePath,
-		"--user", username,
-	}
-	if maxMsgSize > 0 {
-		args = append(args, "--max-message-size", fmt.Sprintf("%d", maxMsgSize))
-	}
-	if s.cfg.ConfigPath != "" {
-		args = append(args, "--config", s.cfg.ConfigPath)
-	}
-	if s.cfg.Rspamd.Controller != "" {
-		args = append(args, "--rspamd", s.cfg.Rspamd.Controller)
-		junk := s.cfg.Rspamd.JunkFolder
-		if junk == "" {
-			junk = "Junk"
-		}
-		args = append(args, "--junk-folder", junk)
-	}
-	cmd := exec.Command(s.cfg.MailSessionCmd, args...)
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{
-			Uid: uid,
-			Gid: gid,
-		},
-	}
-
-	// Key pipe (fd 3) — same as pipe mode.
-	keyPipeR, keyPipeW, err := os.Pipe()
-	if err != nil {
-		_ = os.RemoveAll(socketDir)
-		return nil, fmt.Errorf("key pipe: %w", err)
-	}
-	cmd.ExtraFiles = []*os.File{keyPipeR}
-
-	go func() {
-		defer func() { _ = keyPipeW.Close() }()
-		_ = json.NewEncoder(keyPipeW).Encode(struct {
-			Version int    `json:"version"`
-			Key     []byte `json:"key"`
-		}{Version: 1, Key: make([]byte, 32)})
-	}()
-
-	// Capture stdout to read the READY signal.
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		_ = keyPipeR.Close()
-		_ = os.RemoveAll(socketDir)
-		return nil, fmt.Errorf("stdout pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		_ = keyPipeR.Close()
-		_ = os.RemoveAll(socketDir)
-		return nil, fmt.Errorf("start mail-session: %w", err)
-	}
-	_ = keyPipeR.Close()
-
-	// Wait for READY signal on stdout.
-	buf := make([]byte, 64)
-	n, err := stdout.Read(buf)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		_ = os.RemoveAll(socketDir)
-		return nil, fmt.Errorf("waiting for READY: %w", err)
-	}
-	if !strings.Contains(string(buf[:n]), "READY") {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		_ = os.RemoveAll(socketDir)
-		return nil, fmt.Errorf("unexpected startup output: %q", string(buf[:n]))
-	}
-
-	// Dial the gRPC socket.
-	c, err := client.Dial(socketPath)
-	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		_ = os.RemoveAll(socketDir)
-		return nil, fmt.Errorf("dial grpc: %w", err)
-	}
-
-	return &grpcStore{
-		Client:    c,
-		cmd:       cmd,
-		socketDir: socketDir,
-	}, nil
-}
-
-// lookupMailSessionParams reads the per-domain config and passwd file to obtain
-// the uid, gid, basePath, and store type for spawning mail-session.
-// Mirrors the logic in pop3d's lookupCredentials.
-func (s *Session) lookupMailSessionParams(localpart, domainName string) (uid, gid uint32, basePath, storeType string, maxMsgSize int64, err error) {
-	domainDir := filepath.Join(s.cfg.DomainsPath, domainName)
-
-	cfg, err := domain.LoadDomainConfig(filepath.Join(domainDir, "config.toml"))
-	if err != nil {
-		return 0, 0, "", "", 0, fmt.Errorf("load domain config for %q: %w", domainName, err)
-	}
-
-	gid = cfg.Gid
-
-	credBackend := cfg.Auth.CredentialBackend
-	if credBackend == "" {
-		credBackend = "passwd"
-	}
-	passwdPath := credBackend
-	if !filepath.IsAbs(passwdPath) {
-		passwdPath = filepath.Join(domainDir, passwdPath)
-	}
-
-	uid, err = passwd.LookupUID(passwdPath, localpart)
-	if err != nil {
-		return 0, 0, "", "", 0, fmt.Errorf("lookup uid for %q in %q: %w", localpart, passwdPath, err)
-	}
-
-	base := cfg.MsgStore.BasePath
-	if base == "" {
-		base = "users"
-	}
-	if !filepath.IsAbs(base) {
-		base = filepath.Join(domainDir, base)
-	}
-
-	storeType = cfg.MsgStore.Type
-	if storeType == "" {
-		storeType = "maildir"
-	}
-
-	return uid, gid, base, storeType, cfg.MaxMessageSize, nil
 }
 
 // Subscribe is a no-op (subscription state not tracked).

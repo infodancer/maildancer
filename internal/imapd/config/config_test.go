@@ -164,14 +164,12 @@ func TestImapDoesNotOverrideServer(t *testing.T) {
 	const tomlContent = `
 [server]
 hostname = "shared.example.com"
-domains_path = "/etc/mail/domains"
 
 [server.tls]
 cert_file = "/etc/ssl/shared-cert.pem"
 
 [imapd]
 hostname = "imap.example.com"
-domains_path = "/etc/imap/domains"
 log_level = "warn"
 
 [imapd.tls]
@@ -186,9 +184,6 @@ cert_file = "/etc/ssl/imap-cert.pem"
 	// Server values should win for global settings
 	if cfg.Hostname != "shared.example.com" {
 		t.Errorf("hostname = %q, want %q ([server] should win)", cfg.Hostname, "shared.example.com")
-	}
-	if cfg.DomainsPath != "/etc/mail/domains" {
-		t.Errorf("domains_path = %q, want %q ([server] should win)", cfg.DomainsPath, "/etc/mail/domains")
 	}
 	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
 		t.Errorf("tls.cert_file = %q, want %q ([server] should win)", cfg.TLS.CertFile, "/etc/ssl/shared-cert.pem")
@@ -210,7 +205,6 @@ func TestApplyFlagsOverridesConfig(t *testing.T) {
 		TLSCert:        "/tmp/cert.pem",
 		TLSKey:         "/tmp/key.pem",
 		MaxConnections: 42,
-		DomainsPath:    "/etc/mail/domains",
 	}
 
 	result := ApplyFlags(cfg, flags)
@@ -235,9 +229,6 @@ func TestApplyFlagsOverridesConfig(t *testing.T) {
 	}
 	if result.Limits.MaxConnections != 42 {
 		t.Errorf("max connections = %d, want 42", result.Limits.MaxConnections)
-	}
-	if result.DomainsPath != "/etc/mail/domains" {
-		t.Errorf("domains path = %q, want %q", result.DomainsPath, "/etc/mail/domains")
 	}
 }
 
@@ -386,25 +377,6 @@ func TestValidateMetricsRequiresAddressAndPathWhenEnabled(t *testing.T) {
 	}
 }
 
-// TestValidateAuthRequiresBackendsWhenTypeSet verifies auth validation logic.
-func TestValidateAuthRequiresBackendsWhenTypeSet(t *testing.T) {
-	cfg := Default()
-	cfg.Auth.Type = "passwd"
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when auth type set without credential_backend, got nil")
-	}
-
-	cfg.Auth.CredentialBackend = "/etc/mail/passwd"
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error when auth type set without key_backend, got nil")
-	}
-
-	cfg.Auth.KeyBackend = "/etc/mail/keys"
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error with all auth fields set, got: %v", err)
-	}
-}
-
 // TestMinTLSVersionReturns correct crypto/tls constants.
 func TestMinTLSVersionReturnsCryptoConstants(t *testing.T) {
 	tests := []struct {
@@ -468,17 +440,12 @@ func TestTimeoutHelpers(t *testing.T) {
 	})
 }
 
-// TestServerDomainsDataPathAndImapRspamd verifies global paths come from
-// [server] while imapd-specific settings (rspamd, mail_session) come from [imapd].
-func TestServerDomainsDataPathAndImapRspamd(t *testing.T) {
+// TestServerHostnameAndImapRspamd verifies hostname comes from [server]
+// while imapd-specific settings (rspamd) come from [imapd].
+func TestServerHostnameAndImapRspamd(t *testing.T) {
 	const tomlContent = `
 [server]
 hostname = "mail.example.com"
-domains_path = "/etc/domains"
-domains_data_path = "/opt/domains"
-
-[imapd]
-mail_session = "/usr/bin/mail-session"
 
 [imapd.rspamd]
 controller = "http://rspamd:11334"
@@ -494,14 +461,8 @@ mode = "imap"
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	if cfg.DomainsDataPath != "/opt/domains" {
-		t.Errorf("domains_data_path = %q, want %q", cfg.DomainsDataPath, "/opt/domains")
-	}
-	if cfg.DomainsPath != "/etc/domains" {
-		t.Errorf("domains_path = %q, want %q", cfg.DomainsPath, "/etc/domains")
-	}
-	if cfg.MailSessionCmd != "/usr/bin/mail-session" {
-		t.Errorf("mail_session = %q, want %q", cfg.MailSessionCmd, "/usr/bin/mail-session")
+	if cfg.Hostname != "mail.example.com" {
+		t.Errorf("hostname = %q, want %q", cfg.Hostname, "mail.example.com")
 	}
 	if cfg.Rspamd.Controller != "http://rspamd:11334" {
 		t.Errorf("rspamd.controller = %q, want %q", cfg.Rspamd.Controller, "http://rspamd:11334")
@@ -589,18 +550,6 @@ url = "redis://imap-specific:6379/1"
 	// Password from top-level should survive since imapd section didn't override it
 	if cfg.Redis.Password != "shared-pass" {
 		t.Errorf("redis.password = %q, want top-level %q", cfg.Redis.Password, "shared-pass")
-	}
-}
-
-func TestAuthConfigIsConfigured(t *testing.T) {
-	a := AuthConfig{}
-	if a.IsConfigured() {
-		t.Error("IsConfigured() = true for empty AuthConfig, want false")
-	}
-
-	a.Type = "passwd"
-	if !a.IsConfigured() {
-		t.Error("IsConfigured() = false when type is set, want true")
 	}
 }
 

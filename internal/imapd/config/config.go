@@ -44,11 +44,8 @@ type FileConfig struct {
 // ServerConfig holds shared settings used by all mail services.
 // These are read from the [server] section of the shared config file.
 type ServerConfig struct {
-	Hostname        string    `toml:"hostname"`
-	DomainsPath     string    `toml:"domains_path"`
-	DomainsDataPath string    `toml:"domains_data_path"`
-	Maildir         string    `toml:"maildir"` // alias for domains_data_path (used by webadmin)
-	TLS             TLSConfig `toml:"tls"`
+	Hostname string    `toml:"hostname"`
+	TLS      TLSConfig `toml:"tls"`
 }
 
 // RedisConfig holds Redis connection settings for pub/sub notifications.
@@ -72,59 +69,16 @@ type RspamdConfig struct {
 
 // Config holds the IMAP-specific server configuration.
 type Config struct {
-	Hostname        string               `toml:"hostname"`
-	LogLevel        string               `toml:"log_level"`
-	Listeners       []ListenerConfig     `toml:"listeners"`
-	TLS             TLSConfig            `toml:"tls"`
-	Timeouts        TimeoutsConfig       `toml:"timeouts"`
-	Limits          LimitsConfig         `toml:"limits"`
-	Metrics         MetricsConfig        `toml:"metrics"`
-	DomainsPath     string               `toml:"domains_path"`
-	DomainsDataPath string               `toml:"domains_data_path"`
-	Auth            AuthConfig           `toml:"auth"`
-	Store           StoreConfig          `toml:"store"`
-	MailSessionCmd  string               `toml:"mail_session"` // path to mail-session binary; empty = in-process
-	Rspamd          RspamdConfig         `toml:"rspamd"`
-	Redis           RedisConfig          `toml:"redis"`
-	SessionManager  SessionManagerConfig `toml:"-"` // populated by loader from top-level [session-manager]
-
-	// ConfigPath is the resolved path to the config file (set by loader, not TOML).
-	ConfigPath string `toml:"-"`
-}
-
-// AuthConfig holds configuration for the authentication agent.
-type AuthConfig struct {
-	// Type is the authentication backend type (e.g., "passwd", "ldap", "database").
-	Type string `toml:"type"`
-
-	// CredentialBackend is the path or connection string for credential storage.
-	// For passwd: path to the passwd file (e.g., "/etc/mail/passwd")
-	// For LDAP: connection URL (e.g., "ldaps://ldap.example.com")
-	CredentialBackend string `toml:"credential_backend"`
-
-	// KeyBackend is the path or connection string for key storage.
-	// For passwd/LDAP: path to key directory (e.g., "/etc/mail/keys")
-	KeyBackend string `toml:"key_backend"`
-
-	// Options contains implementation-specific settings.
-	Options map[string]string `toml:"options"`
-}
-
-// IsConfigured returns true if auth configuration is specified.
-func (c *AuthConfig) IsConfigured() bool {
-	return c.Type != ""
-}
-
-// StoreConfig holds configuration for the message store backend.
-type StoreConfig struct {
-	// Type is the store backend type (e.g., "maildir", "database").
-	Type string `toml:"type"`
-
-	// BasePath is the root path for message storage.
-	BasePath string `toml:"base_path"`
-
-	// Options contains implementation-specific settings.
-	Options map[string]string `toml:"options"`
+	Hostname       string               `toml:"hostname"`
+	LogLevel       string               `toml:"log_level"`
+	Listeners      []ListenerConfig     `toml:"listeners"`
+	TLS            TLSConfig            `toml:"tls"`
+	Timeouts       TimeoutsConfig       `toml:"timeouts"`
+	Limits         LimitsConfig         `toml:"limits"`
+	Metrics        MetricsConfig        `toml:"metrics"`
+	Rspamd         RspamdConfig         `toml:"rspamd"`
+	Redis          RedisConfig          `toml:"redis"`
+	SessionManager SessionManagerConfig `toml:"-"` // populated by loader from top-level [session-manager]
 }
 
 // ListenerConfig defines settings for a single listener.
@@ -241,16 +195,6 @@ func (c *Config) Validate() error {
 		}
 		if c.Metrics.Path == "" {
 			return errors.New("metrics path is required when metrics are enabled")
-		}
-	}
-
-	// Validate auth config if type is specified
-	if c.Auth.Type != "" {
-		if c.Auth.CredentialBackend == "" {
-			return errors.New("auth.credential_backend is required when auth.type is set")
-		}
-		if c.Auth.KeyBackend == "" {
-			return errors.New("auth.key_backend is required when auth.type is set")
 		}
 	}
 

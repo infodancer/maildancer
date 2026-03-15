@@ -21,14 +21,16 @@ func TestLoadMissingFile(t *testing.T) {
 
 func TestLoadValidTOML(t *testing.T) {
 	content := `
-[smtpd]
+[server]
 hostname = "mail.example.com"
-log_level = "debug"
 
-[smtpd.tls]
+[server.tls]
 cert_file = "/etc/ssl/cert.pem"
 key_file = "/etc/ssl/key.pem"
 min_version = "1.3"
+
+[smtpd]
+log_level = "debug"
 
 [smtpd.limits]
 max_message_size = 10485760
@@ -119,7 +121,7 @@ hostname = "broken
 
 func TestLoadPartialConfig(t *testing.T) {
 	content := `
-[smtpd]
+[server]
 hostname = "partial.example.com"
 `
 
@@ -406,14 +408,13 @@ log_level = "warn"
 	}
 }
 
-func TestLoadSmtpdOverridesServer(t *testing.T) {
+func TestLoadSmtpdDoesNotOverrideServer(t *testing.T) {
+	// Global settings (hostname, TLS, domains_path) come from [server] only.
+	// [smtpd] values for these fields are ignored.
 	content := `
 [server]
 hostname = "shared.example.com"
-
-[server.delivery]
-type = "maildir"
-base_path = "/var/mail"
+domains_path = "/etc/mail/domains"
 
 [server.tls]
 cert_file = "/etc/ssl/shared-cert.pem"
@@ -421,13 +422,11 @@ key_file = "/etc/ssl/shared-key.pem"
 
 [smtpd]
 hostname = "smtp.example.com"
+domains_path = "/etc/smtp/domains"
+log_level = "warn"
 
 [smtpd.tls]
 cert_file = "/etc/ssl/smtp-cert.pem"
-
-[smtpd.delivery]
-type = "maildir"
-base_path = "/var/smtpmail"
 `
 
 	path := createTempConfig(t, content)
@@ -437,30 +436,33 @@ base_path = "/var/smtpmail"
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	// Smtpd values should override server values
-	if cfg.Hostname != "smtp.example.com" {
-		t.Errorf("hostname = %q, want 'smtp.example.com' (smtpd should override server)", cfg.Hostname)
+	// Server values should win — smtpd does not override global settings
+	if cfg.Hostname != "shared.example.com" {
+		t.Errorf("hostname = %q, want 'shared.example.com' ([server] should win)", cfg.Hostname)
 	}
 
-	if cfg.Delivery.BasePath != "/var/smtpmail" {
-		t.Errorf("delivery.base_path = %q, want '/var/smtpmail' (smtpd should override server)", cfg.Delivery.BasePath)
+	if cfg.DomainsPath != "/etc/mail/domains" {
+		t.Errorf("domains_path = %q, want '/etc/mail/domains' ([server] should win)", cfg.DomainsPath)
 	}
 
-	if cfg.TLS.CertFile != "/etc/ssl/smtp-cert.pem" {
-		t.Errorf("tls.cert_file = %q, want '/etc/ssl/smtp-cert.pem' (smtpd should override server)", cfg.TLS.CertFile)
+	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want '/etc/ssl/shared-cert.pem' ([server] should win)", cfg.TLS.CertFile)
 	}
 
-	// Server value should be used when smtpd doesn't override
 	if cfg.TLS.KeyFile != "/etc/ssl/shared-key.pem" {
-		t.Errorf("tls.key_file = %q, want '/etc/ssl/shared-key.pem' (server value should be inherited)", cfg.TLS.KeyFile)
+		t.Errorf("tls.key_file = %q, want '/etc/ssl/shared-key.pem'", cfg.TLS.KeyFile)
+	}
+
+	// Smtpd-specific settings still apply
+	if cfg.LogLevel != "warn" {
+		t.Errorf("log_level = %q, want 'warn' (smtpd-specific setting)", cfg.LogLevel)
 	}
 }
 
 func TestLoadDomainsPath(t *testing.T) {
-	// Regression: DomainsPath was missing from mergeConfig so it was silently
-	// dropped even when set in [smtpd].domains_path, leaving domainProvider nil.
+	// DomainsPath comes from [server], not [smtpd].
 	tomlContent := `
-[smtpd]
+[server]
 hostname = "mail.example.com"
 domains_path = "/etc/mail/domains"
 

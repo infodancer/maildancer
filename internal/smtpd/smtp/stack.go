@@ -4,13 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 
-	"github.com/infodancer/maildancer/auth"
-	"github.com/infodancer/maildancer/auth/domain"
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
@@ -49,110 +46,17 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 
 	s := &Stack{logger: logger}
 
-	// Create authentication agent if configured.
-	var authAgent auth.AuthenticationAgent
-	if cfg.Config.Auth.IsEnabled() {
-		agentConfig := auth.AuthAgentConfig{
-			Type:              cfg.Config.Auth.AgentType,
-			CredentialBackend: cfg.Config.Auth.CredentialBackend,
-			KeyBackend:        cfg.Config.Auth.KeyBackend,
-			Options:           cfg.Config.Auth.Options,
-		}
-		var err error
-		authAgent, err = auth.OpenAuthAgent(agentConfig)
-		if err != nil {
-			return nil, err
-		}
-		s.closers = append(s.closers, authAgent)
-		logger.Info("authentication enabled", "type", cfg.Config.Auth.AgentType)
+	// Session-manager is required — it handles auth, delivery, and recipient validation.
+	if !cfg.Config.SessionManager.IsEnabled() {
+		return nil, fmt.Errorf("session-manager configuration is required")
 	}
 
-	// Create delivery agent if configured.
-	var delivery msgstore.DeliveryAgent
-	if cfg.Config.Delivery.Type != "" {
-		storeConfig := msgstore.StoreConfig{
-			Type:     cfg.Config.Delivery.Type,
-			BasePath: cfg.Config.Delivery.BasePath,
-			Options:  cfg.Config.Delivery.Options,
-		}
-		store, err := msgstore.Open(storeConfig)
-		if err != nil {
-			s.Close() //nolint:errcheck
-			return nil, err
-		}
-		delivery = store
-		logger.Info("delivery enabled", "type", cfg.Config.Delivery.Type, "path", cfg.Config.Delivery.BasePath)
+	smDelivery, err := NewSessionManagerDeliveryAgent(cfg.Config.SessionManager, logger)
+	if err != nil {
+		s.Close() //nolint:errcheck
+		return nil, err
 	}
-
-	// Delivery agent priority:
-	// 1. Session-manager (centralized process management, no msgstore dependency)
-	// 2. GrpcDeliveryAgent (direct mail-session subprocess)
-	// 3. Direct msgstore delivery (already set above)
-	var smDelivery *SessionManagerDeliveryAgent
-	if cfg.Config.SessionManager.IsEnabled() {
-		var err error
-		smDelivery, err = NewSessionManagerDeliveryAgent(cfg.Config.SessionManager, logger)
-		if err != nil {
-			s.Close() //nolint:errcheck
-			return nil, err
-		}
-		s.closers = append(s.closers, smDelivery)
-	} else if cfg.Config.Delivery.MailSessionCmd != "" {
-		delivery = NewGrpcDeliveryAgent(GrpcDeliveryConfig{
-			MailSessionCmd:  cfg.Config.Delivery.MailSessionCmd,
-			BasePath:        cfg.Config.Delivery.BasePath,
-			StoreType:       cfg.Config.Delivery.Type,
-			DomainsPath:     cfg.Config.Delivery.DomainsPath,
-			DomainsDataPath: cfg.Config.Delivery.DomainsDataPath,
-			UID:             cfg.Config.Delivery.UID,
-			GID:             cfg.Config.Delivery.GID,
-			Logger:          logger,
-		})
-		logger.Info("delivery via gRPC", "cmd", cfg.Config.Delivery.MailSessionCmd)
-	}
-
-	// Create domain provider if configured.
-	var domainProvider domain.DomainProvider
-	if cfg.Config.DomainsPath != "" {
-		dp := domain.NewFilesystemDomainProvider(cfg.Config.DomainsPath, logger)
-		if cfg.Config.DomainsDataPath != "" {
-			dp = dp.WithDataPath(cfg.Config.DomainsDataPath)
-		}
-		domainProvider = dp.WithDefaults(domain.DomainConfig{
-			Auth: domain.DomainAuthConfig{
-				Type:              "passwd",
-				CredentialBackend: "passwd",
-				KeyBackend:        "keys",
-			},
-			MsgStore: domain.DomainMsgStoreConfig{
-				Type:     "maildir",
-				BasePath: "users",
-			},
-		})
-		s.closers = append(s.closers, domainProvider)
-		logger.Info("domain provider enabled", "path", cfg.Config.DomainsPath)
-	}
-
-	// Create auth router (centralizes domain-aware auth routing).
-	authRouter := domain.NewAuthRouter(domainProvider, authAgent).
-		WithRateLimit(domain.DefaultRateLimitConfig())
-	s.closers = append(s.closers, authRouter)
-
-	// If no global auth agent is configured but domain-based auth is
-	// available via the domain provider, use the auth router as the auth
-	// agent. This enables AUTH PLAIN advertisement on submission ports
-	// without requiring a redundant [smtpd.auth] config section.
-	if authAgent == nil && domainProvider != nil {
-		authAgent = authRouter
-		logger.Info("authentication enabled via domain provider")
-	}
-
-	// Build temp dir path: on the same filesystem as the mail store so
-	// temp files can be renamed atomically into the maildir.
-	var tempDir string
-	if cfg.Config.Delivery.BasePath != "" {
-		tempDir = filepath.Join(cfg.Config.Delivery.BasePath, "tmp")
-	}
+	s.closers = append(s.closers, smDelivery)
 
 	// Create shared Redis client for notifications and rate limiting.
 	var redisClient *goredis.Client
@@ -174,11 +78,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 
 	backend := NewBackend(BackendConfig{
 		Hostname:        cfg.Config.Hostname,
-		Delivery:        delivery,
 		SMDelivery:      smDelivery,
-		AuthAgent:       authAgent,
-		AuthRouter:      authRouter,
-		DomainProvider:  domainProvider,
 		SpamChecker:     cfg.SpamChecker,
 		SpamConfig:      cfg.SpamConfig,
 		RejectionMode:   cfg.Config.GetRejectionMode(),
@@ -189,7 +89,6 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		Collector:       collector,
 		MaxRecipients:   cfg.Config.Limits.MaxRecipients,
 		MaxMessageSize:  int64(cfg.Config.Limits.MaxMessageSize),
-		TempDir:         tempDir,
 		Logger:          logger,
 	})
 

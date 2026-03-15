@@ -361,10 +361,6 @@ func TestLoadSharedServerConfig(t *testing.T) {
 [server]
 hostname = "shared.example.com"
 
-[server.delivery]
-type = "maildir"
-base_path = "/var/mail"
-
 [server.tls]
 cert_file = "/etc/ssl/shared-cert.pem"
 key_file = "/etc/ssl/shared-key.pem"
@@ -386,14 +382,6 @@ log_level = "warn"
 		t.Errorf("hostname = %q, want 'shared.example.com'", cfg.Hostname)
 	}
 
-	if cfg.Delivery.Type != "maildir" {
-		t.Errorf("delivery.type = %q, want 'maildir'", cfg.Delivery.Type)
-	}
-
-	if cfg.Delivery.BasePath != "/var/mail" {
-		t.Errorf("delivery.base_path = %q, want '/var/mail'", cfg.Delivery.BasePath)
-	}
-
 	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
 		t.Errorf("tls.cert_file = %q, want '/etc/ssl/shared-cert.pem'", cfg.TLS.CertFile)
 	}
@@ -409,12 +397,11 @@ log_level = "warn"
 }
 
 func TestLoadSmtpdDoesNotOverrideServer(t *testing.T) {
-	// Global settings (hostname, TLS, domains_path) come from [server] only.
+	// Global settings (hostname, TLS) come from [server] only.
 	// [smtpd] values for these fields are ignored.
 	content := `
 [server]
 hostname = "shared.example.com"
-domains_path = "/etc/mail/domains"
 
 [server.tls]
 cert_file = "/etc/ssl/shared-cert.pem"
@@ -422,7 +409,6 @@ key_file = "/etc/ssl/shared-key.pem"
 
 [smtpd]
 hostname = "smtp.example.com"
-domains_path = "/etc/smtp/domains"
 log_level = "warn"
 
 [smtpd.tls]
@@ -441,10 +427,6 @@ cert_file = "/etc/ssl/smtp-cert.pem"
 		t.Errorf("hostname = %q, want 'shared.example.com' ([server] should win)", cfg.Hostname)
 	}
 
-	if cfg.DomainsPath != "/etc/mail/domains" {
-		t.Errorf("domains_path = %q, want '/etc/mail/domains' ([server] should win)", cfg.DomainsPath)
-	}
-
 	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
 		t.Errorf("tls.cert_file = %q, want '/etc/ssl/shared-cert.pem' ([server] should win)", cfg.TLS.CertFile)
 	}
@@ -459,12 +441,11 @@ cert_file = "/etc/ssl/smtp-cert.pem"
 	}
 }
 
-func TestLoadDomainsPath(t *testing.T) {
-	// DomainsPath comes from [server], not [smtpd].
+func TestLoadServerHostname(t *testing.T) {
+	// Hostname comes from [server].
 	tomlContent := `
 [server]
 hostname = "mail.example.com"
-domains_path = "/etc/mail/domains"
 
 [[smtpd.listeners]]
 address = ":25"
@@ -486,8 +467,8 @@ mode = "smtp"
 		t.Fatalf("Load: %v", err)
 	}
 
-	if cfg.DomainsPath != "/etc/mail/domains" {
-		t.Errorf("DomainsPath = %q, want /etc/mail/domains", cfg.DomainsPath)
+	if cfg.Hostname != "mail.example.com" {
+		t.Errorf("Hostname = %q, want mail.example.com", cfg.Hostname)
 	}
 }
 

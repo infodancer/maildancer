@@ -8,7 +8,7 @@ require (
 	github.com/emersion/go-smtp v0.24.0
 	github.com/infodancer/maildancer/auth v0.1.15
 	github.com/infodancer/maildancer/internal/mail-session v0.1.4
-	github.com/infodancer/maildancer/msgstore v0.2.5
+	github.com/infodancer/maildancer/internal/session-manager v0.1.4
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
@@ -16,14 +16,11 @@ require (
 )
 
 require (
-	git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
-	github.com/emersion/go-maildir v0.6.0 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
-	github.com/kr/text v0.2.0 // indirect
 	github.com/lestrrat-go/blackmagic v1.0.3 // indirect
 	github.com/lestrrat-go/httpcc v1.0.1 // indirect
 	github.com/lestrrat-go/httprc v1.0.6 // indirect

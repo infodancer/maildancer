@@ -6,10 +6,7 @@ import (
 	"time"
 
 	"github.com/emersion/go-smtp"
-	"github.com/infodancer/maildancer/auth"
-	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/auth/oauth"
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/logging"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
@@ -21,19 +18,15 @@ import (
 // It creates new sessions for each connection.
 type Backend struct {
 	hostname            string
-	delivery            msgstore.DeliveryAgent       // legacy: direct or GrpcDeliveryAgent
-	smDelivery          *SessionManagerDeliveryAgent // session-manager: takes priority over delivery
-	authAgent           auth.AuthenticationAgent
-	authRouter          *domain.AuthRouter
+	smDelivery          *SessionManagerDeliveryAgent // session-manager: sole delivery agent
 	oauthAgent          oauth.Agent
-	domainProvider      domain.DomainProvider
 	spamChecker         spamcheck.Checker
 	spamConfig          config.SpamCheckConfig
 	rejectionMode       config.RejectionMode
 	spamtrapLearner     *spamtrapLearner
 	spamtrapRateLimiter *ipRateLimiter
 	senderRateLimiter   senderLimiter
-	maxSendsPerHour     int // global default; per-domain overrides via DomainConfig.Limits
+	maxSendsPerHour     int // global default; per-domain overrides via loginResult
 	notifier            *Notifier
 	collector           metrics.Collector
 	maxRecipients       int
@@ -45,12 +38,8 @@ type Backend struct {
 // BackendConfig holds configuration for creating a Backend.
 type BackendConfig struct {
 	Hostname        string
-	Delivery        msgstore.DeliveryAgent       // legacy delivery agent
-	SMDelivery      *SessionManagerDeliveryAgent // session-manager delivery agent (preferred)
-	AuthAgent       auth.AuthenticationAgent
-	AuthRouter      *domain.AuthRouter
+	SMDelivery      *SessionManagerDeliveryAgent // session-manager delivery agent
 	OAuthAgent      oauth.Agent
-	DomainProvider  domain.DomainProvider
 	SpamChecker     spamcheck.Checker
 	SpamConfig      config.SpamCheckConfig
 	RejectionMode   config.RejectionMode
@@ -62,7 +51,6 @@ type BackendConfig struct {
 	MaxRecipients   int
 	MaxMessageSize  int64
 	// TempDir is the directory for temporary message files during DATA.
-	// Should be on the same filesystem as the mail store to enable atomic renames.
 	// Defaults to os.TempDir() if empty.
 	TempDir string
 	Logger  *slog.Logger
@@ -77,12 +65,8 @@ func NewBackend(cfg BackendConfig) *Backend {
 
 	b := &Backend{
 		hostname:        cfg.Hostname,
-		delivery:        cfg.Delivery,
 		smDelivery:      cfg.SMDelivery,
-		authAgent:       cfg.AuthAgent,
-		authRouter:      cfg.AuthRouter,
 		oauthAgent:      cfg.OAuthAgent,
-		domainProvider:  cfg.DomainProvider,
 		spamChecker:     cfg.SpamChecker,
 		spamConfig:      cfg.SpamConfig,
 		rejectionMode:   cfg.RejectionMode,

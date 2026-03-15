@@ -18,9 +18,6 @@ type Flags struct {
 	TLSKey         string
 	MaxMessageSize int
 	MaxRecipients  int
-	DeliveryType   string
-	DeliveryPath   string
-	DomainsPath    string
 }
 
 // ParseFlags parses command-line flags and returns a Flags struct.
@@ -35,10 +32,6 @@ func ParseFlags() *Flags {
 	flag.StringVar(&f.TLSKey, "tls-key", "", "TLS key file path")
 	flag.IntVar(&f.MaxMessageSize, "max-message-size", 0, "Maximum message size in bytes")
 	flag.IntVar(&f.MaxRecipients, "max-recipients", 0, "Maximum recipients per message")
-	flag.StringVar(&f.DeliveryType, "delivery-type", "", "Delivery storage type (e.g., maildir)")
-	flag.StringVar(&f.DeliveryPath, "delivery-path", "", "Delivery storage base path")
-	flag.StringVar(&f.DomainsPath, "domains-path", "", "Path to per-domain configuration directories")
-
 	flag.Parse()
 	return f
 }
@@ -115,18 +108,6 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 		cfg.Limits.MaxRecipients = f.MaxRecipients
 	}
 
-	if f.DeliveryType != "" {
-		cfg.Delivery.Type = f.DeliveryType
-	}
-
-	if f.DeliveryPath != "" {
-		cfg.Delivery.BasePath = f.DeliveryPath
-	}
-
-	if f.DomainsPath != "" {
-		cfg.DomainsPath = f.DomainsPath
-	}
-
 	return cfg
 }
 
@@ -146,34 +127,6 @@ func LoadWithFlags(f *Flags) (Config, error) {
 func mergeServerConfig(dst Config, src ServerConfig) Config {
 	if src.Hostname != "" {
 		dst.Hostname = src.Hostname
-	}
-
-	if src.DomainsPath != "" {
-		dst.DomainsPath = src.DomainsPath
-	}
-
-	// Maildir is a webadmin-facing alias for DomainsDataPath.
-	if src.DomainsDataPath != "" {
-		dst.DomainsDataPath = src.DomainsDataPath
-	} else if src.Maildir != "" {
-		dst.DomainsDataPath = src.Maildir
-	}
-
-	if src.Delivery.Type != "" {
-		dst.Delivery.Type = src.Delivery.Type
-	}
-
-	if src.Delivery.BasePath != "" {
-		dst.Delivery.BasePath = src.Delivery.BasePath
-	}
-
-	if len(src.Delivery.Options) > 0 {
-		if dst.Delivery.Options == nil {
-			dst.Delivery.Options = make(map[string]string)
-		}
-		for k, v := range src.Delivery.Options {
-			dst.Delivery.Options[k] = v
-		}
 	}
 
 	if src.TLS.CertFile != "" {
@@ -230,45 +183,6 @@ func mergeConfig(dst, src Config) Config {
 
 	if src.Metrics.Path != "" {
 		dst.Metrics.Path = src.Metrics.Path
-	}
-
-	if src.Delivery.Type != "" {
-		dst.Delivery.Type = src.Delivery.Type
-	}
-
-	if src.Delivery.BasePath != "" {
-		dst.Delivery.BasePath = src.Delivery.BasePath
-	}
-
-	if len(src.Delivery.Options) > 0 {
-		if dst.Delivery.Options == nil {
-			dst.Delivery.Options = make(map[string]string)
-		}
-		for k, v := range src.Delivery.Options {
-			dst.Delivery.Options[k] = v
-		}
-	}
-
-	// Merge encryption config
-	if src.Encryption.Enabled {
-		dst.Encryption.Enabled = src.Encryption.Enabled
-	}
-	if src.Encryption.KeyBackendType != "" {
-		dst.Encryption.KeyBackendType = src.Encryption.KeyBackendType
-	}
-	if src.Encryption.KeyBackend != "" {
-		dst.Encryption.KeyBackend = src.Encryption.KeyBackend
-	}
-	if src.Encryption.CredentialBackend != "" {
-		dst.Encryption.CredentialBackend = src.Encryption.CredentialBackend
-	}
-	if src.Encryption.Options != nil {
-		if dst.Encryption.Options == nil {
-			dst.Encryption.Options = make(map[string]string)
-		}
-		for k, v := range src.Encryption.Options {
-			dst.Encryption.Options[k] = v
-		}
 	}
 
 	// Merge spamcheck config (if defined in [smtpd.spamcheck])

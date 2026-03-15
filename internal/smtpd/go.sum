@@ -1,5 +1,3 @@
-git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9 h1:MaPyH1+nMX0azKxKQ+X6IiFWTlQokcKO5DKchAR9x5A=
-git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9/go.mod h1:ewD6qhJ+zMwEeAElDEJOYYdkpxZSHRodJwq9Z0OG30w=
 github.com/alicebob/miniredis/v2 v2.37.0 h1:RheObYW32G1aiJIj81XVt78ZHJpHonHLHW7OLIshq68=
 github.com/alicebob/miniredis/v2 v2.37.0/go.mod h1:TcL7YfarKPGDAthEtl5NBeHZfeUQj6OXMm/+iu5cLMM=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
@@ -10,7 +8,6 @@ github.com/bsm/gomega v1.27.10 h1:yeMWxP2pV2fG3FgAODIY8EiRE3dy0aeFYt4l7wh6yKA=
 github.com/bsm/gomega v1.27.10/go.mod h1:JyEr/xRbxbtgWNi8tIEVPUYZ5Dzef52k01W3YH0H+O0=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
-github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -18,8 +15,6 @@ github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 h1:NMZiJj8QnKe1LgsbDayM4UoHwbvw
 github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0/go.mod h1:ZXNYxsqcloTdSy/rNShjYzMhyjf0LaoftYK0p+A3h40=
 github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f h1:lO4WD4F/rVNCu3HqELle0jiPLLBs70cWOduZpkS1E78=
 github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f/go.mod h1:cuUVRXasLTGF7a8hSLbxyZXjz+1KgoB3wDUb6vlszIc=
-github.com/emersion/go-maildir v0.6.0 h1:MPx2RSS1Xq8j1cNOzfq7YyF+5Leoeif1XqSeuytdET8=
-github.com/emersion/go-maildir v0.6.0/go.mod h1:Wpgtt9EOIJWe++WKa+JRvDwv+qIV7MeFdvZu/VbsXN4=
 github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 h1:oP4q0fw+fOSWn3DfFi4EXdT+B+gTtzx8GC9xsc26Znk=
 github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6/go.mod h1:iL2twTeMvZnrg54ZoPDNfJaJaqy0xIQFuBdrLsmspwQ=
 github.com/emersion/go-smtp v0.24.0 h1:g6AfoF140mvW0vLNPD/LuCBLEAdlxOjIXqbIkJIS6Wk=
@@ -40,8 +35,8 @@ github.com/infodancer/maildancer/auth v0.1.15 h1:zr8RDPjftN74kk3F5D9qS3KQY/k9EkA
 github.com/infodancer/maildancer/auth v0.1.15/go.mod h1:Vd8guaF2+FD/BPpBN4Tr+dAMXm++OZ2h38cXpl8OZcA=
 github.com/infodancer/maildancer/internal/mail-session v0.1.4 h1:Mi3Fdgnl3ngOCoMqPKcPwaT9lvurgapl33jpRdGTm0k=
 github.com/infodancer/maildancer/internal/mail-session v0.1.4/go.mod h1:NIKAsXdhoInHtVt1PB8NN4bBYEH9moz7Mn9UGUoZKNg=
-github.com/infodancer/maildancer/msgstore v0.2.5 h1:FODqE5CSLhm/W7bbpjJfGlNXWm4zkCrmGR1kBN2qKO4=
-github.com/infodancer/maildancer/msgstore v0.2.5/go.mod h1:rW0pT8rguFR8OPbFoQyA7gk1X39at2q8YNmFFNnrx24=
+github.com/infodancer/maildancer/internal/session-manager v0.1.4 h1:LdENddPoQcqu81esSe0JJFnHFUEEgYtbplls/RM1aZY=
+github.com/infodancer/maildancer/internal/session-manager v0.1.4/go.mod h1:ViCa0HM2D+xgjwsCAE2sgnbdA0bAVap6oNYCf80LeoA=
 github.com/klauspost/compress v1.18.0 h1:c/Cqfb0r+Yi+JtIEq73FWXVkRonBlf0CRNYc8Zttxdo=
 github.com/klauspost/compress v1.18.0/go.mod h1:2Pp+KzxcywXVXMr50+X0Q/Lsb43OQHYWRCY2AiWywWQ=
 github.com/klauspost/cpuid/v2 v2.0.9 h1:lgaqFMSdTdQYdZ04uHyN2d/eKdOMyi2YLSvlQIBFYa4=

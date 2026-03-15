@@ -2,65 +2,56 @@ package smtp_test
 
 import (
 	"bufio"
-	"fmt"
+	"bytes"
+	"context"
+	"io"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	_ "github.com/infodancer/maildancer/auth/passwd"
-	"github.com/infodancer/maildancer/auth/domain"
-	"github.com/infodancer/maildancer/auth/passwd"
-	_ "github.com/infodancer/maildancer/msgstore/maildir"
+	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	smtpserver "github.com/infodancer/maildancer/internal/smtpd/smtp"
+	"google.golang.org/grpc"
 )
 
 // newSingleConnEnv creates a minimal Server (no listener started) for use
-// with RunSingleConn tests. Returns the server, a configDir, and a mailDir.
-func newSingleConnEnv(t *testing.T) (*smtpserver.Server, string, string) {
+// with RunSingleConn tests. Returns the server and a mock delivery server.
+func newSingleConnEnv(t *testing.T) (*smtpserver.Server, *mockSCDeliveryServer) {
 	t.Helper()
 
-	configDir := t.TempDir()
-	mailDir := t.TempDir()
 	domainName := "single.local"
 
-	domainConfigDir := filepath.Join(configDir, domainName)
-	if err := os.MkdirAll(filepath.Join(domainConfigDir, "keys"), 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	deliverySrv := &mockSCDeliveryServer{}
+	sessionSrv := &mockSCSessionServer{
+		localDomains: map[string]bool{domainName: true},
 	}
 
-	configContent := fmt.Sprintf(`[auth]
-type = "passwd"
-credential_backend = "passwd"
-key_backend = "keys"
-
-[msgstore]
-type = "maildir"
-base_path = %q
-
-[msgstore.options]
-maildir_subdir = "Maildir"
-path_template = "{localpart}"
-`, mailDir)
-	if err := os.WriteFile(filepath.Join(domainConfigDir, "config.toml"), []byte(configContent), 0644); err != nil {
-		t.Fatalf("write config.toml: %v", err)
+	socketPath := t.TempDir() + "/sm.sock"
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(domainConfigDir, "passwd"), []byte(""), 0644); err != nil {
-		t.Fatalf("write passwd: %v", err)
-	}
+	gsrv := grpc.NewServer()
+	pb.RegisterDeliveryServiceServer(gsrv, deliverySrv)
+	smpb.RegisterSessionServiceServer(gsrv, sessionSrv)
+	go func() { _ = gsrv.Serve(ln) }()
+	t.Cleanup(func() { gsrv.Stop() })
 
-	provider := domain.NewFilesystemDomainProvider(configDir, nil)
-	authRouter := domain.NewAuthRouter(provider, nil)
+	smDelivery, err := smtpserver.NewSessionManagerDeliveryAgent(config.SessionManagerConfig{
+		Socket: socketPath,
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewSessionManagerDeliveryAgent: %v", err)
+	}
+	t.Cleanup(func() { _ = smDelivery.Close() })
 
 	backend := smtpserver.NewBackend(smtpserver.BackendConfig{
 		Hostname:       "single.local",
-		DomainProvider: provider,
-		AuthAgent:      authRouter,
-		AuthRouter:     authRouter,
+		SMDelivery:     smDelivery,
 		MaxRecipients:  10,
 		MaxMessageSize: 10 * 1024 * 1024,
 		TempDir:        t.TempDir(),
@@ -81,28 +72,72 @@ path_template = "{localpart}"
 		t.Fatalf("NewServer: %v", err)
 	}
 
-	return srv, configDir, mailDir
+	return srv, deliverySrv
 }
 
-// addSingleConnUser adds a user to the single.local domain passwd file.
-func addSingleConnUser(t *testing.T, configDir, username, password string) {
-	t.Helper()
-	passwdFile := filepath.Join(configDir, "single.local", "passwd")
-	if err := passwd.AddUser(passwdFile, username, password); err != nil {
-		t.Fatalf("addUser %s: %v", username, err)
+// mockSCDeliveryServer captures delivered messages for singleconn tests.
+type mockSCDeliveryServer struct {
+	pb.UnimplementedDeliveryServiceServer
+	mu       sync.Mutex
+	messages int
+}
+
+func (s *mockSCDeliveryServer) Deliver(stream grpc.ClientStreamingServer[pb.DeliverRequest, pb.DeliverResponse]) error {
+	var body bytes.Buffer
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if p, ok := req.Payload.(*pb.DeliverRequest_Data); ok {
+			body.Write(p.Data)
+		}
 	}
+	s.mu.Lock()
+	s.messages++
+	s.mu.Unlock()
+	return stream.SendAndClose(&pb.DeliverResponse{
+		Result: pb.DeliverResult_DELIVER_RESULT_DELIVERED,
+	})
+}
+
+func (s *mockSCDeliveryServer) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.messages
+}
+
+// mockSCSessionServer validates recipients for singleconn tests.
+type mockSCSessionServer struct {
+	smpb.UnimplementedSessionServiceServer
+	localDomains map[string]bool
+}
+
+func (s *mockSCSessionServer) ValidateRecipient(_ context.Context, req *smpb.ValidateRecipientRequest) (*smpb.ValidateRecipientResponse, error) {
+	addr := req.Address
+	domain := ""
+	if idx := strings.LastIndex(addr, "@"); idx >= 0 {
+		domain = strings.ToLower(addr[idx+1:])
+	}
+	if !s.localDomains[domain] {
+		return &smpb.ValidateRecipientResponse{DomainIsLocal: false}, nil
+	}
+	return &smpb.ValidateRecipientResponse{
+		DomainIsLocal: true,
+		UserExists:    true,
+	}, nil
 }
 
 // TestRunSingleConn_BasicDelivery verifies that RunSingleConn handles a
 // complete SMTP DATA transaction over a net.Pipe connection and delivers mail.
-// This is the core invariant of the protocol-handler subprocess model.
 func TestRunSingleConn_BasicDelivery(t *testing.T) {
 	t.Parallel()
 
-	srv, configDir, mailDir := newSingleConnEnv(t)
-	addSingleConnUser(t, configDir, "carol", "pass")
+	srv, deliverySrv := newSingleConnEnv(t)
 
-	// net.Pipe gives a synchronous in-memory connection pair.
 	serverConn, clientConn := net.Pipe()
 
 	var wg sync.WaitGroup
@@ -110,7 +145,6 @@ func TestRunSingleConn_BasicDelivery(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		if err := srv.RunSingleConn(serverConn, config.ModeSmtp, nil); err != nil {
-			// ErrClosed is expected when the session ends normally.
 			if !strings.Contains(err.Error(), "closed") {
 				t.Errorf("RunSingleConn: unexpected error: %v", err)
 			}
@@ -126,19 +160,17 @@ func TestRunSingleConn_BasicDelivery(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify delivery landed in mailDir.
-	found := containsFile(t, mailDir, func(string) bool { return true })
-	if !found {
-		t.Error("no files found under mailDir after RunSingleConn delivery")
+	if got := deliverySrv.count(); got != 1 {
+		t.Errorf("expected 1 delivered message, got %d", got)
 	}
 }
 
 // TestRunSingleConn_SessionEndsAfterQuit verifies that RunSingleConn returns
-// after the client sends QUIT — the server does not hang indefinitely.
+// after the client sends QUIT.
 func TestRunSingleConn_SessionEndsAfterQuit(t *testing.T) {
 	t.Parallel()
 
-	srv, _, _ := newSingleConnEnv(t)
+	srv, _ := newSingleConnEnv(t)
 
 	serverConn, clientConn := net.Pipe()
 
@@ -156,7 +188,6 @@ func TestRunSingleConn_SessionEndsAfterQuit(t *testing.T) {
 
 	select {
 	case <-done:
-		// good: RunSingleConn returned after QUIT
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunSingleConn did not return within 5s after QUIT")
 	}
@@ -167,7 +198,7 @@ func TestRunSingleConn_SessionEndsAfterQuit(t *testing.T) {
 func TestRunSingleConn_NoSecondConn(t *testing.T) {
 	t.Parallel()
 
-	srv, _, _ := newSingleConnEnv(t)
+	srv, _ := newSingleConnEnv(t)
 
 	serverConn, clientConn := net.Pipe()
 
@@ -177,12 +208,10 @@ func TestRunSingleConn_NoSecondConn(t *testing.T) {
 		close(done)
 	}()
 
-	// Abruptly close the client side; RunSingleConn should notice and return.
 	_ = clientConn.Close()
 
 	select {
 	case <-done:
-		// good
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunSingleConn did not return within 5s after client disconnect")
 	}

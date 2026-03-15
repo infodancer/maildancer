@@ -2,16 +2,17 @@ package smtp
 
 import (
 	"context"
-	"errors"
-	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 
 	gosmtp "github.com/emersion/go-smtp"
-	"github.com/infodancer/maildancer/auth"
-	"github.com/infodancer/maildancer/auth/domain"
-	"github.com/infodancer/maildancer/msgstore"
+	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
+	"github.com/infodancer/maildancer/internal/smtpd/config"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestSessionHelperFunctions(t *testing.T) {
@@ -95,93 +96,74 @@ func TestSessionHelperFunctions(t *testing.T) {
 	})
 }
 
-// mockAuthAgent implements auth.AuthenticationAgent for testing.
-type mockAuthAgent struct {
-	users      map[string]bool
-	lookupErr  error
-	closeCalls int
+// mockSessionService implements the session-manager SessionService for tests.
+type mockSessionService struct {
+	smpb.UnimplementedSessionServiceServer
+
+	loginResult    *smpb.LoginResponse
+	loginErr       error
+	validateResult *smpb.ValidateRecipientResponse
+	validateErr    error
 }
 
-func (m *mockAuthAgent) Authenticate(_ context.Context, _, _ string) (*auth.AuthSession, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (m *mockAuthAgent) UserExists(_ context.Context, username string) (bool, error) {
-	if m.lookupErr != nil {
-		return false, m.lookupErr
+func (m *mockSessionService) Login(_ context.Context, req *smpb.LoginRequest) (*smpb.LoginResponse, error) {
+	if m.loginErr != nil {
+		return nil, m.loginErr
 	}
-	return m.users[username], nil
+	return m.loginResult, nil
 }
 
-func (m *mockAuthAgent) Close() error {
-	m.closeCalls++
-	return nil
-}
-
-func (m *mockAuthAgent) ResolveForward(_ context.Context, _ string) ([]string, bool) {
-	return nil, false
-}
-
-// mockDomainProvider implements domain.DomainProvider for testing.
-type mockDomainProvider struct {
-	domains map[string]*domain.Domain
-}
-
-func (m *mockDomainProvider) GetDomain(name string) *domain.Domain {
-	return m.domains[name]
-}
-
-func (m *mockDomainProvider) Domains() []string {
-	var names []string
-	for name := range m.domains {
-		names = append(names, name)
+func (m *mockSessionService) ValidateRecipient(_ context.Context, req *smpb.ValidateRecipientRequest) (*smpb.ValidateRecipientResponse, error) {
+	if m.validateErr != nil {
+		return nil, m.validateErr
 	}
-	return names
+	return m.validateResult, nil
 }
 
-func (m *mockDomainProvider) Close() error {
-	return nil
-}
+// startMockSessionServer starts a gRPC server with a mock SessionService on a
+// temp unix socket and returns a SessionManagerDeliveryAgent connected to it.
+func startMockSessionServer(t *testing.T, mock *mockSessionService) *SessionManagerDeliveryAgent {
+	t.Helper()
 
-// mockDeliveryAgent implements msgstore.DeliveryAgent for testing.
-type mockDeliveryAgent struct{}
+	socketPath := t.TempDir() + "/session.sock"
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
 
-func (m *mockDeliveryAgent) Deliver(_ context.Context, _ msgstore.Envelope, _ io.Reader) error {
-	return nil
-}
+	gsrv := grpc.NewServer()
+	smpb.RegisterSessionServiceServer(gsrv, mock)
+	go func() { _ = gsrv.Serve(ln) }()
+	t.Cleanup(func() { gsrv.Stop() })
 
-// newTestBackend creates a Backend with a DomainProvider and matching AuthRouter for tests.
-func newTestBackend(provider *mockDomainProvider, logger *slog.Logger) *Backend {
-	return NewBackend(BackendConfig{
-		DomainProvider: provider,
-		AuthRouter:     domain.NewAuthRouter(provider, nil),
-		Logger:         logger,
-	})
+	agent, err := NewSessionManagerDeliveryAgent(config.SessionManagerConfig{
+		Socket: socketPath,
+	}, nil)
+	if err != nil {
+		t.Fatalf("new agent: %v", err)
+	}
+	t.Cleanup(func() { _ = agent.Close() })
+
+	return agent
 }
 
 func TestSession_Rcpt_DomainValidation(t *testing.T) {
 	logger := slog.Default()
 
-	t.Run("unknown domain rejected with 550", func(t *testing.T) {
-		provider := &mockDomainProvider{
-			domains: map[string]*domain.Domain{
-				"example.com": {
-					Name:      "example.com",
-					AuthAgent: &mockAuthAgent{users: map[string]bool{"user": true}},
-				},
+	t.Run("unknown domain rejected with 550 for unauthenticated", func(t *testing.T) {
+		agent := startMockSessionServer(t, &mockSessionService{
+			validateResult: &smpb.ValidateRecipientResponse{
+				DomainIsLocal: false,
+				UserExists:    false,
 			},
-		}
+		})
+		backend := &Backend{smDelivery: agent, logger: logger}
 
-		session := &Session{
-			backend: newTestBackend(provider, logger),
-			logger:  logger,
-		}
-
+		session := &Session{backend: backend, logger: logger}
 		err := session.Rcpt("user@unknown.com", nil)
 		if err == nil {
 			t.Fatal("expected error for unknown domain")
 		}
-
 		smtpErr, ok := err.(*gosmtp.SMTPError)
 		if !ok {
 			t.Fatalf("expected SMTPError, got %T", err)
@@ -192,25 +174,20 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 	})
 
 	t.Run("unknown user rejected with 550", func(t *testing.T) {
-		provider := &mockDomainProvider{
-			domains: map[string]*domain.Domain{
-				"example.com": {
-					Name:      "example.com",
-					AuthAgent: &mockAuthAgent{users: map[string]bool{"validuser": true}},
-				},
+		agent := startMockSessionServer(t, &mockSessionService{
+			validateResult: &smpb.ValidateRecipientResponse{
+				DomainIsLocal:  true,
+				UserExists:     false,
+				DeferRejection: false,
 			},
-		}
+		})
+		backend := &Backend{smDelivery: agent, logger: logger}
 
-		session := &Session{
-			backend: newTestBackend(provider, logger),
-			logger:  logger,
-		}
-
+		session := &Session{backend: backend, logger: logger}
 		err := session.Rcpt("unknownuser@example.com", nil)
 		if err == nil {
 			t.Fatal("expected error for unknown user")
 		}
-
 		smtpErr, ok := err.(*gosmtp.SMTPError)
 		if !ok {
 			t.Fatalf("expected SMTPError, got %T", err)
@@ -224,21 +201,15 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 	})
 
 	t.Run("valid user accepted", func(t *testing.T) {
-		provider := &mockDomainProvider{
-			domains: map[string]*domain.Domain{
-				"example.com": {
-					Name:          "example.com",
-					AuthAgent:     &mockAuthAgent{users: map[string]bool{"validuser": true}},
-					DeliveryAgent: &mockDeliveryAgent{},
-				},
+		agent := startMockSessionServer(t, &mockSessionService{
+			validateResult: &smpb.ValidateRecipientResponse{
+				DomainIsLocal: true,
+				UserExists:    true,
 			},
-		}
+		})
+		backend := &Backend{smDelivery: agent, logger: logger}
 
-		session := &Session{
-			backend: newTestBackend(provider, logger),
-			logger:  logger,
-		}
-
+		session := &Session{backend: backend, logger: logger}
 		err := session.Rcpt("validuser@example.com", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -246,26 +217,18 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 		if len(session.recipients) != 1 {
 			t.Errorf("expected 1 recipient, got %d", len(session.recipients))
 		}
-		if session.domain == nil {
-			t.Error("expected domain to be set on session")
-		}
 	})
 
 	t.Run("multiple RCPT TO rejected with 452", func(t *testing.T) {
-		provider := &mockDomainProvider{
-			domains: map[string]*domain.Domain{
-				"example.com": {
-					Name:          "example.com",
-					AuthAgent:     &mockAuthAgent{users: map[string]bool{"user1": true, "user2": true}},
-					DeliveryAgent: &mockDeliveryAgent{},
-				},
+		agent := startMockSessionServer(t, &mockSessionService{
+			validateResult: &smpb.ValidateRecipientResponse{
+				DomainIsLocal: true,
+				UserExists:    true,
 			},
-		}
+		})
+		backend := &Backend{smDelivery: agent, logger: logger}
 
-		session := &Session{
-			backend: newTestBackend(provider, logger),
-			logger:  logger,
-		}
+		session := &Session{backend: backend, logger: logger}
 
 		// First RCPT TO should succeed
 		err := session.Rcpt("user1@example.com", nil)
@@ -278,7 +241,6 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for second RCPT TO")
 		}
-
 		smtpErr, ok := err.(*gosmtp.SMTPError)
 		if !ok {
 			t.Fatalf("expected SMTPError, got %T", err)
@@ -288,26 +250,17 @@ func TestSession_Rcpt_DomainValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("lookup failure returns 451", func(t *testing.T) {
-		provider := &mockDomainProvider{
-			domains: map[string]*domain.Domain{
-				"example.com": {
-					Name:      "example.com",
-					AuthAgent: &mockAuthAgent{lookupErr: errors.New("database error")},
-				},
-			},
-		}
+	t.Run("validate failure returns 451", func(t *testing.T) {
+		agent := startMockSessionServer(t, &mockSessionService{
+			validateErr: status.Error(codes.Internal, "database error"),
+		})
+		backend := &Backend{smDelivery: agent, logger: logger}
 
-		session := &Session{
-			backend: newTestBackend(provider, logger),
-			logger:  logger,
-		}
-
+		session := &Session{backend: backend, logger: logger}
 		err := session.Rcpt("user@example.com", nil)
 		if err == nil {
 			t.Fatal("expected error for lookup failure")
 		}
-
 		smtpErr, ok := err.(*gosmtp.SMTPError)
 		if !ok {
 			t.Fatalf("expected SMTPError, got %T", err)
@@ -322,10 +275,7 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 	logger := slog.Default()
 
 	t.Run("unauthenticated allows any sender", func(t *testing.T) {
-		session := &Session{
-			backend: &Backend{},
-			logger:  logger,
-		}
+		session := &Session{backend: &Backend{}, logger: logger}
 		err := session.Mail("anyone@anywhere.com", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -333,11 +283,7 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 	})
 
 	t.Run("authenticated allows exact match", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "matthew@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "matthew@example.com", logger: logger}
 		err := session.Mail("matthew@example.com", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -345,11 +291,7 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 	})
 
 	t.Run("authenticated rejects different local part same domain", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "matthew@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "matthew@example.com", logger: logger}
 		err := session.Mail("noreply@example.com", nil)
 		if err == nil {
 			t.Fatal("expected error for different local part")
@@ -364,11 +306,7 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 	})
 
 	t.Run("authenticated rejects different domain", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "matthew@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "matthew@example.com", logger: logger}
 		err := session.Mail("matthew@otherdomain.com", nil)
 		if err == nil {
 			t.Fatal("expected error for mismatched domain")
@@ -383,11 +321,7 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 	})
 
 	t.Run("authenticated allows bounce (empty sender)", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "matthew@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "matthew@example.com", logger: logger}
 		err := session.Mail("", nil)
 		if err != nil {
 			t.Fatalf("unexpected error for bounce: %v", err)
@@ -395,11 +329,7 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 	})
 
 	t.Run("case insensitive match", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "Matthew@Example.COM",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "Matthew@Example.COM", logger: logger}
 		err := session.Mail("matthew@example.com", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -407,11 +337,7 @@ func TestSession_Mail_SenderVerification(t *testing.T) {
 	})
 
 	t.Run("angle brackets stripped for comparison", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "matthew@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "matthew@example.com", logger: logger}
 		err := session.Mail("<matthew@example.com>", nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -425,22 +351,15 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 	t.Run("rate limit enforced for authenticated sender", func(t *testing.T) {
 		limiter := newMemRateLimiter()
 		backend := &Backend{senderRateLimiter: limiter, maxSendsPerHour: 3}
-		session := &Session{
-			backend:  backend,
-			authUser: "alice@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: backend, authUser: "alice@example.com", logger: logger}
 
-		// First 3 should succeed
 		for i := 0; i < 3; i++ {
-			err := session.Mail("alice@example.com", nil)
-			if err != nil {
+			if err := session.Mail("alice@example.com", nil); err != nil {
 				t.Fatalf("message %d: unexpected error: %v", i+1, err)
 			}
 			session.Reset()
 		}
 
-		// 4th should be rate limited
 		err := session.Mail("alice@example.com", nil)
 		if err == nil {
 			t.Fatal("expected rate limit error")
@@ -457,15 +376,10 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 	t.Run("no rate limit for unauthenticated", func(t *testing.T) {
 		limiter := newMemRateLimiter()
 		backend := &Backend{senderRateLimiter: limiter, maxSendsPerHour: 1}
-		session := &Session{
-			backend: backend,
-			logger:  logger,
-		}
+		session := &Session{backend: backend, logger: logger}
 
-		// Should succeed without limit since not authenticated
 		for i := 0; i < 5; i++ {
-			err := session.Mail("anyone@anywhere.com", nil)
-			if err != nil {
+			if err := session.Mail("anyone@anywhere.com", nil); err != nil {
 				t.Fatalf("message %d: unexpected error: %v", i+1, err)
 			}
 			session.Reset()
@@ -474,15 +388,10 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 
 	t.Run("no rate limit when limiter not configured", func(t *testing.T) {
 		backend := &Backend{}
-		session := &Session{
-			backend:  backend,
-			authUser: "alice@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: backend, authUser: "alice@example.com", logger: logger}
 
 		for i := 0; i < 5; i++ {
-			err := session.Mail("alice@example.com", nil)
-			if err != nil {
+			if err := session.Mail("alice@example.com", nil); err != nil {
 				t.Fatalf("message %d: unexpected error: %v", i+1, err)
 			}
 			session.Reset()
@@ -496,7 +405,6 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 		alice := &Session{backend: backend, authUser: "alice@example.com", logger: logger}
 		bob := &Session{backend: backend, authUser: "bob@example.com", logger: logger}
 
-		// Alice sends 2
 		for i := 0; i < 2; i++ {
 			if err := alice.Mail("alice@example.com", nil); err != nil {
 				t.Fatalf("alice message %d: %v", i+1, err)
@@ -504,51 +412,38 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 			alice.Reset()
 		}
 
-		// Alice is now limited
 		if err := alice.Mail("alice@example.com", nil); err == nil {
 			t.Fatal("expected alice to be rate limited")
 		}
 
-		// Bob should still be fine
 		if err := bob.Mail("bob@example.com", nil); err != nil {
 			t.Fatalf("bob should not be rate limited: %v", err)
 		}
 	})
 
-	t.Run("per-domain limit overrides global", func(t *testing.T) {
+	t.Run("per-session limit overrides global", func(t *testing.T) {
 		limiter := newMemRateLimiter()
-		provider := &mockDomainProvider{
-			domains: map[string]*domain.Domain{
-				"example.com": {
-					Name:   "example.com",
-					Limits: domain.LimitsConfig{MaxSendsPerHour: 2},
-				},
-			},
-		}
-		backend := &Backend{
-			senderRateLimiter: limiter,
-			maxSendsPerHour:   100, // global allows 100
-			domainProvider:    provider,
-		}
+		backend := &Backend{senderRateLimiter: limiter, maxSendsPerHour: 100}
 		session := &Session{
 			backend:  backend,
 			authUser: "alice@example.com",
-			logger:   logger,
+			loginResult: &LoginResult{
+				Mailbox:         "alice@example.com",
+				MaxSendsPerHour: 2,
+			},
+			logger: logger,
 		}
 
-		// Per-domain limit is 2, so first 2 succeed
 		for i := 0; i < 2; i++ {
-			err := session.Mail("alice@example.com", nil)
-			if err != nil {
+			if err := session.Mail("alice@example.com", nil); err != nil {
 				t.Fatalf("message %d: unexpected error: %v", i+1, err)
 			}
 			session.Reset()
 		}
 
-		// 3rd should be rate limited (per-domain limit of 2)
 		err := session.Mail("alice@example.com", nil)
 		if err == nil {
-			t.Fatal("expected rate limit error from per-domain limit")
+			t.Fatal("expected rate limit error from per-session limit")
 		}
 		smtpErr, ok := err.(*gosmtp.SMTPError)
 		if !ok {
@@ -562,16 +457,10 @@ func TestSession_Mail_SenderRateLimit(t *testing.T) {
 	t.Run("no limit when maxSendsPerHour is zero", func(t *testing.T) {
 		limiter := newMemRateLimiter()
 		backend := &Backend{senderRateLimiter: limiter, maxSendsPerHour: 0}
-		session := &Session{
-			backend:  backend,
-			authUser: "alice@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: backend, authUser: "alice@example.com", logger: logger}
 
-		// Should succeed without limit since maxSendsPerHour is 0
 		for i := 0; i < 10; i++ {
-			err := session.Mail("alice@example.com", nil)
-			if err != nil {
+			if err := session.Mail("alice@example.com", nil); err != nil {
 				t.Fatalf("message %d: unexpected error: %v", i+1, err)
 			}
 			session.Reset()
@@ -587,12 +476,7 @@ func TestSession_CheckFromAlignment(t *testing.T) {
 	}
 
 	t.Run("aligned domains pass", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "alice@example.com",
-			from:     "alice@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "alice@example.com", from: "alice@example.com", logger: logger}
 		err := session.checkFromAlignment(strings.NewReader(makeMsg("alice@example.com")))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -600,94 +484,57 @@ func TestSession_CheckFromAlignment(t *testing.T) {
 	})
 
 	t.Run("different local part same domain rejected", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "alice@example.com",
-			from:     "alice@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "alice@example.com", from: "alice@example.com", logger: logger}
 		err := session.checkFromAlignment(strings.NewReader(makeMsg("noreply@example.com")))
 		if err == nil {
 			t.Fatal("expected error for different local part")
 		}
-		smtpErr, ok := err.(*gosmtp.SMTPError)
-		if !ok {
-			t.Fatalf("expected SMTPError, got %T", err)
-		}
+		smtpErr := err.(*gosmtp.SMTPError)
 		if smtpErr.Code != 550 {
 			t.Errorf("expected code 550, got %d", smtpErr.Code)
 		}
 	})
 
 	t.Run("mismatched domain rejected", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "alice@example.com",
-			from:     "alice@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "alice@example.com", from: "alice@example.com", logger: logger}
 		err := session.checkFromAlignment(strings.NewReader(makeMsg("alice@evil.com")))
 		if err == nil {
 			t.Fatal("expected error for mismatched domain")
 		}
-		smtpErr, ok := err.(*gosmtp.SMTPError)
-		if !ok {
-			t.Fatalf("expected SMTPError, got %T", err)
-		}
+		smtpErr := err.(*gosmtp.SMTPError)
 		if smtpErr.Code != 550 {
 			t.Errorf("expected code 550, got %d", smtpErr.Code)
 		}
 	})
 
 	t.Run("missing From header rejected", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "alice@example.com",
-			from:     "alice@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "alice@example.com", from: "alice@example.com", logger: logger}
 		msg := "To: bob@remote.com\r\nSubject: test\r\n\r\nBody\r\n"
 		err := session.checkFromAlignment(strings.NewReader(msg))
 		if err == nil {
 			t.Fatal("expected error for missing From header")
 		}
-		smtpErr, ok := err.(*gosmtp.SMTPError)
-		if !ok {
-			t.Fatalf("expected SMTPError, got %T", err)
-		}
+		smtpErr := err.(*gosmtp.SMTPError)
 		if smtpErr.Code != 550 {
 			t.Errorf("expected code 550, got %d", smtpErr.Code)
 		}
 	})
 
 	t.Run("multiple From addresses rejected", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "alice@example.com",
-			from:     "alice@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "alice@example.com", from: "alice@example.com", logger: logger}
 		msg := "From: alice@example.com, bob@example.com\r\nTo: ext@remote.com\r\nSubject: test\r\n\r\nBody\r\n"
 		err := session.checkFromAlignment(strings.NewReader(msg))
 		if err == nil {
 			t.Fatal("expected error for multiple From addresses")
 		}
-		smtpErr, ok := err.(*gosmtp.SMTPError)
-		if !ok {
-			t.Fatalf("expected SMTPError, got %T", err)
-		}
+		smtpErr := err.(*gosmtp.SMTPError)
 		if smtpErr.Code != 550 {
 			t.Errorf("expected code 550, got %d", smtpErr.Code)
 		}
 	})
 
 	t.Run("case insensitive domain match", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "alice@Example.COM",
-			from:     "alice@Example.COM",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "alice@Example.COM", from: "alice@Example.COM", logger: logger}
 		err := session.checkFromAlignment(strings.NewReader(makeMsg("alice@example.com")))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -695,12 +542,7 @@ func TestSession_CheckFromAlignment(t *testing.T) {
 	})
 
 	t.Run("display name in From header handled", func(t *testing.T) {
-		session := &Session{
-			backend:  &Backend{},
-			authUser: "alice@example.com",
-			from:     "alice@example.com",
-			logger:   logger,
-		}
+		session := &Session{backend: &Backend{}, authUser: "alice@example.com", from: "alice@example.com", logger: logger}
 		msg := "From: Alice Smith <alice@example.com>\r\nTo: bob@remote.com\r\nSubject: test\r\n\r\nBody\r\n"
 		err := session.checkFromAlignment(strings.NewReader(msg))
 		if err != nil {

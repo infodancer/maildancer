@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"io"
 	"log/slog"
-	"net"
 	"net/mail"
 	"os"
 	"strings"
@@ -14,11 +13,10 @@ import (
 
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
-	"github.com/infodancer/maildancer/auth/domain"
-	autherrors "github.com/infodancer/maildancer/auth/errors"
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // tempBuffer abstracts temporary message storage during DATA processing.
@@ -93,8 +91,8 @@ type Session struct {
 	recipients               []string // local recipients → mail-session
 	remoteRecipients         []string // remote recipients → queue (authenticated submission only)
 	authUser                 string
-	domain                   *domain.Domain // Set during RCPT TO for delivery
-	deferredInvalidRecipient string         // non-empty when data-mode deferred an unknown user
+	loginResult              *LoginResult // set on successful session-manager Login
+	deferredInvalidRecipient string       // non-empty when data-mode deferred an unknown user
 	logger                   *slog.Logger
 }
 
@@ -112,8 +110,8 @@ func (s *Session) AuthMechanisms() []string {
 
 	var mechs []string
 
-	// Advertise PLAIN if password auth is configured
-	if s.backend.authAgent != nil {
+	// Advertise PLAIN if session-manager auth is configured
+	if s.backend.smDelivery != nil {
 		mechs = append(mechs, sasl.Plain)
 	}
 
@@ -130,20 +128,14 @@ func (s *Session) AuthMechanisms() []string {
 func (s *Session) Auth(mech string) (sasl.Server, error) {
 	switch mech {
 	case sasl.Plain:
-		if s.backend.authAgent == nil {
+		if s.backend.smDelivery == nil {
 			return nil, smtp.ErrAuthUnsupported
 		}
 
 		return sasl.NewPlainServer(func(identity, username, password string) error {
 			ctx := context.Background()
 
-			// Pass client IP for rate limiting.
-			if s.clientIP != "" {
-				ctx = domain.WithClientIP(ctx, s.clientIP)
-			}
-
-			// AuthRouter handles domain splitting for user@domain usernames
-			_, err := s.backend.authRouter.Authenticate(ctx, username, password)
+			result, err := s.backend.smDelivery.Login(ctx, username, password)
 			if err != nil {
 				if s.backend.collector != nil {
 					domain := sessionExtractAuthDomain(username)
@@ -154,19 +146,22 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 					slog.String("username", username),
 					slog.String("error", err.Error()))
 
-				if err == autherrors.ErrRateLimited {
-					return &smtp.SMTPError{
-						Code:         421,
-						EnhancedCode: smtp.EnhancedCode{4, 7, 0},
-						Message:      "Too many failed authentication attempts, try again later",
-					}
-				}
-
-				if err == autherrors.ErrAuthFailed || err == autherrors.ErrUserNotFound {
-					return &smtp.SMTPError{
-						Code:         535,
-						EnhancedCode: smtp.EnhancedCode{5, 7, 8},
-						Message:      "Authentication credentials invalid",
+				// Convert gRPC status codes to SMTP errors.
+				st, ok := status.FromError(err)
+				if ok {
+					switch st.Code() {
+					case codes.ResourceExhausted:
+						return &smtp.SMTPError{
+							Code:         421,
+							EnhancedCode: smtp.EnhancedCode{4, 7, 0},
+							Message:      "Too many failed authentication attempts, try again later",
+						}
+					case codes.Unauthenticated:
+						return &smtp.SMTPError{
+							Code:         535,
+							EnhancedCode: smtp.EnhancedCode{5, 7, 8},
+							Message:      "Authentication credentials invalid",
+						}
 					}
 				}
 
@@ -177,13 +172,12 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 				}
 			}
 
-			// Always use the full login username (user@domain) for sender
-			// verification. The auth session's User.Username may be the
-			// bare local part without domain.
-			s.authUser = username
+			// Use normalized mailbox from session-manager.
+			s.authUser = result.Mailbox
+			s.loginResult = result
 
 			if s.backend.collector != nil {
-				domain := sessionExtractAuthDomain(username)
+				domain := sessionExtractAuthDomain(result.Mailbox)
 				s.backend.collector.AuthAttempt(domain, true)
 			}
 
@@ -243,15 +237,11 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 // Implements smtp.Session interface.
 func (s *Session) Mail(from string, opts *smtp.MailOptions) error {
 	// Per-sender rate limiting for authenticated submission (Redis-backed).
-	// Resolves per-domain limit from DomainConfig.Limits with global fallback.
+	// Resolves per-domain limit from loginResult with global fallback.
 	if s.authUser != "" && s.backend.senderRateLimiter != nil {
 		maxRate := s.backend.maxSendsPerHour
-		if senderDomain := extractDomain(s.authUser); senderDomain != "" {
-			if dp := s.backend.domainProvider; dp != nil {
-				if dom := dp.GetDomain(senderDomain); dom != nil && dom.Limits.MaxSendsPerHour > 0 {
-					maxRate = dom.Limits.MaxSendsPerHour
-				}
-			}
+		if s.loginResult != nil && s.loginResult.MaxSendsPerHour > 0 {
+			maxRate = s.loginResult.MaxSendsPerHour
 		}
 		if maxRate > 0 && !s.backend.senderRateLimiter.allow(context.Background(), s.authUser, maxRate) {
 			s.logger.Warn("sender rate limit exceeded",
@@ -317,10 +307,22 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 		}
 	}
 
-	// Validate domain if DomainProvider is configured
-	if s.backend.domainProvider != nil {
-		d := s.backend.domainProvider.GetDomain(domainName)
-		if d == nil {
+	// Validate recipient via session-manager
+	if s.backend.smDelivery != nil {
+		ctx := context.Background()
+		vr, err := s.backend.smDelivery.ValidateRecipient(ctx, to)
+		if err != nil {
+			s.logger.Debug("recipient validation failed",
+				slog.String("recipient", to),
+				slog.String("error", err.Error()))
+			return &smtp.SMTPError{
+				Code:         451,
+				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+				Message:      "Temporary lookup failure",
+			}
+		}
+
+		if !vr.DomainIsLocal {
 			// Domain is not local. Allow relay only for authenticated senders.
 			if s.authUser == "" {
 				s.logger.Debug("relay denied: unauthenticated", slog.String("domain", domainName))
@@ -339,32 +341,11 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 			return nil
 		}
 
-		// Check if user exists (AuthRouter handles domain splitting)
-		ctx := context.Background()
-		exists, err := s.backend.authRouter.UserExists(ctx, to)
-		if err != nil {
-			s.logger.Debug("user lookup failed",
-				slog.String("recipient", to),
-				slog.String("error", err.Error()))
-			return &smtp.SMTPError{
-				Code:         451,
-				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
-				Message:      "Temporary lookup failure",
-			}
-		}
-
-		if !exists {
-			// Determine rejection mode: per-domain overrides global.
-			mode := s.backend.rejectionMode
-			if d.RecipientRejection != "" {
-				mode = config.RejectionMode(d.RecipientRejection)
-			}
-
-			if mode == config.RejectionModeData {
+		if !vr.UserExists {
+			if vr.DeferRejection {
 				// Defer rejection to after DATA to hide address validity
 				// and enable spamtrap auto-learning.
 				s.deferredInvalidRecipient = to
-				s.domain = d
 				s.logger.Debug("RCPT TO (deferred rejection)",
 					slog.String("to", to), slog.String("mode", "data"))
 
@@ -381,19 +362,6 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 				Message:      "User unknown",
 			}
 		}
-
-		// Fail early: verify delivery is possible before accepting the recipient.
-		// Returning a temp fail lets the sender retry rather than lose the message.
-		if d.DeliveryAgent == nil && s.backend.delivery == nil && s.backend.smDelivery == nil {
-			s.logger.Debug("no delivery agent for domain", slog.String("domain", domainName))
-			return &smtp.SMTPError{
-				Code:         452,
-				EnhancedCode: smtp.EnhancedCode{4, 3, 5},
-				Message:      "Delivery not available, try again later",
-			}
-		}
-
-		s.domain = d // Store for delivery
 	}
 
 	s.recipients = append(s.recipients, to)
@@ -517,24 +485,13 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
-	// Resolve the local delivery agent (only needed if we have local recipients).
-	// Fail early to avoid buffering the body only to discard it.
-	// Session-manager takes priority — it has no msgstore dependency.
+	// Session-manager is the sole delivery path.
 	useSessionManager := s.backend.smDelivery != nil
-	var deliveryAgent msgstore.DeliveryAgent
 	if len(s.recipients) > 0 && !useSessionManager {
-		if s.domain != nil && s.domain.DeliveryAgent != nil {
-			deliveryAgent = s.domain.DeliveryAgent
-		} else if s.backend.delivery != nil {
-			deliveryAgent = s.backend.delivery
-		}
-		if deliveryAgent == nil {
-			s.logger.Debug("no delivery agent configured")
-			return &smtp.SMTPError{
-				Code:         451,
-				EnhancedCode: smtp.EnhancedCode{4, 3, 0},
-				Message:      "Delivery not configured, try again later",
-			}
+		return &smtp.SMTPError{
+			Code:         451,
+			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+			Message:      "Delivery not configured",
 		}
 	}
 
@@ -715,32 +672,11 @@ func (s *Session) Data(r io.Reader) error {
 
 	// Local delivery (synchronous; failures reject at SMTP time).
 	if len(s.recipients) > 0 {
-		var deliverErr error
 		now := time.Now()
 
-		if useSessionManager {
-			// Session-manager path: pass SMTP envelope fields directly.
-			// Single recipient enforced by Rcpt().
-			deliverErr = s.backend.smDelivery.Deliver(ctx,
-				s.from, s.recipients[0], s.clientIP, s.helo, now, tmp.reader())
-		} else {
-			// Legacy path: build msgstore.Envelope for direct/GrpcDeliveryAgent.
-			envelope := msgstore.Envelope{
-				From:           s.from,
-				Recipients:     s.recipients,
-				ReceivedTime:   now,
-				ClientIP:       net.ParseIP(s.clientIP),
-				ClientHostname: s.helo,
-			}
-			if checkResult != nil {
-				envelope.SpamResult = &msgstore.SpamResult{
-					Score:   checkResult.Score,
-					Action:  string(checkResult.Action),
-					Checker: checkResult.CheckerName,
-				}
-			}
-			deliverErr = deliveryAgent.Deliver(ctx, envelope, tmp.reader())
-		}
+		// Session-manager is the only delivery path.
+		deliverErr := s.backend.smDelivery.Deliver(ctx,
+			s.from, s.recipients[0], s.clientIP, s.helo, now, tmp.reader())
 
 		if deliverErr != nil {
 			s.logger.Warn("local delivery failed",
@@ -844,7 +780,6 @@ func (s *Session) Reset() {
 	s.mailFromSeen = false
 	s.recipients = nil
 	s.remoteRecipients = nil
-	s.domain = nil
 	s.deferredInvalidRecipient = ""
 	s.logger.Debug("session reset")
 }

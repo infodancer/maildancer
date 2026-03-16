@@ -145,20 +145,20 @@ func run() int {
 			cfg.Hostname = stdinCfg.Hostname
 		}
 		if stdinCfg.Smarthost != "" {
-			cfg.Smarthost.Addr = stdinCfg.Smarthost
+			cfg.Smarthost = stdinCfg.Smarthost
 		}
 		if stdinCfg.Username != "" {
-			cfg.Smarthost.User = stdinCfg.Username
+			cfg.User = stdinCfg.Username
 		}
 		password = stdinCfg.Password
 	}
 
 	// CLI flags override stdin config.
 	if *smarthostAddr != "" {
-		cfg.Smarthost.Addr = *smarthostAddr
+		cfg.Smarthost = *smarthostAddr
 	}
 	if *smarthostUser != "" {
-		cfg.Smarthost.User = *smarthostUser
+		cfg.User = *smarthostUser
 	}
 	if *hostname != "" {
 		cfg.Hostname = *hostname
@@ -194,10 +194,10 @@ func run() int {
 	// Determine delivery strategy.
 	// Explicit strategy from stdin takes precedence; otherwise infer from
 	// smarthost presence (backward-compatible with manual invocation).
-	useSmarthost := cfg.Smarthost.Addr != ""
+	useSmarthost := cfg.Smarthost != ""
 	switch strategy {
 	case "smarthost":
-		if cfg.Smarthost.Addr == "" {
+		if cfg.Smarthost == "" {
 			slog.Error("strategy is 'smarthost' but no smarthost address configured")
 			return exUsage
 		}
@@ -214,11 +214,11 @@ func run() int {
 	var results map[string]error
 	if useSmarthost {
 		sh := smtp.Smarthost{
-			Addr:     cfg.Smarthost.Addr,
-			Username: cfg.Smarthost.User,
+			Addr:     cfg.Smarthost,
+			Username: cfg.User,
 			Password: password,
 		}
-		results = smtp.DeliverViaSmarthost(context.Background(), sh, bodyPath, envs, cfg.Smarthost.MaxTransactionsPerConn)
+		results = smtp.DeliverViaSmarthost(context.Background(), sh, bodyPath, envs, cfg.SmarthostMaxTransactionsPerConn)
 	} else {
 		if cfg.Hostname == "" {
 			h, err := os.Hostname()

@@ -16,25 +16,21 @@ type Config struct {
 	// Inherited from [server].hostname if not set in [mail-remote].
 	Hostname string `toml:"hostname"`
 
-	// Smarthost holds settings for relay delivery via a fixed smarthost.
-	Smarthost SmarthostConfig `toml:"smarthost"`
+	// Smarthost is the relay address in host:port form (e.g. "relay.example.com:587").
+	// When set, outbound mail is relayed via this host instead of direct MX delivery.
+	Smarthost string `toml:"smarthost"`
+
+	// User is the SMTP AUTH username for smarthost relay.
+	// Password comes from stdin JSON config or MAIL_REMOTE_PASSWORD env var.
+	User string `toml:"user"`
+
+	// SmarthostMaxTransactionsPerConn limits MAIL FROM transactions per smarthost connection.
+	// Envelopes beyond the limit are deferred for retry on the next queue scan.
+	// Default: 100 (smarthosts are trusted relays).
+	SmarthostMaxTransactionsPerConn int `toml:"smarthost_max_transactions_per_conn"`
 
 	// RemoteMX holds settings for direct MX delivery.
 	RemoteMX RemoteMXConfig `toml:"remote-mx"`
-}
-
-// SmarthostConfig holds settings specific to smarthost relay delivery.
-type SmarthostConfig struct {
-	// Addr is the smarthost address in host:port form (e.g. "relay.example.com:587").
-	Addr string `toml:"addr"`
-
-	// User is the SMTP AUTH username. Password comes from stdin JSON config or MAIL_REMOTE_PASSWORD env var.
-	User string `toml:"user"`
-
-	// MaxTransactionsPerConn limits MAIL FROM transactions per connection.
-	// Envelopes beyond the limit are deferred for retry on the next queue scan.
-	// Default: 100 (smarthosts are trusted relays).
-	MaxTransactionsPerConn int `toml:"max_transactions_per_conn"`
 }
 
 // RemoteMXConfig holds settings specific to direct MX delivery.
@@ -59,9 +55,7 @@ type serverConfig struct {
 // Default returns a Config with sensible defaults.
 func Default() Config {
 	return Config{
-		Smarthost: SmarthostConfig{
-			MaxTransactionsPerConn: 100,
-		},
+		SmarthostMaxTransactionsPerConn: 100,
 		RemoteMX: RemoteMXConfig{
 			MaxTransactionsPerConn: 25,
 		},
@@ -96,14 +90,14 @@ func Load(path string) (Config, error) {
 	if fc.MailRemote.Hostname != "" {
 		cfg.Hostname = fc.MailRemote.Hostname
 	}
-	if fc.MailRemote.Smarthost.Addr != "" {
-		cfg.Smarthost.Addr = fc.MailRemote.Smarthost.Addr
+	if fc.MailRemote.Smarthost != "" {
+		cfg.Smarthost = fc.MailRemote.Smarthost
 	}
-	if fc.MailRemote.Smarthost.User != "" {
-		cfg.Smarthost.User = fc.MailRemote.Smarthost.User
+	if fc.MailRemote.User != "" {
+		cfg.User = fc.MailRemote.User
 	}
-	if fc.MailRemote.Smarthost.MaxTransactionsPerConn > 0 {
-		cfg.Smarthost.MaxTransactionsPerConn = fc.MailRemote.Smarthost.MaxTransactionsPerConn
+	if fc.MailRemote.SmarthostMaxTransactionsPerConn > 0 {
+		cfg.SmarthostMaxTransactionsPerConn = fc.MailRemote.SmarthostMaxTransactionsPerConn
 	}
 	if fc.MailRemote.RemoteMX.MaxTransactionsPerConn > 0 {
 		cfg.RemoteMX.MaxTransactionsPerConn = fc.MailRemote.RemoteMX.MaxTransactionsPerConn
@@ -118,10 +112,10 @@ func ApplyEnv(cfg Config) Config {
 		cfg.Hostname = v
 	}
 	if v := os.Getenv("MAIL_REMOTE_SMARTHOST"); v != "" {
-		cfg.Smarthost.Addr = v
+		cfg.Smarthost = v
 	}
 	if v := os.Getenv("MAIL_REMOTE_SMARTHOST_USER"); v != "" {
-		cfg.Smarthost.User = v
+		cfg.User = v
 	}
 	return cfg
 }

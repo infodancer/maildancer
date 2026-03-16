@@ -8,8 +8,8 @@ import (
 
 func TestDefault(t *testing.T) {
 	cfg := Default()
-	if cfg.Smarthost.MaxTransactionsPerConn != 100 {
-		t.Errorf("default smarthost max_transactions_per_conn = %d, want 100", cfg.Smarthost.MaxTransactionsPerConn)
+	if cfg.SmarthostMaxTransactionsPerConn != 100 {
+		t.Errorf("default smarthost max_transactions_per_conn = %d, want 100", cfg.SmarthostMaxTransactionsPerConn)
 	}
 	if cfg.RemoteMX.MaxTransactionsPerConn != 25 {
 		t.Errorf("default remote-mx max_transactions_per_conn = %d, want 25", cfg.RemoteMX.MaxTransactionsPerConn)
@@ -21,8 +21,8 @@ func TestLoadMissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Smarthost.MaxTransactionsPerConn != 100 {
-		t.Errorf("missing file should return defaults, got smarthost max_txn=%d", cfg.Smarthost.MaxTransactionsPerConn)
+	if cfg.SmarthostMaxTransactionsPerConn != 100 {
+		t.Errorf("missing file should return defaults, got smarthost max_txn=%d", cfg.SmarthostMaxTransactionsPerConn)
 	}
 	if cfg.RemoteMX.MaxTransactionsPerConn != 25 {
 		t.Errorf("missing file should return defaults, got remote-mx max_txn=%d", cfg.RemoteMX.MaxTransactionsPerConn)
@@ -36,10 +36,10 @@ func TestLoadFullConfig(t *testing.T) {
 [server]
 hostname = "mail.example.com"
 
-[mail-remote.smarthost]
-addr = "relay.example.com:587"
+[mail-remote]
+smarthost = "relay.example.com:587"
 user = "outbound"
-max_transactions_per_conn = 200
+smarthost_max_transactions_per_conn = 200
 
 [mail-remote.remote-mx]
 max_transactions_per_conn = 10
@@ -56,14 +56,14 @@ max_transactions_per_conn = 10
 	if cfg.Hostname != "mail.example.com" {
 		t.Errorf("hostname = %q, want %q", cfg.Hostname, "mail.example.com")
 	}
-	if cfg.Smarthost.Addr != "relay.example.com:587" {
-		t.Errorf("smarthost.addr = %q, want %q", cfg.Smarthost.Addr, "relay.example.com:587")
+	if cfg.Smarthost != "relay.example.com:587" {
+		t.Errorf("smarthost = %q, want %q", cfg.Smarthost, "relay.example.com:587")
 	}
-	if cfg.Smarthost.User != "outbound" {
-		t.Errorf("smarthost.user = %q, want %q", cfg.Smarthost.User, "outbound")
+	if cfg.User != "outbound" {
+		t.Errorf("user = %q, want %q", cfg.User, "outbound")
 	}
-	if cfg.Smarthost.MaxTransactionsPerConn != 200 {
-		t.Errorf("smarthost.max_transactions_per_conn = %d, want 200", cfg.Smarthost.MaxTransactionsPerConn)
+	if cfg.SmarthostMaxTransactionsPerConn != 200 {
+		t.Errorf("smarthost_max_transactions_per_conn = %d, want 200", cfg.SmarthostMaxTransactionsPerConn)
 	}
 	if cfg.RemoteMX.MaxTransactionsPerConn != 10 {
 		t.Errorf("remote-mx.max_transactions_per_conn = %d, want 10", cfg.RemoteMX.MaxTransactionsPerConn)
@@ -74,8 +74,8 @@ func TestLoadSmarthostOnly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	content := `
-[mail-remote.smarthost]
-addr = "relay.example.com:587"
+[mail-remote]
+smarthost = "relay.example.com:587"
 `
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -86,8 +86,8 @@ addr = "relay.example.com:587"
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if cfg.Smarthost.Addr != "relay.example.com:587" {
-		t.Errorf("smarthost.addr = %q, want %q", cfg.Smarthost.Addr, "relay.example.com:587")
+	if cfg.Smarthost != "relay.example.com:587" {
+		t.Errorf("smarthost = %q, want %q", cfg.Smarthost, "relay.example.com:587")
 	}
 	// remote-mx should keep defaults
 	if cfg.RemoteMX.MaxTransactionsPerConn != 25 {
@@ -139,8 +139,8 @@ hostname = "mail.example.com"
 		t.Errorf("hostname = %q, want %q", cfg.Hostname, "mail.example.com")
 	}
 	// Defaults preserved for transport-specific settings.
-	if cfg.Smarthost.MaxTransactionsPerConn != 100 {
-		t.Errorf("smarthost.max_transactions_per_conn = %d, want 100", cfg.Smarthost.MaxTransactionsPerConn)
+	if cfg.SmarthostMaxTransactionsPerConn != 100 {
+		t.Errorf("smarthost_max_transactions_per_conn = %d, want 100", cfg.SmarthostMaxTransactionsPerConn)
 	}
 	if cfg.RemoteMX.MaxTransactionsPerConn != 25 {
 		t.Errorf("remote-mx.max_transactions_per_conn = %d, want 25", cfg.RemoteMX.MaxTransactionsPerConn)
@@ -158,11 +158,11 @@ func TestApplyEnv(t *testing.T) {
 	if cfg.Hostname != "env.example.com" {
 		t.Errorf("hostname = %q, want %q", cfg.Hostname, "env.example.com")
 	}
-	if cfg.Smarthost.Addr != "relay.env.com:587" {
-		t.Errorf("smarthost.addr = %q, want %q", cfg.Smarthost.Addr, "relay.env.com:587")
+	if cfg.Smarthost != "relay.env.com:587" {
+		t.Errorf("smarthost = %q, want %q", cfg.Smarthost, "relay.env.com:587")
 	}
-	if cfg.Smarthost.User != "envuser" {
-		t.Errorf("smarthost.user = %q, want %q", cfg.Smarthost.User, "envuser")
+	if cfg.User != "envuser" {
+		t.Errorf("user = %q, want %q", cfg.User, "envuser")
 	}
 }
 

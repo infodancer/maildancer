@@ -41,10 +41,19 @@ type MetricsConfig struct {
 	Path    string `toml:"path"`
 }
 
+// OutboundConfig holds system-default outbound delivery transport settings.
+type OutboundConfig struct {
+	Strategy      string `toml:"strategy"`       // "direct" | "smarthost"; default "direct"
+	Smarthost     string `toml:"smarthost"`      // host:port
+	SmarthostUser string `toml:"smarthost_user"` // SMTP AUTH username
+	PasswordFile  string `toml:"password_file"`  // path to password file
+}
+
 // QueueManagerConfig holds all queue-manager configuration from the TOML file.
 type QueueManagerConfig struct {
 	Hostname         string
 	DomainConfigPath string // base directory for per-domain config files
+	Outbound         OutboundConfig
 	RateLimit        RateLimitConfig
 	DSN              DSNConfig
 	SessionManager   SessionManagerConfig
@@ -62,6 +71,7 @@ func DefaultRateLimit() RateLimitConfig {
 // TOML structs use pointer fields to distinguish "not set" from "set to 0".
 
 type fileConfig struct {
+	Outbound     OutboundConfig   `toml:"outbound"`
 	QueueManager tomlQueueManager `toml:"queue-manager"`
 }
 
@@ -162,6 +172,9 @@ func Load(path string) (QueueManagerConfig, error) {
 	if cfg.Metrics.Path == "" {
 		cfg.Metrics.Path = "/metrics"
 	}
+
+	// Outbound (system-default delivery transport).
+	cfg.Outbound = fc.Outbound
 
 	return cfg, nil
 }

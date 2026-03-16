@@ -1425,8 +1425,11 @@ strategy = "direct"
 		Binary:           fakeBin,
 		Interval:         time.Minute,
 		DomainConfigPath: domainBase,
-		SmarthostAddr:    "global-relay:587", // should be ignored
-		SmarthostUser:    "global-user",      // should be ignored
+		Outbound: config.OutboundConfig{
+			Strategy:      "smarthost",
+			Smarthost:     "global-relay:587",
+			SmarthostUser: "global-user",
+		}, // should be ignored — per-domain config takes precedence
 	})
 	if err := s.processDomainDir(envDir); err != nil {
 		t.Fatalf("processDomainDir: %v", err)
@@ -1447,7 +1450,7 @@ strategy = "direct"
 }
 
 // TestProcessDomainDir_FallbackToGlobalSmarthost verifies that when no domain
-// config is found, the global smarthost CLI flags are used.
+// config is found, the global [outbound] config is used.
 func TestProcessDomainDir_FallbackToGlobalSmarthost(t *testing.T) {
 	fakeBin := buildFakeMailRemote(t)
 	dir := t.TempDir()
@@ -1485,8 +1488,11 @@ func TestProcessDomainDir_FallbackToGlobalSmarthost(t *testing.T) {
 		Binary:           fakeBin,
 		Interval:         time.Minute,
 		DomainConfigPath: domainBase,
-		SmarthostAddr:    "global-relay:587",
-		SmarthostUser:    "global-user",
+		Outbound: config.OutboundConfig{
+			Strategy:      "smarthost",
+			Smarthost:     "global-relay:587",
+			SmarthostUser: "global-user",
+		},
 	})
 	if err := s.processDomainDir(envDir); err != nil {
 		t.Fatalf("processDomainDir: %v", err)

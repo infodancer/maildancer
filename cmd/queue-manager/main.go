@@ -46,8 +46,8 @@ func run() error {
 	queueDir := flag.String("queue", "", "root of the mail queue directory (required)")
 	binary := flag.String("binary", "mail-remote", "path to the mail-remote binary")
 	configPath := flag.String("config", "", "shared TOML config file (passed to mail-remote as --config)")
-	smarthostAddr := flag.String("smarthost", "", "SMTP smarthost address (host:port)")
-	smarthostUser := flag.String("smarthost-user", "", "SMTP AUTH username for smarthost")
+	smarthostAddr := flag.String("smarthost", "", "SMTP smarthost address (host:port) — overrides [outbound] config")
+	smarthostUser := flag.String("smarthost-user", "", "SMTP AUTH username for smarthost — overrides [outbound] config")
 	domainConfig := flag.String("domain-config", "", "base directory for per-domain config files (enables per-domain outbound routing)")
 	interval := flag.Duration("interval", time.Minute, "queue scan interval")
 	messageTTL := flag.Duration("message-ttl", 7*24*time.Hour, "default message TTL (for backoff calculation)")
@@ -123,12 +123,25 @@ func run() error {
 		_ = metricsServer.Shutdown(shutdownCtx)
 	}()
 
+	// CLI flags override [outbound] config when explicitly set.
+	outbound := fileCfg.Outbound
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "smarthost":
+			outbound.Smarthost = *smarthostAddr
+			if outbound.Strategy == "" {
+				outbound.Strategy = "smarthost"
+			}
+		case "smarthost-user":
+			outbound.SmarthostUser = *smarthostUser
+		}
+	})
+
 	cfg := scheduler.Config{
 		QueueDir:         *queueDir,
 		Binary:           *binary,
 		ConfigPath:       *configPath,
-		SmarthostAddr:    *smarthostAddr,
-		SmarthostUser:    *smarthostUser,
+		Outbound:         outbound,
 		DomainConfigPath: fileCfg.DomainConfigPath,
 		Interval:         *interval,
 		MessageTTL:       *messageTTL,

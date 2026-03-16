@@ -33,10 +33,9 @@ type deliveryResult struct {
 type Config struct {
 	QueueDir         string
 	Binary           string
-	ConfigPath       string // shared TOML config file; passed as --config to mail-remote
-	SmarthostAddr    string // global fallback; used when no per-domain outbound config is found
-	SmarthostUser    string // global fallback; used when no per-domain outbound config is found
-	DomainConfigPath string // base directory for per-domain config files (enables per-domain outbound routing)
+	ConfigPath       string                // shared TOML config file; passed as --config to mail-remote
+	Outbound         config.OutboundConfig // system-default outbound transport from [outbound] section
+	DomainConfigPath string                // base directory for per-domain config files (enables per-domain outbound routing)
 	Interval         time.Duration
 	MessageTTL       time.Duration               // default message TTL; used to compute message age for backoff
 	Hostname         string                      // reporting MTA hostname for DSN headers
@@ -488,7 +487,7 @@ func (s *Scheduler) resolveBody(envPath, msgid string) (string, error) {
 // based on the sender domain extracted from the body path. It checks:
 //  1. Per-domain config file ({DomainConfigPath}/{sender}/config.toml)
 //  2. System default config ({DomainConfigPath}/config.toml)
-//  3. Global CLI fallback (SmarthostAddr/SmarthostUser)
+//  3. Global fallback from [outbound] section in shared config
 //  4. Direct MX delivery (no smarthost)
 //
 // Results are cached for the duration of one queue scan pass.
@@ -515,7 +514,7 @@ func (s *Scheduler) resolveOutbound(bodyPath string) OutboundConfig {
 		return fb
 	}
 
-	// No domain config found — fall back to global CLI flags.
+	// No domain config found — fall back to global [outbound] config.
 	if cfg == (OutboundConfig{}) {
 		fb := s.globalFallbackOutbound()
 		s.outboundCache[domain] = &fb
@@ -541,16 +540,37 @@ func (s *Scheduler) resolveOutbound(bodyPath string) OutboundConfig {
 	return cfg
 }
 
-// globalFallbackOutbound builds an OutboundConfig from the global CLI flags.
+// globalFallbackOutbound builds an OutboundConfig from the system-default [outbound] section.
 func (s *Scheduler) globalFallbackOutbound() OutboundConfig {
-	if s.cfg.SmarthostAddr == "" {
+	if s.cfg.Outbound.Smarthost == "" {
 		return OutboundConfig{Strategy: "direct"}
 	}
-	return OutboundConfig{
-		Strategy:      "smarthost",
-		Smarthost:     s.cfg.SmarthostAddr,
-		SmarthostUser: s.cfg.SmarthostUser,
+	cfg := OutboundConfig{
+		Strategy:      s.cfg.Outbound.Strategy,
+		Smarthost:     s.cfg.Outbound.Smarthost,
+		SmarthostUser: s.cfg.Outbound.SmarthostUser,
+		PasswordFile:  s.cfg.Outbound.PasswordFile,
 	}
+	if cfg.Strategy == "" {
+		cfg.Strategy = "smarthost"
+	}
+
+	// Read global password file. For the global config, relative paths
+	// resolve from DomainConfigPath (not a per-domain subdirectory).
+	if cfg.PasswordFile != "" {
+		path := cfg.PasswordFile
+		if !filepath.IsAbs(path) && s.cfg.DomainConfigPath != "" {
+			path = filepath.Join(s.cfg.DomainConfigPath, path)
+		}
+		warnInsecurePerms(path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			slog.Warn("could not read global outbound password file", "path", path, "error", err)
+		} else {
+			cfg.password = strings.TrimSpace(string(data))
+		}
+	}
+	return cfg
 }
 
 // invoke calls mail-remote with the body and envelope paths, captures

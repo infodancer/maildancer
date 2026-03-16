@@ -1,6 +1,7 @@
 // Package config provides configuration for mail-remote.
-// Settings can come from a shared TOML config file ([mail-remote] section),
-// environment variables, or CLI flags. Precedence: flags > env > TOML > defaults.
+// Smarthost settings come from queue-manager via stdin JSON or CLI flags.
+// The TOML config file provides only hostname and transport tuning defaults.
+// Precedence: flags > stdin JSON > env > TOML > defaults.
 package config
 
 import (
@@ -16,16 +17,15 @@ type Config struct {
 	// Inherited from [server].hostname if not set in [mail-remote].
 	Hostname string `toml:"hostname"`
 
-	// Smarthost is the relay address in host:port form (e.g. "relay.example.com:587").
-	// When set, outbound mail is relayed via this host instead of direct MX delivery.
-	Smarthost string `toml:"smarthost"`
+	// Smarthost is the relay address in host:port form. Set via stdin JSON
+	// from queue-manager or --smarthost CLI flag; not read from TOML.
+	Smarthost string `toml:"-"`
 
-	// User is the SMTP AUTH username for smarthost relay.
-	// Password comes from stdin JSON config or MAIL_REMOTE_PASSWORD env var.
-	User string `toml:"user"`
+	// User is the SMTP AUTH username. Set via stdin JSON or --smarthost-user
+	// CLI flag; not read from TOML.
+	User string `toml:"-"`
 
 	// SmarthostMaxTransactionsPerConn limits MAIL FROM transactions per smarthost connection.
-	// Envelopes beyond the limit are deferred for retry on the next queue scan.
 	// Default: 100 (smarthosts are trusted relays).
 	SmarthostMaxTransactionsPerConn int `toml:"smarthost_max_transactions_per_conn"`
 
@@ -36,7 +36,6 @@ type Config struct {
 // RemoteMXConfig holds settings specific to direct MX delivery.
 type RemoteMXConfig struct {
 	// MaxTransactionsPerConn limits MAIL FROM transactions per connection.
-	// Envelopes beyond the limit are deferred for retry on the next queue scan.
 	// Default: 25 (conservative for foreign servers).
 	MaxTransactionsPerConn int `toml:"max_transactions_per_conn"`
 }
@@ -63,8 +62,9 @@ func Default() Config {
 }
 
 // Load reads a TOML config file and returns the merged Config.
-// Reads from [server] for shared settings and [mail-remote] for specific settings,
-// with [mail-remote] taking precedence.
+// Reads [server].hostname and [mail-remote] for transport tuning.
+// Smarthost settings are not read from TOML — they come from
+// queue-manager via stdin JSON or from CLI flags.
 func Load(path string) (Config, error) {
 	cfg := Default()
 
@@ -90,12 +90,6 @@ func Load(path string) (Config, error) {
 	if fc.MailRemote.Hostname != "" {
 		cfg.Hostname = fc.MailRemote.Hostname
 	}
-	if fc.MailRemote.Smarthost != "" {
-		cfg.Smarthost = fc.MailRemote.Smarthost
-	}
-	if fc.MailRemote.User != "" {
-		cfg.User = fc.MailRemote.User
-	}
 	if fc.MailRemote.SmarthostMaxTransactionsPerConn > 0 {
 		cfg.SmarthostMaxTransactionsPerConn = fc.MailRemote.SmarthostMaxTransactionsPerConn
 	}
@@ -110,12 +104,6 @@ func Load(path string) (Config, error) {
 func ApplyEnv(cfg Config) Config {
 	if v := os.Getenv("MAIL_REMOTE_HOSTNAME"); v != "" {
 		cfg.Hostname = v
-	}
-	if v := os.Getenv("MAIL_REMOTE_SMARTHOST"); v != "" {
-		cfg.Smarthost = v
-	}
-	if v := os.Getenv("MAIL_REMOTE_SMARTHOST_USER"); v != "" {
-		cfg.User = v
 	}
 	return cfg
 }

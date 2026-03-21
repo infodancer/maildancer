@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/emersion/go-msgauth v0.7.0
 	github.com/infodancer/maildancer/auth v0.1.16-0.20260315083252-35279796ddef
+	github.com/infodancer/logging v0.1.0
 	github.com/infodancer/maildancer/internal/mail-session v0.1.4
 	github.com/infodancer/maildancer/msgstore v0.2.5-0.20260313075010-ceed9cfc0b22
 	github.com/pelletier/go-toml/v2 v2.2.4

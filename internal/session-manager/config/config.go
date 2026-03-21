@@ -48,6 +48,10 @@ type Config struct {
 
 	// Metrics configures the Prometheus metrics endpoint.
 	Metrics MetricsConfig `toml:"metrics"`
+
+	// LogLevel sets the minimum log level (debug, info, warn, error).
+	// Default: info.
+	LogLevel string `toml:"log_level"`
 }
 
 // QueueConfig holds outbound queue injection settings.

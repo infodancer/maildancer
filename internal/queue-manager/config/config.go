@@ -52,6 +52,7 @@ type OutboundConfig struct {
 // QueueManagerConfig holds all queue-manager configuration from the TOML file.
 type QueueManagerConfig struct {
 	Hostname         string
+	LogLevel         string
 	DomainConfigPath string // base directory for per-domain config files
 	Outbound         OutboundConfig
 	RateLimit        RateLimitConfig
@@ -77,6 +78,7 @@ type fileConfig struct {
 
 type tomlQueueManager struct {
 	Hostname         string             `toml:"hostname"`
+	LogLevel         string             `toml:"log_level"`
 	DomainConfigPath string             `toml:"domain_config_path"`
 	RateLimit        tomlRateLimit      `toml:"rate-limit"`
 	DSN              tomlDSN            `toml:"dsn"`
@@ -130,6 +132,7 @@ func Load(path string) (QueueManagerConfig, error) {
 	}
 
 	cfg.Hostname = fc.QueueManager.Hostname
+	cfg.LogLevel = fc.QueueManager.LogLevel
 	cfg.DomainConfigPath = fc.QueueManager.DomainConfigPath
 
 	// Rate limit.

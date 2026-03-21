@@ -3,6 +3,7 @@ module github.com/infodancer/maildancer/internal/queue-manager
 go 1.26.1
 
 require (
+	github.com/infodancer/logging v0.1.0
 	github.com/infodancer/maildancer/internal/mail-session v0.1.2
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/prometheus/client_golang v1.23.2

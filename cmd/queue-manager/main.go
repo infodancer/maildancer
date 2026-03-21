@@ -30,6 +30,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/infodancer/logging"
 	"github.com/infodancer/maildancer/internal/queue-manager/config"
 	"github.com/infodancer/maildancer/internal/queue-manager/metrics"
 	"github.com/infodancer/maildancer/internal/queue-manager/scheduler"
@@ -66,6 +67,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
+
+	// Set up structured logging with logfmt output.
+	logger := logging.NewLogger(fileCfg.LogLevel)
+	slog.SetDefault(logger)
 
 	// CLI flags override TOML values when explicitly set.
 	flag.Visit(func(f *flag.Flag) {

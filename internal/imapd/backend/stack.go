@@ -8,13 +8,13 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"os"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 	"github.com/infodancer/maildancer/internal/imapd/notify"
+	"github.com/infodancer/logging"
 )
 
 // StackConfig groups the configuration needed to build a Stack.
@@ -90,7 +90,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		InsecureAuth: cfg.TLSConfig == nil,
 	}
 	if cfg.Config.LogLevel == "debug" {
-		opts.DebugWriter = os.Stderr
+		opts.DebugWriter = logging.DebugWriter(logger, "imap-protocol")
 	}
 	srv := imapserver.New(opts)
 	s.srv = srv

@@ -10,9 +10,9 @@ import (
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/infodancer/maildancer/internal/imapd/config"
-	"github.com/infodancer/maildancer/internal/imapd/logging"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 	"github.com/infodancer/maildancer/internal/imapd/notify"
+	"github.com/infodancer/logging"
 	"github.com/infodancer/maildancer/msgstore"
 	storeerrors "github.com/infodancer/maildancer/msgstore/errors"
 )

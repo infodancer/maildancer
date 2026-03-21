@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/infodancer/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
-	"github.com/infodancer/maildancer/internal/pop3d/logging"
 )
 
 // ConnectionHandler is called for each new connection.

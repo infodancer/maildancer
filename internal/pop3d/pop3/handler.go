@@ -8,8 +8,8 @@ import (
 	"net"
 	"strings"
 
+	"github.com/infodancer/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
-	"github.com/infodancer/maildancer/internal/pop3d/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/metrics"
 	"github.com/infodancer/maildancer/internal/pop3d/server"
 )

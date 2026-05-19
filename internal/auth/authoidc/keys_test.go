@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jwt"
@@ -223,6 +224,137 @@ func TestServer_MigrateLegacySigningKey(t *testing.T) {
 	}
 	if got.State != keyStateCurrent {
 		t.Errorf("state = %q, want current", got.State)
+	}
+}
+
+// TestServer_RotateAndSweep exercises one full rotation: starting from a
+// fresh-install single current key, rotateKey produces a new current with
+// the requested algorithm, the previous current becomes retiring, and the
+// subsequent sweep at a far-future cutoff removes the retiring row + file.
+func TestServer_RotateAndSweep(t *testing.T) {
+	tmp := t.TempDir()
+	domain := "rot.example"
+	dataDir := filepath.Join(tmp, "data")
+	if err := os.MkdirAll(filepath.Join(dataDir, domain), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	store, err := newSQLiteStore(filepath.Join(tmp, "state.db"), nil)
+	if err != nil {
+		t.Fatalf("newSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	s := &Server{
+		cfg:     &Config{Server: ServerConfig{DataDir: dataDir}},
+		store:   store,
+		keys:    newKeyStore(),
+		domains: map[string]*domainEntry{domain: {name: domain}},
+	}
+	// Establish an initial current key (default algorithm). Mirror the
+	// real startup path: ensureSigningKeys then primeKeyCache, so the
+	// initial key is loaded into the cache before any rotation.
+	if err := s.ensureSigningKeys(domain); err != nil {
+		t.Fatalf("ensureSigningKeys: %v", err)
+	}
+	if err := s.primeKeyCache(domain); err != nil {
+		t.Fatalf("primeKeyCache: %v", err)
+	}
+	initial, _ := s.store.ListSigningKeys(domain)
+	if len(initial) != 1 || initial[0].State != keyStateCurrent {
+		t.Fatalf("initial: %+v", initial)
+	}
+	initialKID := initial[0].KID
+
+	// Rotate explicitly to RS256 — confirms algorithm-migration path.
+	newKID, err := s.rotateKey(domain, AlgRS256)
+	if err != nil {
+		t.Fatalf("rotateKey: %v", err)
+	}
+	if newKID == initialKID {
+		t.Errorf("rotateKey returned same kid: %q", newKID)
+	}
+
+	after, _ := s.store.ListSigningKeys(domain)
+	if len(after) != 2 {
+		t.Fatalf("post-rotate row count: got %d, want 2", len(after))
+	}
+	var curAlg, retAlg, retKID string
+	for _, r := range after {
+		switch r.State {
+		case keyStateCurrent:
+			curAlg = r.Algorithm
+		case keyStateRetiring:
+			retAlg = r.Algorithm
+			retKID = r.KID
+		}
+	}
+	if curAlg != AlgRS256 {
+		t.Errorf("current algorithm = %s, want RS256", curAlg)
+	}
+	if retAlg == "" {
+		t.Error("no retiring key after rotation")
+	}
+	if retKID != initialKID {
+		t.Errorf("retiring kid = %q, want initial %q", retKID, initialKID)
+	}
+
+	// Both key files exist on disk and both are cached.
+	for _, kid := range []string{initialKID, newKID} {
+		if _, err := os.Stat(keyFilePath(dataDir, domain, kid)); err != nil {
+			t.Errorf("file for %s missing: %v", kid, err)
+		}
+		if _, ok := s.keys.Get(domain, kid); !ok {
+			t.Errorf("cache miss for %s", kid)
+		}
+	}
+
+	// Sweep with a far-future cutoff: the retiring row + file go.
+	s.sweepSigningKeys(time.Now().Add(48 * time.Hour))
+	rows, _ := s.store.ListSigningKeys(domain)
+	if len(rows) != 1 || rows[0].KID != newKID {
+		t.Errorf("post-sweep rows: got %+v, want only %s", rows, newKID)
+	}
+	if _, err := os.Stat(keyFilePath(dataDir, domain, initialKID)); !os.IsNotExist(err) {
+		t.Errorf("retiring file survived sweep (err=%v)", err)
+	}
+	if _, ok := s.keys.Get(domain, initialKID); ok {
+		t.Error("cache still has swept key")
+	}
+}
+
+// TestServer_RevokeKey confirms revokeKey marks a key for immediate sweep.
+func TestServer_RevokeKey(t *testing.T) {
+	tmp := t.TempDir()
+	domain := "rev.example"
+	dataDir := filepath.Join(tmp, "data")
+	if err := os.MkdirAll(filepath.Join(dataDir, domain), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	store, err := newSQLiteStore(filepath.Join(tmp, "state.db"), nil)
+	if err != nil {
+		t.Fatalf("newSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	s := &Server{
+		cfg:   &Config{Server: ServerConfig{DataDir: dataDir}},
+		store: store,
+		keys:  newKeyStore(),
+	}
+	if err := s.ensureSigningKeys(domain); err != nil {
+		t.Fatalf("ensureSigningKeys: %v", err)
+	}
+	rows, _ := s.store.ListSigningKeys(domain)
+	kid := rows[0].KID
+
+	if err := s.revokeKey(domain, kid); err != nil {
+		t.Fatalf("revokeKey: %v", err)
+	}
+	s.sweepSigningKeys(time.Now())
+	rows, _ = s.store.ListSigningKeys(domain)
+	if len(rows) != 0 {
+		t.Errorf("post-revoke+sweep rows: got %d, want 0", len(rows))
 	}
 }
 

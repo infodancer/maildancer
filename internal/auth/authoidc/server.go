@@ -21,10 +21,13 @@ import (
 	"github.com/infodancer/maildancer/auth/passwd"
 )
 
-// defaultKeyRetentionAfterRetire is the retention window applied to a key
-// when it transitions to retiring. Configurable in a later commit; the
-// default comes from docs/signing-key-rotation.md ("24× jwt_ttl_sec" = 24h).
-const defaultKeyRetentionAfterRetire = 24 * time.Hour
+// Defaults for signing-key lifecycle. Each becomes configurable in a later
+// commit; the values here match docs/signing-key-rotation.md.
+const (
+	defaultKeyRetentionAfterRetire  = 24 * time.Hour
+	defaultKeyRotationInterval      = 90 * 24 * time.Hour
+	defaultKeyRotationCheckInterval = 24 * time.Hour
+)
 
 // sweepInterval is how often the background goroutine drops expired codes and
 // sessions from the store. Five minutes matches the "every few minutes" cadence
@@ -47,6 +50,9 @@ type Server struct {
 
 	sweepCancel context.CancelFunc
 	sweepDone   chan struct{}
+
+	rotatorCancel context.CancelFunc
+	rotatorDone   chan struct{}
 }
 
 // New builds a Server from cfg, loading/generating keypairs and auth agents for
@@ -78,16 +84,22 @@ func New(cfg *Config) (*Server, error) {
 		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	s.sweepCancel = cancel
+	sweepCtx, cancelSweep := context.WithCancel(context.Background())
+	s.sweepCancel = cancelSweep
 	s.sweepDone = make(chan struct{})
-	go s.sweepLoop(ctx)
+	go s.sweepLoop(sweepCtx)
+
+	rotCtx, cancelRot := context.WithCancel(context.Background())
+	s.rotatorCancel = cancelRot
+	s.rotatorDone = make(chan struct{})
+	go s.rotatorLoop(rotCtx)
 
 	return s, nil
 }
 
-// sweepLoop ticks every sweepInterval and removes expired codes and sessions
-// from the store. Exits when ctx is cancelled.
+// sweepLoop ticks every sweepInterval, removing expired codes/sessions and
+// expired signing keys (with their on-disk PEM files). Exits when ctx is
+// cancelled.
 func (s *Server) sweepLoop(ctx context.Context) {
 	defer close(s.sweepDone)
 	t := time.NewTicker(sweepInterval)
@@ -99,6 +111,71 @@ func (s *Server) sweepLoop(ctx context.Context) {
 		case now := <-t.C:
 			if err := s.store.SweepExpired(now); err != nil {
 				slog.Warn("authoidc: sweep failed", "err", err)
+			}
+			s.sweepSigningKeys(now)
+		}
+	}
+}
+
+// sweepSigningKeys removes any retiring keys whose retention window has
+// elapsed, unlinks their PEM files, and drops the cache entries. File
+// unlink is best-effort; the DB row deletion is the authoritative state
+// change.
+func (s *Server) sweepSigningKeys(now time.Time) {
+	swept, err := s.store.SweepExpiredSigningKeys(now)
+	if err != nil {
+		slog.Warn("authoidc: sweep signing keys failed", "err", err)
+		return
+	}
+	for _, rec := range swept {
+		path := keyFilePath(s.cfg.Server.DataDir, rec.Domain, rec.KID)
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			slog.Warn("authoidc: unlink retired key file",
+				"domain", rec.Domain, "kid", rec.KID, "path", path, "err", err)
+		}
+		s.keys.Drop(rec.Domain, rec.KID)
+		slog.Info("authoidc: swept retired signing key",
+			"event", "key_swept", "domain", rec.Domain, "kid", rec.KID)
+	}
+}
+
+// rotatorLoop checks daily whether any domain's current signing key is
+// older than the rotation interval; rotates each that is. Exits when ctx
+// is cancelled.
+func (s *Server) rotatorLoop(ctx context.Context) {
+	defer close(s.rotatorDone)
+	t := time.NewTicker(defaultKeyRotationCheckInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.rotateAgedKeys(time.Now())
+		}
+	}
+}
+
+// rotateAgedKeys iterates every loaded domain and rotates the current key
+// if it exceeds the rotation interval. Failures are logged per-domain so
+// one bad domain doesn't stall rotation for the rest.
+func (s *Server) rotateAgedKeys(now time.Time) {
+	for name := range s.domains {
+		rows, err := s.store.ListSigningKeys(name)
+		if err != nil {
+			slog.Warn("authoidc: rotator list failed", "domain", name, "err", err)
+			continue
+		}
+		for _, rec := range rows {
+			if rec.State != keyStateCurrent {
+				continue
+			}
+			if now.Sub(rec.CreatedAt) < defaultKeyRotationInterval {
+				continue
+			}
+			if _, err := s.rotateKey(name, ""); err != nil {
+				slog.Warn("authoidc: scheduled rotation failed",
+					"domain", name, "err", err)
 			}
 		}
 	}
@@ -144,11 +221,17 @@ func (s *Server) loadDomain(name string) error {
 	return nil
 }
 
-// Close stops the sweep goroutine, then releases resources held by all domain
-// agents and the store.
+// Close stops the background goroutines, then releases resources held by
+// all domain agents and the store.
 func (s *Server) Close() error {
+	if s.rotatorCancel != nil {
+		s.rotatorCancel()
+	}
 	if s.sweepCancel != nil {
 		s.sweepCancel()
+	}
+	if s.rotatorDone != nil {
+		<-s.rotatorDone
 	}
 	if s.sweepDone != nil {
 		<-s.sweepDone
@@ -327,7 +410,7 @@ func (s *Server) ensureSigningKeys(domain string) error {
 	}
 
 	now := time.Now()
-	newKID := fmt.Sprintf("%s-%d", domain, now.Unix())
+	newKID := fmt.Sprintf("%s-%d", domain, now.UnixNano())
 	alg := AlgES256 // default per docs/signing-key-rotation.md; configurable later
 	if _, err := generateAndWriteKey(s.cfg.Server.DataDir, domain, newKID, alg); err != nil {
 		return fmt.Errorf("generate key: %w", err)
@@ -419,6 +502,64 @@ func (s *Server) activePublicJWKsFor(domain string) (jwk.Set, error) {
 		}
 	}
 	return set, nil
+}
+
+// rotateKey performs one full rotation for domain: generate a new keypair
+// for algorithm (or the default if empty), write the file, atomically swap
+// current+retiring in the Store, prime the cache, and log the event. Used
+// by both the scheduled rotator and the userctl CLI.
+//
+// The slog message uses event=key_rotation as a stable label so an external
+// counter (Prometheus exporter, log aggregator) can lift the rate without
+// requiring a metrics endpoint in auth-oidc itself. Adding a /metrics
+// surface and a native counter is a follow-up (see docs/signing-key-rotation.md
+// "Open questions" #2).
+func (s *Server) rotateKey(domain, algorithm string) (string, error) {
+	if algorithm == "" {
+		algorithm = AlgES256 // configurable in a later commit
+	}
+	if _, err := jwaAlgorithm(algorithm); err != nil {
+		return "", err
+	}
+	now := time.Now()
+	newKID := fmt.Sprintf("%s-%d", domain, now.UnixNano())
+	loaded, err := generateAndWriteKey(s.cfg.Server.DataDir, domain, newKID, algorithm)
+	if err != nil {
+		return "", err
+	}
+	rec := signingKeyRecord{
+		Domain:    domain,
+		KID:       newKID,
+		Algorithm: algorithm,
+		State:     keyStateCurrent,
+		CreatedAt: now,
+	}
+	if err := s.store.RotateSigningKey(domain, rec, defaultKeyRetentionAfterRetire); err != nil {
+		return "", fmt.Errorf("rotate signing key: %w", err)
+	}
+	s.keys.Put(domain, loaded)
+	slog.Info("authoidc: rotated signing key",
+		"event", "key_rotation",
+		"domain", domain,
+		"kid", newKID,
+		"algorithm", algorithm,
+	)
+	return newKID, nil
+}
+
+// revokeKey marks an existing key as expired immediately. Operator-initiated:
+// the caller has decided to accept that any token signed by this kid will
+// fail validation as soon as the sweep removes the row.
+func (s *Server) revokeKey(domain, kid string) error {
+	if err := s.store.RevokeSigningKey(domain, kid); err != nil {
+		return err
+	}
+	slog.Warn("authoidc: revoked signing key",
+		"event", "key_revoked",
+		"domain", domain,
+		"kid", kid,
+	)
+	return nil
 }
 
 // activeAlgorithmsFor returns the sorted set union of JWA algorithm strings

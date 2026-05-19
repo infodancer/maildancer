@@ -123,11 +123,11 @@ Why split: a single SQLite row containing the PEM would mix encryption-at-rest c
 
 ## `kid` scheme
 
-Format: `{domain}-{unix_seconds}` where the timestamp is the key's `created_at` in seconds. Example: `infodancer.net-1747700000`.
+Format: `{domain}-{unix_nanoseconds}` where the timestamp is the key's `created_at` in nanoseconds since the Unix epoch. Example: `infodancer.net-1747700000123456789`.
 
 Properties:
 - Sortable (so log analysis can compare timestamps without joining to the DB).
-- Globally unique within the domain unless two rotations happen in the same second, which is acceptably unlikely and detectable via the PRIMARY KEY conflict.
+- Globally unique within the domain. Nanosecond resolution eliminates collisions for any realistic rotation cadence — even back-to-back manual rotations during testing won't collide.
 - Opaque to relying parties — they treat `kid` as a string lookup against JWKS.
 - The legacy `kid` `{domain}-1` is preserved for the pre-rotation key during migration (see below). New rotations always use the timestamp form.
 

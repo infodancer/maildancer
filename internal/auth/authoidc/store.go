@@ -45,6 +45,35 @@ type registeredClient struct {
 	RegisteredAt time.Time
 }
 
+// Store is the persistence contract for OIDC authorization codes, SSO sessions,
+// and dynamically registered clients. Implementations must keep ConsumeCode
+// atomic — a single caller succeeds even under concurrent attempts.
+//
+// StoreCode, StoreSession, and RegisterClient return no error; backends should
+// log failures rather than propagate them, since the user-visible outcome of a
+// dropped write (invalid_grant at token exchange, fresh login on next request)
+// is equivalent to the entry never having existed.
+type Store interface {
+	StoreCode(c *authCode)
+	ConsumeCode(code string) (*authCode, error)
+
+	StoreSession(sess *ssoSession)
+	LookupSession(id string) (*ssoSession, bool)
+	DeleteSession(id string)
+
+	RegisterClient(c *registeredClient)
+	LookupClient(domain, clientID string) (*registeredClient, bool)
+
+	// SweepExpired removes codes and sessions whose ExpiresAt is at or before
+	// now. Clients are never swept (they have no expiry). Implementations may
+	// return errors from underlying I/O for logging purposes.
+	SweepExpired(now time.Time) error
+
+	// Close releases any resources held by the store (open file handles,
+	// background goroutines). Idempotent.
+	Close() error
+}
+
 // ephemeralStore is an in-memory store for auth codes, SSO sessions, and
 // registered clients. State is lost on process restart — use only in tests or
 // for deployments that explicitly do not require durability.
@@ -128,6 +157,26 @@ func (s *ephemeralStore) LookupClient(domain, clientID string) (*registeredClien
 	c, ok := s.clients[domain+"\x00"+clientID]
 	return c, ok
 }
+
+// SweepExpired drops codes and sessions with ExpiresAt at or before now.
+func (s *ephemeralStore) SweepExpired(now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, c := range s.codes {
+		if !now.Before(c.ExpiresAt) {
+			delete(s.codes, k)
+		}
+	}
+	for k, sess := range s.sessions {
+		if !now.Before(sess.ExpiresAt) {
+			delete(s.sessions, k)
+		}
+	}
+	return nil
+}
+
+// Close is a no-op for the in-memory store.
+func (s *ephemeralStore) Close() error { return nil }
 
 // generateToken returns a cryptographically random base64url-encoded string of
 // n random bytes.

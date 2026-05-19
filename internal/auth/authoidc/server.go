@@ -23,7 +23,7 @@ type domainEntry struct {
 type Server struct {
 	cfg     *Config
 	keys    *keyStore
-	store   *ephemeralStore
+	store   Store
 	domains map[string]*domainEntry
 }
 
@@ -87,10 +87,13 @@ func (s *Server) loadDomain(name string) error {
 	return nil
 }
 
-// Close releases resources held by all domain agents.
+// Close releases resources held by all domain agents and the store.
 func (s *Server) Close() error {
 	for _, de := range s.domains {
 		_ = de.agent.Close()
+	}
+	if s.store != nil {
+		_ = s.store.Close()
 	}
 	return nil
 }

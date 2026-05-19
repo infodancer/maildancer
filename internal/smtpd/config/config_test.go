@@ -207,7 +207,7 @@ func TestMinTLSVersion(t *testing.T) {
 		{"1.1", tls.VersionTLS11},
 		{"1.2", tls.VersionTLS12},
 		{"1.3", tls.VersionTLS13},
-		{"", tls.VersionTLS12},      // default
+		{"", tls.VersionTLS12},        // default
 		{"invalid", tls.VersionTLS12}, // invalid falls back to default
 	}
 
@@ -229,7 +229,7 @@ func TestConnectionTimeout(t *testing.T) {
 		{"5m", 5 * time.Minute},
 		{"1h", 1 * time.Hour},
 		{"30s", 30 * time.Second},
-		{"", 5 * time.Minute},       // default
+		{"", 5 * time.Minute},        // default
 		{"invalid", 5 * time.Minute}, // invalid falls back to default
 	}
 
@@ -251,7 +251,7 @@ func TestCommandTimeout(t *testing.T) {
 		{"1m", 1 * time.Minute},
 		{"30s", 30 * time.Second},
 		{"2m", 2 * time.Minute},
-		{"", 1 * time.Minute},       // default
+		{"", 1 * time.Minute},        // default
 		{"invalid", 1 * time.Minute}, // invalid falls back to default
 	}
 

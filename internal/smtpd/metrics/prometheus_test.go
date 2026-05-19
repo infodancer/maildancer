@@ -193,4 +193,3 @@ func TestNewReturnsPrometheusImplementationsWhenEnabled(t *testing.T) {
 		t.Errorf("New() with Enabled=false returned server type %T, want *NoopServer", server)
 	}
 }
-

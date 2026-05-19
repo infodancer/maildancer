@@ -34,17 +34,17 @@ const (
 
 // RspamdResult represents the raw result from rspamd.
 type RspamdResult struct {
-	Score         float64                  `json:"score"`
-	RequiredScore float64                  `json:"required_score"`
-	Action        RspamdAction             `json:"action"`
-	IsSpam        bool                     `json:"is_spam"`
-	Subject       string                   `json:"subject,omitempty"`
-	Symbols       map[string]SymbolResult  `json:"symbols,omitempty"`
-	URLs          []string                 `json:"urls,omitempty"`
-	Emails        []string                 `json:"emails,omitempty"`
-	MessageID     string                   `json:"message-id,omitempty"`
-	DKIMSig       string                   `json:"dkim-signature,omitempty"`
-	Milter        *MilterResult            `json:"milter,omitempty"`
+	Score         float64                 `json:"score"`
+	RequiredScore float64                 `json:"required_score"`
+	Action        RspamdAction            `json:"action"`
+	IsSpam        bool                    `json:"is_spam"`
+	Subject       string                  `json:"subject,omitempty"`
+	Symbols       map[string]SymbolResult `json:"symbols,omitempty"`
+	URLs          []string                `json:"urls,omitempty"`
+	Emails        []string                `json:"emails,omitempty"`
+	MessageID     string                  `json:"message-id,omitempty"`
+	DKIMSig       string                  `json:"dkim-signature,omitempty"`
+	Milter        *MilterResult           `json:"milter,omitempty"`
 }
 
 // SymbolResult represents a matched rule/symbol.

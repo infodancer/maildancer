@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
@@ -16,6 +17,10 @@ import (
 	"github.com/infodancer/maildancer/msgstore"
 	storeerrors "github.com/infodancer/maildancer/msgstore/errors"
 )
+
+// keepaliveRPCTimeout bounds a single IDLE-time keepalive RPC. Set short so
+// that a hung upstream doesn't keep the goroutine alive past IDLE teardown.
+const keepaliveRPCTimeout = 10 * time.Second
 
 // rescanner is satisfied by stores that support incremental rescan (IDLE).
 type rescanner interface {
@@ -43,6 +48,10 @@ type Session struct {
 	subscriber   *notify.Subscriber
 	subscription *notify.Subscription
 
+	// keepaliveInterval is how often to send a no-op RPC during IDLE to keep
+	// the upstream mail-session subprocess from reaping. Zero disables.
+	keepaliveInterval time.Duration
+
 	// Selected state
 	selectedMailbox string
 	messages        []msgstore.MessageInfo
@@ -60,13 +69,14 @@ func NewSession(conn *imapserver.Conn, cfg *config.Config, smClient *SessionMana
 	}
 
 	return &Session{
-		conn:       conn,
-		cfg:        cfg,
-		smClient:   smClient,
-		learner:    learner,
-		subscriber: subscriber,
-		collector:  collector,
-		logger:     logging.WithConnection(logger, conn.NetConn().RemoteAddr().String()),
+		conn:              conn,
+		cfg:               cfg,
+		smClient:          smClient,
+		learner:           learner,
+		subscriber:        subscriber,
+		collector:         collector,
+		logger:            logging.WithConnection(logger, conn.NetConn().RemoteAddr().String()),
+		keepaliveInterval: cfg.Timeouts.SessionKeepaliveInterval(),
 	}
 }
 
@@ -128,9 +138,19 @@ func (s *Session) Poll(w *imapserver.UpdateWriter, allowExpunge bool) error {
 // When Redis notifications are available and the store supports RESCAN,
 // incoming notifications for the selected folder trigger a rescan and
 // update the tracker so the client receives * EXISTS.
+//
+// A keepalive goroutine runs for the lifetime of the IDLE, periodically
+// invoking a no-op RPC against session-manager so the upstream mail-session
+// subprocess doesn't reap itself during long IDLE periods (see issue #52).
 func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 	if s.sessionTracker == nil {
 		return nil
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+	if s.keepaliveInterval > 0 && s.selectedMailbox != "" && s.folderStore != nil {
+		go s.runIdleKeepalive(done)
 	}
 
 	// If no Redis subscription, fall back to the standard tracker-only idle.
@@ -168,6 +188,29 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 				if err := s.sessionTracker.Poll(w, false); err != nil {
 					return err
 				}
+			}
+		}
+	}
+}
+
+// runIdleKeepalive periodically issues a cheap RPC against the upstream store
+// while an IDLE is active, preventing mail-session's idle interceptor from
+// reaping the session. Exits when done is closed (Idle returning) or when the
+// RPC fails irrecoverably — a failure is logged but the loop continues, since
+// recovery is the next rescan/operation's responsibility, not the heartbeat's.
+func (s *Session) runIdleKeepalive(done <-chan struct{}) {
+	ticker := time.NewTicker(s.keepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), keepaliveRPCTimeout)
+			_, err := s.folderStore.UIDValidity(ctx, s.mailbox, s.selectedMailbox)
+			cancel()
+			if err != nil {
+				s.logger.Warn("idle keepalive failed", "error", err)
 			}
 		}
 	}

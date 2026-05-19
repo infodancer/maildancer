@@ -53,6 +53,9 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		return nil, fmt.Errorf("session-manager configuration is required")
 	}
 
+	// Adjust dangerous timer combinations before any sessions are created.
+	cfg.Config.Timeouts.NormalizeSessionKeepalive(logger)
+
 	// Create Redis subscriber for IDLE notifications.
 	var subscriber *notify.Subscriber
 	if cfg.Config.Redis.URL != "" {

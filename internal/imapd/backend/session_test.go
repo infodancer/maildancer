@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
@@ -513,6 +514,70 @@ func TestClose(t *testing.T) {
 	// Close should not panic even when no mailbox is selected
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
+	}
+}
+
+// TestRunIdleKeepalive_FiresAndStops verifies the IDLE keepalive goroutine
+// invokes UIDValidity at the configured interval and exits cleanly when its
+// done channel is closed. Regression for issue #52: without keepalive, a
+// long-lived IDLE'ing connection lets mail-session reap its session, after
+// which Rescan fails with "unknown session token" and the client misses
+// new-mail notifications.
+func TestRunIdleKeepalive_FiresAndStops(t *testing.T) {
+	store := newMockStore()
+	s := newTestSession(t, store)
+	s.selectedMailbox = "INBOX"
+	s.keepaliveInterval = 20 * time.Millisecond
+
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		s.runIdleKeepalive(done)
+		close(exited)
+	}()
+
+	// Wait long enough for ~4 ticks. Tolerance allows for scheduler jitter.
+	time.Sleep(95 * time.Millisecond)
+	close(done)
+
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("runIdleKeepalive did not exit after done closed")
+	}
+
+	calls := store.uidValidityCallCount()
+	if calls < 2 {
+		t.Errorf("expected at least 2 keepalive RPCs, got %d", calls)
+	}
+	if calls > 10 {
+		t.Errorf("unexpectedly many keepalive RPCs (got %d) — interval not honored?", calls)
+	}
+}
+
+// TestRunIdleKeepalive_NoCallsAfterDone verifies that once done is closed,
+// no further RPCs are issued — i.e. the goroutine stops promptly and doesn't
+// race a final tick.
+func TestRunIdleKeepalive_NoCallsAfterDone(t *testing.T) {
+	store := newMockStore()
+	s := newTestSession(t, store)
+	s.selectedMailbox = "INBOX"
+	s.keepaliveInterval = 10 * time.Millisecond
+
+	done := make(chan struct{})
+	go s.runIdleKeepalive(done)
+
+	time.Sleep(35 * time.Millisecond)
+	close(done)
+	// Allow the goroutine to observe the close.
+	time.Sleep(5 * time.Millisecond)
+
+	before := store.uidValidityCallCount()
+	time.Sleep(50 * time.Millisecond)
+	after := store.uidValidityCallCount()
+
+	if after != before {
+		t.Errorf("keepalive issued %d additional RPCs after done closed", after-before)
 	}
 }
 

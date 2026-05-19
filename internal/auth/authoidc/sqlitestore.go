@@ -96,6 +96,29 @@ func initSchema(db *sql.DB) error {
 			registered_at INTEGER NOT NULL,
 			PRIMARY KEY (domain, client_id)
 		) STRICT`,
+		// Signing keys: see docs/signing-key-rotation.md. The PEM material
+		// lives on the filesystem at {data_dir}/{domain}/keys/{kid}.key —
+		// this table is the authoritative metadata for which kid is current,
+		// which are retiring, and when retiring rows should be swept.
+		`CREATE TABLE IF NOT EXISTS signing_keys (
+			domain     TEXT NOT NULL,
+			kid        TEXT NOT NULL,
+			algorithm  TEXT NOT NULL,
+			state      TEXT NOT NULL CHECK (state IN ('current', 'retiring')),
+			created_at INTEGER NOT NULL,
+			retired_at INTEGER,
+			expires_at INTEGER,
+			PRIMARY KEY (domain, kid)
+		) STRICT`,
+		`CREATE INDEX IF NOT EXISTS idx_signing_keys_domain_state
+			ON signing_keys(domain, state)`,
+		`CREATE INDEX IF NOT EXISTS idx_signing_keys_expires_at
+			ON signing_keys(expires_at) WHERE expires_at IS NOT NULL`,
+		// Enforces "exactly one current key per domain" — the partial unique
+		// index makes a second 'current' INSERT for the same domain fail at
+		// the schema level rather than requiring application-level checking.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_signing_keys_one_current
+			ON signing_keys(domain) WHERE state = 'current'`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -231,6 +254,8 @@ func (s *sqliteStore) LookupClient(domain, clientID string) (*registeredClient, 
 
 // SweepExpired removes codes and sessions whose expires_at is at or before
 // now. Two DELETE statements; the index on expires_at keeps it cheap.
+// Signing keys are swept via SweepExpiredSigningKeys, which returns the
+// deleted records so callers can unlink the corresponding files.
 func (s *sqliteStore) SweepExpired(now time.Time) error {
 	cutoff := now.Unix()
 	if _, err := s.db.Exec(`DELETE FROM codes WHERE expires_at <= ?`, cutoff); err != nil {
@@ -240,6 +265,164 @@ func (s *sqliteStore) SweepExpired(now time.Time) error {
 		return fmt.Errorf("sweep sessions: %w", err)
 	}
 	return nil
+}
+
+// --- signing keys ---
+
+// scanSigningKey decodes one row from the signing_keys table. retired_at and
+// expires_at are nullable and decode to the zero time.Time when NULL.
+func scanSigningKey(scanner interface {
+	Scan(dest ...any) error
+}) (signingKeyRecord, error) {
+	var (
+		rec       signingKeyRecord
+		createdAt int64
+		retiredAt sql.NullInt64
+		expiresAt sql.NullInt64
+	)
+	if err := scanner.Scan(
+		&rec.Domain, &rec.KID, &rec.Algorithm, &rec.State,
+		&createdAt, &retiredAt, &expiresAt,
+	); err != nil {
+		return rec, err
+	}
+	rec.CreatedAt = time.Unix(createdAt, 0)
+	if retiredAt.Valid {
+		rec.RetiredAt = time.Unix(retiredAt.Int64, 0)
+	}
+	if expiresAt.Valid {
+		rec.ExpiresAt = time.Unix(expiresAt.Int64, 0)
+	}
+	return rec, nil
+}
+
+// signingKeyColumns is the canonical SELECT list for signing_keys, matched
+// to scanSigningKey. Keep these two in sync.
+const signingKeyColumns = `domain, kid, algorithm, state, created_at, retired_at, expires_at`
+
+func (s *sqliteStore) ListSigningKeys(domain string) ([]signingKeyRecord, error) {
+	rows, err := s.db.Query(
+		`SELECT `+signingKeyColumns+` FROM signing_keys WHERE domain = ?`,
+		domain,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list signing keys: %w", err)
+	}
+	defer rows.Close()
+
+	var out []signingKeyRecord
+	for rows.Next() {
+		rec, err := scanSigningKey(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan signing key: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate signing keys: %w", err)
+	}
+	return out, nil
+}
+
+func (s *sqliteStore) InsertSigningKey(rec signingKeyRecord) error {
+	_, err := s.db.Exec(
+		`INSERT INTO signing_keys (domain, kid, algorithm, state, created_at)
+		 VALUES (?, ?, ?, 'current', ?)`,
+		rec.Domain, rec.KID, rec.Algorithm, rec.CreatedAt.Unix(),
+	)
+	if err != nil {
+		return fmt.Errorf("insert signing key: %w", err)
+	}
+	return nil
+}
+
+// RotateSigningKey runs the current→retiring + new-current insertion as one
+// transaction so the domain never observes "no current key" mid-rotation.
+func (s *sqliteStore) RotateSigningKey(domain string, newKey signingKeyRecord, retention time.Duration) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin rotate tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // no-op after Commit
+
+	now := newKey.CreatedAt
+	if now.IsZero() {
+		now = time.Now()
+	}
+	expires := now.Add(retention).Unix()
+
+	if _, err := tx.Exec(
+		`UPDATE signing_keys
+		   SET state = 'retiring', retired_at = ?, expires_at = ?
+		 WHERE domain = ? AND state = 'current'`,
+		now.Unix(), expires, domain,
+	); err != nil {
+		return fmt.Errorf("retire current: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO signing_keys (domain, kid, algorithm, state, created_at)
+		 VALUES (?, ?, ?, 'current', ?)`,
+		domain, newKey.KID, newKey.Algorithm, now.Unix(),
+	); err != nil {
+		return fmt.Errorf("insert new current: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit rotate: %w", err)
+	}
+	return nil
+}
+
+// RevokeSigningKey marks a key as expired immediately (expires_at = 1, a Unix
+// time of "1 second past the epoch" — any positive value <= now triggers the
+// sweep). The state moves to retiring so the sweep query finds it.
+func (s *sqliteStore) RevokeSigningKey(domain, kid string) error {
+	res, err := s.db.Exec(
+		`UPDATE signing_keys
+		   SET state = 'retiring', retired_at = ?, expires_at = 1
+		 WHERE domain = ? AND kid = ?`,
+		time.Now().Unix(), domain, kid,
+	)
+	if err != nil {
+		return fmt.Errorf("revoke signing key: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("revoke rows affected: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("signing key %s not found for domain %s", kid, domain)
+	}
+	return nil
+}
+
+// SweepExpiredSigningKeys deletes retiring rows whose expires_at <= now and
+// returns the deleted records so the caller can unlink files.
+func (s *sqliteStore) SweepExpiredSigningKeys(now time.Time) ([]signingKeyRecord, error) {
+	rows, err := s.db.Query(
+		`DELETE FROM signing_keys
+		   WHERE state = 'retiring' AND expires_at IS NOT NULL AND expires_at <= ?
+		 RETURNING `+signingKeyColumns,
+		now.Unix(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("sweep signing keys: %w", err)
+	}
+	defer rows.Close()
+
+	var out []signingKeyRecord
+	for rows.Next() {
+		rec, err := scanSigningKey(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan swept signing key: %w", err)
+		}
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate swept signing keys: %w", err)
+	}
+	return out, nil
 }
 
 // Close closes the underlying database handle.

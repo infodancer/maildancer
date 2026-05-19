@@ -308,7 +308,7 @@ func (s *sqliteStore) ListSigningKeys(domain string) ([]signingKeyRecord, error)
 	if err != nil {
 		return nil, fmt.Errorf("list signing keys: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []signingKeyRecord
 	for rows.Next() {
@@ -409,7 +409,7 @@ func (s *sqliteStore) SweepExpiredSigningKeys(now time.Time) ([]signingKeyRecord
 	if err != nil {
 		return nil, fmt.Errorf("sweep signing keys: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []signingKeyRecord
 	for rows.Next() {

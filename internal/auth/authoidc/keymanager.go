@@ -73,10 +73,7 @@ func (km *KeyManager) List(domain string) ([]KeyInfo, error) {
 	}
 	out := make([]KeyInfo, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, KeyInfo{
-			Domain: r.Domain, KID: r.KID, Algorithm: r.Algorithm, State: r.State,
-			CreatedAt: r.CreatedAt, RetiredAt: r.RetiredAt, ExpiresAt: r.ExpiresAt,
-		})
+		out = append(out, KeyInfo(r))
 	}
 	return out, nil
 }

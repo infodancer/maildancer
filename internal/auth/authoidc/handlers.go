@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +21,17 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jwt"
+)
+
+// Registration input limits. RFC 7591 places no hard caps, but auth-oidc
+// hashes the inputs to derive a stable client_id, so unbounded inputs would
+// let a caller force arbitrarily large work per request. These limits make
+// the implicit caps explicit and well under the size of any legitimate
+// registration.
+const (
+	maxClientNameLen      = 200
+	maxRedirectURIsPerReg = 10
+	maxRedirectURILen     = 2048
 )
 
 const picoCSS = `https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css`
@@ -496,7 +510,22 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, de *domai
 		respondJSONError(w, http.StatusBadRequest, "invalid_redirect_uri", "redirect_uris is required")
 		return
 	}
+	if len(req.RedirectURIs) > maxRedirectURIsPerReg {
+		respondJSONError(w, http.StatusBadRequest, "invalid_redirect_uri",
+			fmt.Sprintf("at most %d redirect_uris allowed per registration", maxRedirectURIsPerReg))
+		return
+	}
+	if len(req.ClientName) > maxClientNameLen {
+		respondJSONError(w, http.StatusBadRequest, "invalid_client_metadata",
+			fmt.Sprintf("client_name exceeds %d bytes", maxClientNameLen))
+		return
+	}
 	for _, uri := range req.RedirectURIs {
+		if len(uri) > maxRedirectURILen {
+			respondJSONError(w, http.StatusBadRequest, "invalid_redirect_uri",
+				fmt.Sprintf("redirect_uri exceeds %d bytes", maxRedirectURILen))
+			return
+		}
 		if err := validateRedirectURIScheme(uri); err != nil {
 			respondJSONError(w, http.StatusBadRequest, "invalid_redirect_uri", err.Error())
 			return
@@ -516,7 +545,33 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, de *domai
 		responseTypes = []string{"code"}
 	}
 
-	clientID := generateToken(16)
+	// Derive a stable client_id from the registration inputs so a restart of
+	// auth-oidc, or a re-registration by a federated RP, yields the same id
+	// for the same RP. The id is not a secret — exact-match redirect_uri plus
+	// PKCE are the authorization-time controls (see
+	// infodancer/docs/oidc-federation-design.md).
+	clientID := deriveClientID(de.name, req.ClientName, req.RedirectURIs)
+
+	if existing, ok := s.store.LookupClient(de.name, clientID); ok {
+		if registrationMatches(existing, req.ClientName, req.RedirectURIs) {
+			// RFC 7591 §3.2.1: idempotent re-registration preserves the
+			// original client_id_issued_at.
+			respondJSON(w, http.StatusOK, registrationResponse{
+				ClientID:                existing.ClientID,
+				ClientIDIssuedAt:        existing.RegisteredAt.Unix(),
+				ClientName:              existing.ClientName,
+				RedirectURIs:            existing.RedirectURIs,
+				TokenEndpointAuthMethod: authMeth,
+				GrantTypes:              grantTypes,
+				ResponseTypes:           responseTypes,
+			})
+			return
+		}
+		// Statistically negligible at 120 bits but defend against it: derived
+		// id collides with a different registration. Fall back to a random id
+		// for this caller so neither registration is clobbered.
+		clientID = generateToken(16)
+	}
 
 	now := time.Now()
 	s.store.RegisterClient(&registeredClient{
@@ -536,6 +591,47 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, de *domai
 		GrantTypes:              grantTypes,
 		ResponseTypes:           responseTypes,
 	})
+}
+
+// deriveClientID returns a stable opaque id for these registration inputs:
+// SHA-256 over (domain, client_name, sorted redirect_uris) with NUL separators,
+// truncated to 120 bits and base32-encoded.
+//
+// The id is not a secret — exact-match redirect_uri + PKCE are the
+// authorization-time controls. Sorting redirect_uris makes the derivation
+// order-independent: registering with [A, B] and [B, A] yields the same id.
+func deriveClientID(domain, clientName string, redirectURIs []string) string {
+	sorted := slices.Clone(redirectURIs)
+	sort.Strings(sorted)
+	h := sha256.New()
+	h.Write([]byte(domain))
+	h.Write([]byte{0})
+	h.Write([]byte(clientName))
+	h.Write([]byte{0})
+	for _, uri := range sorted {
+		h.Write([]byte(uri))
+		h.Write([]byte{0})
+	}
+	sum := h.Sum(nil)
+	return "dyn_" + strings.ToLower(
+		base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(sum[:15]))
+}
+
+// registrationMatches reports whether stored registration metadata is exactly
+// equal to the metadata in this request. redirect_uris equality is order-
+// independent, mirroring deriveClientID.
+func registrationMatches(stored *registeredClient, clientName string, redirectURIs []string) bool {
+	if stored.ClientName != clientName {
+		return false
+	}
+	if len(stored.RedirectURIs) != len(redirectURIs) {
+		return false
+	}
+	a := slices.Clone(stored.RedirectURIs)
+	b := slices.Clone(redirectURIs)
+	sort.Strings(a)
+	sort.Strings(b)
+	return slices.Equal(a, b)
 }
 
 // --- logout ---

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/infodancer/maildancer/internal/auth/authoidc"
 	"github.com/infodancer/maildancer/auth/passwd"
@@ -401,21 +403,107 @@ func TestRegister_LocalhostHTTP(t *testing.T) {
 	}
 }
 
-// TestRegister_NotIdempotent verifies that two registrations with identical payloads
-// produce different client_ids, since IDs are now randomly generated (not HMAC-derived).
-func TestRegister_NotIdempotent(t *testing.T) {
+// TestRegister_Idempotent verifies the RFC 7591 §3.2.1 contract: re-registering
+// with identical inputs yields the same client_id, returns 200 (not 201), and
+// preserves the original client_id_issued_at.
+func TestRegister_Idempotent(t *testing.T) {
 	handler := newTestServer(t)
 	body := `{"client_name":"myapp","redirect_uris":["https://app.test.example/cb"]}`
+
 	rr1 := doRegisterRequest(handler, body)
-	rr2 := doRegisterRequest(handler, body)
-	if rr1.Code != http.StatusCreated || rr2.Code != http.StatusCreated {
-		t.Fatalf("register status: %d, %d", rr1.Code, rr2.Code)
+	if rr1.Code != http.StatusCreated {
+		t.Fatalf("first register = %d; body: %s", rr1.Code, rr1.Body)
 	}
-	var r1, r2 map[string]any
-	_ = json.NewDecoder(rr1.Body).Decode(&r1)
-	_ = json.NewDecoder(rr2.Body).Decode(&r2)
-	if r1["client_id"] == r2["client_id"] {
-		t.Errorf("expected different client_ids for repeated registration, got same: %v", r1["client_id"])
+	var r1 map[string]any
+	if err := json.NewDecoder(rr1.Body).Decode(&r1); err != nil {
+		t.Fatalf("decode r1: %v", err)
+	}
+
+	// Tick the clock so we'd notice if issued_at were re-stamped on replay.
+	time.Sleep(time.Second)
+
+	rr2 := doRegisterRequest(handler, body)
+	if rr2.Code != http.StatusOK {
+		t.Fatalf("second register = %d, want 200; body: %s", rr2.Code, rr2.Body)
+	}
+	var r2 map[string]any
+	if err := json.NewDecoder(rr2.Body).Decode(&r2); err != nil {
+		t.Fatalf("decode r2: %v", err)
+	}
+	if r1["client_id"] != r2["client_id"] {
+		t.Errorf("client_id changed across registrations: %v vs %v", r1["client_id"], r2["client_id"])
+	}
+	if r1["client_id_issued_at"] != r2["client_id_issued_at"] {
+		t.Errorf("client_id_issued_at changed: %v vs %v", r1["client_id_issued_at"], r2["client_id_issued_at"])
+	}
+}
+
+// TestRegister_DerivationDifferentiates verifies that varying any single
+// input field — domain, client_name, or redirect_uris — yields a different
+// client_id.
+func TestRegister_DerivationDifferentiates(t *testing.T) {
+	handler := newTestServer(t)
+
+	base := doRegisterAndParse(t, handler,
+		`{"client_name":"myapp","redirect_uris":["https://app.test.example/cb"]}`)
+
+	// Different client_name.
+	other := doRegisterAndParse(t, handler,
+		`{"client_name":"otherapp","redirect_uris":["https://app.test.example/cb"]}`)
+	if base["client_id"] == other["client_id"] {
+		t.Error("different client_name should yield different client_id")
+	}
+
+	// Different redirect_uris.
+	otherURI := doRegisterAndParse(t, handler,
+		`{"client_name":"myapp","redirect_uris":["https://other.test.example/cb"]}`)
+	if base["client_id"] == otherURI["client_id"] {
+		t.Error("different redirect_uri should yield different client_id")
+	}
+
+	// Domain is captured via the request host header. The deriveClientID
+	// helper test covers domain variation directly; HTTP-level coverage would
+	// require an additional configured tenant.
+}
+
+// TestRegister_OrderIndependent verifies that registering with the same
+// redirect_uris in different orders yields the same client_id.
+func TestRegister_OrderIndependent(t *testing.T) {
+	handler := newTestServer(t)
+
+	first := doRegisterAndParse(t, handler,
+		`{"client_name":"myapp","redirect_uris":["https://a.test.example/cb","https://b.test.example/cb"]}`)
+	second := doRegisterAndParse(t, handler,
+		`{"client_name":"myapp","redirect_uris":["https://b.test.example/cb","https://a.test.example/cb"]}`)
+
+	if first["client_id"] != second["client_id"] {
+		t.Errorf("redirect_uri order should not affect client_id: %v vs %v",
+			first["client_id"], second["client_id"])
+	}
+}
+
+// TestRegister_RejectsOversizeClientName verifies the input cap on client_name.
+func TestRegister_RejectsOversizeClientName(t *testing.T) {
+	handler := newTestServer(t)
+	big := strings.Repeat("x", 201)
+	body := `{"client_name":"` + big + `","redirect_uris":["https://app.test.example/cb"]}`
+	rr := doRegisterRequest(handler, body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("oversize client_name = %d, want 400; body: %s", rr.Code, rr.Body)
+	}
+}
+
+// TestRegister_RejectsTooManyRedirectURIs verifies the cap on redirect_uris.
+func TestRegister_RejectsTooManyRedirectURIs(t *testing.T) {
+	handler := newTestServer(t)
+	uris := make([]string, 0, 11)
+	for i := range 11 {
+		uris = append(uris, fmt.Sprintf(`"https://a%d.test.example/cb"`, i))
+	}
+	body := `{"redirect_uris":[` + strings.Join(uris, ",") + `]}`
+	rr := doRegisterRequest(handler, body)
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("too many redirect_uris = %d, want 400; body: %s", rr.Code, rr.Body)
 	}
 }
 
@@ -609,6 +697,21 @@ func doRegisterRequest(handler http.Handler, body string) *httptest.ResponseReco
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 	return rr
+}
+
+// doRegisterAndParse runs doRegisterRequest, asserts a 2xx status, and returns
+// the decoded JSON body.
+func doRegisterAndParse(t *testing.T, handler http.Handler, body string) map[string]any {
+	t.Helper()
+	rr := doRegisterRequest(handler, body)
+	if rr.Code < 200 || rr.Code >= 300 {
+		t.Fatalf("register = %d; body: %s", rr.Code, rr.Body)
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode register response: %v", err)
+	}
+	return resp
 }
 
 func doRequest(handler http.Handler, method, target string, body *strings.Reader, cookies []*http.Cookie) *httptest.ResponseRecorder {

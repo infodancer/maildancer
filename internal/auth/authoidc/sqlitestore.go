@@ -48,16 +48,25 @@ func newSQLiteStore(path string, log *slog.Logger) (*sqliteStore, error) {
 
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
 	// SQLite supports concurrent readers under WAL but only a single writer.
 	// Cap the pool so we don't queue useless connections.
 	db.SetMaxOpenConns(8)
 	db.SetMaxIdleConns(2)
 
+	// sql.Open is lazy; the actual file open happens on first use. Ping forces
+	// it now so SQLITE_CANTOPEN (bad permissions, missing parent, read-only
+	// fs) surfaces with an "open" attribution and the path, instead of leaking
+	// out later as a confusing "schema: out of memory (14)".
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
+	}
+
 	if err := initSchema(db); err != nil {
 		_ = db.Close()
-		return nil, err
+		return nil, fmt.Errorf("init schema %s: %w", path, err)
 	}
 	return &sqliteStore{db: db, log: log}, nil
 }
@@ -122,7 +131,7 @@ func initSchema(db *sql.DB) error {
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("schema: %w", err)
+			return err
 		}
 	}
 	return nil

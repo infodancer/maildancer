@@ -774,5 +774,11 @@ func respondJSONError(w http.ResponseWriter, status int, errCode, description st
 	})
 }
 
-// Cleanup satisfies a periodic maintenance interface; in-memory store evicts lazily.
-func (s *Server) Cleanup(_ context.Context) {}
+// Cleanup runs one synchronous sweep of expired codes and sessions. The
+// background goroutine started by New already does this every sweepInterval;
+// this method exists for tests and for operators who want to force a sweep.
+func (s *Server) Cleanup(_ context.Context) {
+	if s.store != nil {
+		_ = s.store.SweepExpired(time.Now())
+	}
+}

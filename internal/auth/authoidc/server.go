@@ -1,16 +1,24 @@
 package authoidc
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/auth/passwd"
 )
+
+// sweepInterval is how often the background goroutine drops expired codes and
+// sessions from the store. Five minutes matches the "every few minutes" cadence
+// established by domain/ratelimit.go's cleanup comment.
+const sweepInterval = 5 * time.Minute
 
 // domainEntry holds the runtime state for a configured domain.
 type domainEntry struct {
@@ -25,15 +33,25 @@ type Server struct {
 	keys    *keyStore
 	store   Store
 	domains map[string]*domainEntry
+
+	sweepCancel context.CancelFunc
+	sweepDone   chan struct{}
 }
 
 // New builds a Server from cfg, loading/generating keypairs and auth agents for
-// every domain referenced in the client list.
+// every domain referenced in the client list. The store is a SQLite database
+// at {DataDir}/oidc-state.db — co-located with per-domain signing keys under
+// DataDir because OIDC state is server-private, not domain-admin editable.
 func New(cfg *Config) (*Server, error) {
+	store, err := newSQLiteStore(filepath.Join(cfg.Server.DataDir, "oidc-state.db"), nil)
+	if err != nil {
+		return nil, fmt.Errorf("init store: %w", err)
+	}
+
 	s := &Server{
 		cfg:     cfg,
 		keys:    newKeyStore(),
-		store:   newEphemeralStore(),
+		store:   store,
 		domains: make(map[string]*domainEntry),
 	}
 
@@ -44,11 +62,35 @@ func New(cfg *Config) (*Server, error) {
 		}
 		seen[c.Domain] = struct{}{}
 		if err := s.loadDomain(c.Domain); err != nil {
+			_ = store.Close()
 			return nil, fmt.Errorf("domain %s: %w", c.Domain, err)
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	s.sweepCancel = cancel
+	s.sweepDone = make(chan struct{})
+	go s.sweepLoop(ctx)
+
 	return s, nil
+}
+
+// sweepLoop ticks every sweepInterval and removes expired codes and sessions
+// from the store. Exits when ctx is cancelled.
+func (s *Server) sweepLoop(ctx context.Context) {
+	defer close(s.sweepDone)
+	t := time.NewTicker(sweepInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-t.C:
+			if err := s.store.SweepExpired(now); err != nil {
+				slog.Warn("authoidc: sweep failed", "err", err)
+			}
+		}
+	}
 }
 
 func (s *Server) loadDomain(name string) error {
@@ -87,8 +129,15 @@ func (s *Server) loadDomain(name string) error {
 	return nil
 }
 
-// Close releases resources held by all domain agents and the store.
+// Close stops the sweep goroutine, then releases resources held by all domain
+// agents and the store.
 func (s *Server) Close() error {
+	if s.sweepCancel != nil {
+		s.sweepCancel()
+	}
+	if s.sweepDone != nil {
+		<-s.sweepDone
+	}
 	for _, de := range s.domains {
 		_ = de.agent.Close()
 	}

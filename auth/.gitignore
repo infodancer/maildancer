@@ -38,3 +38,6 @@ go.work.sum
 # cmd/userctl and cmd/auth-oidc package directories).
 /userctl
 /auth-oidc
+
+# Taskfile.dev runner cache
+.task/

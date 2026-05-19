@@ -136,4 +136,3 @@ func TestPassthroughDecryptingStore_SatisfiesDecryptingStore(_ *testing.T) {
 
 // Ensure mockStore satisfies MessageStore at compile time.
 var _ MessageStore = (*mockStore)(nil)
-

@@ -1,8 +1,6 @@
 module github.com/infodancer/maildancer/msgstore
 
-go 1.24.0
-
-toolchain go1.24.4
+go 1.26.3
 
 require (
 	git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9

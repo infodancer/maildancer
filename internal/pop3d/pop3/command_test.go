@@ -6,11 +6,11 @@ import (
 
 func TestParseCommand(t *testing.T) {
 	tests := []struct {
-		name        string
-		line        string
-		wantCmd     string
-		wantArgs    []string
-		wantErr     bool
+		name     string
+		line     string
+		wantCmd  string
+		wantArgs []string
+		wantErr  bool
 	}{
 		{
 			name:     "Simple command without args",

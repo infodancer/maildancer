@@ -23,7 +23,7 @@ type domainEntry struct {
 type Server struct {
 	cfg     *Config
 	keys    *keyStore
-	store   *memStore
+	store   *ephemeralStore
 	domains map[string]*domainEntry
 }
 
@@ -33,7 +33,7 @@ func New(cfg *Config) (*Server, error) {
 	s := &Server{
 		cfg:     cfg,
 		keys:    newKeyStore(),
-		store:   newMemStore(),
+		store:   newEphemeralStore(),
 		domains: make(map[string]*domainEntry),
 	}
 

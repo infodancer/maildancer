@@ -1,6 +1,6 @@
 module github.com/infodancer/maildancer/internal/mail-deliver
 
-go 1.25.7
+go 1.26.3
 
 require (
 	git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9

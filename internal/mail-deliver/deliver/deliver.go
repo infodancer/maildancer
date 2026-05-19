@@ -17,12 +17,12 @@ import (
 	gosieve "git.sr.ht/~emersion/go-sieve"
 	"github.com/infodancer/maildancer/auth/domain"
 	_ "github.com/infodancer/maildancer/auth/passwd"
-	"github.com/infodancer/maildancer/msgstore"
-	_ "github.com/infodancer/maildancer/msgstore/maildir"
 	mderrors "github.com/infodancer/maildancer/internal/mail-deliver/errors"
 	"github.com/infodancer/maildancer/internal/mail-deliver/config"
 	"github.com/infodancer/maildancer/internal/mail-deliver/rspamd"
 	"github.com/infodancer/maildancer/internal/mail-deliver/protocol"
+	"github.com/infodancer/maildancer/msgstore"
+	_ "github.com/infodancer/maildancer/msgstore/maildir"
 )
 
 // Deliverer runs the delivery pipeline for a single message.
@@ -157,7 +157,7 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req protocol.DeliverRequest,
 					Temporary: true,
 					Reason:    "spam check temporarily unavailable",
 				}, nil
-			// "open": fall through
+				// "open": fall through
 			}
 		} else if !skip {
 			// Spam check returned a decision.

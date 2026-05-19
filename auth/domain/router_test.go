@@ -86,9 +86,9 @@ func TestSplitUsername(t *testing.T) {
 
 func TestParseLocalPart(t *testing.T) {
 	tests := []struct {
-		input     string
-		wantBase  string
-		wantExt   string
+		input    string
+		wantBase string
+		wantExt  string
 	}{
 		{"user+folder", "user", "folder"},
 		{"user", "user", ""},

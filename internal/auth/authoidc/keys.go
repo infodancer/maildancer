@@ -17,8 +17,8 @@ import (
 type domainKey struct {
 	privateKey *rsa.PrivateKey
 	kid        string
-	jwkSet     jwk.Set  // public keys only — served at jwks.json
-	privJWK    jwk.Key  // private JWK — used to sign JWTs
+	jwkSet     jwk.Set // public keys only — served at jwks.json
+	privJWK    jwk.Key // private JWK — used to sign JWTs
 }
 
 // keyStore manages per-domain signing keypairs.

@@ -1,6 +1,6 @@
 module github.com/infodancer/maildancer/auth
 
-go 1.25.7
+go 1.26.3
 
 require (
 	github.com/infodancer/maildancer/msgstore v0.1.0

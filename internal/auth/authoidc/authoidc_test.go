@@ -48,11 +48,11 @@ func newTestServer(t *testing.T) http.Handler {
 
 	cfg := &authoidc.Config{
 		Server: authoidc.ServerConfig{
-			Listen:            ":0",
-			DataDir:           dataDir,
-			DomainDataPath:    filepath.Join(tmpDir, "domains"),
-			JWTTTLSec:     3600,
-			SessionTTLSec: 604800,
+			Listen:         ":0",
+			DataDir:        dataDir,
+			DomainDataPath: filepath.Join(tmpDir, "domains"),
+			JWTTTLSec:      3600,
+			SessionTTLSec:  604800,
 		},
 		Clients: []authoidc.ClientConfig{
 			{

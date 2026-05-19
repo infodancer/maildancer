@@ -18,8 +18,8 @@ type ServerConfig struct {
 	Listen         string `toml:"listen"`
 	DataDir        string `toml:"data_dir"`
 	DomainDataPath string `toml:"domain_data_path"`
-	JWTTTLSec     int64 `toml:"jwt_ttl_sec"`
-	SessionTTLSec int64 `toml:"session_ttl_sec"`
+	JWTTTLSec      int64  `toml:"jwt_ttl_sec"`
+	SessionTTLSec  int64  `toml:"session_ttl_sec"`
 }
 
 // ClientConfig describes a registered OIDC relying party.

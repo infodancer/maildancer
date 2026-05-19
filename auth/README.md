@@ -7,7 +7,8 @@ infodancer mail system.
 
 - User authentication with password validation
 - Public/private key management for message encryption
-- Pluggable authentication backends (passwd, ldap, database)
+- Pluggable authentication backend interface (currently only `passwd` is
+  implemented; ldap and database backends are possible future additions)
 - Argon2id password hashing
 - NaCl-based key encryption
 

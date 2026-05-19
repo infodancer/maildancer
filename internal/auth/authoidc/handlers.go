@@ -18,8 +18,6 @@ import (
 	"time"
 
 	autherrors "github.com/infodancer/maildancer/auth/errors"
-	"github.com/lestrrat-go/jwx/v2/jwa"
-	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/lestrrat-go/jwx/v2/jwt"
 )
 
@@ -181,6 +179,19 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) serveDiscovery(w http.ResponseWriter, r *http.Request, de *domainEntry) {
 	base := issuerBase(r)
+	algs, err := s.activeAlgorithmsFor(de.name)
+	if err != nil {
+		http.Error(w, "discovery: list algorithms", http.StatusInternalServerError)
+		return
+	}
+	if len(algs) == 0 {
+		// ensureSigningKeys guarantees one current key per loaded domain; an
+		// empty result here means the DB row has been deleted out from under
+		// us between startup and this request. Fail closed rather than
+		// advertise an empty algorithm set.
+		http.Error(w, "discovery: no active signing keys", http.StatusInternalServerError)
+		return
+	}
 	doc := discoveryDoc{
 		Issuer:                            base,
 		AuthorizationEndpoint:             base + "/authorize",
@@ -189,7 +200,7 @@ func (s *Server) serveDiscovery(w http.ResponseWriter, r *http.Request, de *doma
 		JWKSURI:                           base + "/.well-known/jwks.json",
 		ResponseTypesSupported:            []string{"code"},
 		SubjectTypesSupported:             []string{"public"},
-		IDTokenSigningAlgValuesSupported:  []string{"RS256"},
+		IDTokenSigningAlgValuesSupported:  algs,
 		ScopesSupported:                   []string{"openid", "email", "profile"},
 		TokenEndpointAuthMethodsSupported: []string{"none", "client_secret_post"},
 		ClaimsSupported:                   []string{"sub", "email", "name", "iss", "aud", "exp", "iat"},
@@ -210,12 +221,16 @@ func (s *Server) jwks(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveJWKS(w http.ResponseWriter, _ *http.Request, de *domainEntry) {
-	dk, ok := s.keys.Get(de.name)
-	if !ok {
-		http.Error(w, "no key for domain", http.StatusInternalServerError)
+	set, err := s.activePublicJWKsFor(de.name)
+	if err != nil {
+		http.Error(w, "jwks: load keys", http.StatusInternalServerError)
 		return
 	}
-	b, err := json.Marshal(dk.jwkSet)
+	if set.Len() == 0 {
+		http.Error(w, "no active signing keys", http.StatusInternalServerError)
+		return
+	}
+	b, err := json.Marshal(set)
 	if err != nil {
 		http.Error(w, "marshal error", http.StatusInternalServerError)
 		return
@@ -402,8 +417,8 @@ func (s *Server) serveToken(w http.ResponseWriter, r *http.Request, de *domainEn
 		}
 	}
 
-	dk, ok := s.keys.Get(de.name)
-	if !ok {
+	dk, err := s.currentKeyFor(de.name)
+	if err != nil {
 		respondJSONError(w, http.StatusInternalServerError, "server_error", "signing key unavailable")
 		return
 	}
@@ -449,21 +464,13 @@ func (s *Server) serveUserinfo(w http.ResponseWriter, r *http.Request, de *domai
 		return
 	}
 
-	dk, ok := s.keys.Get(de.name)
-	if !ok {
-		http.Error(w, "no signing key", http.StatusInternalServerError)
-		return
-	}
-
-	pubKey, err := dk.privJWK.PublicKey()
+	pubSet, err := s.activePublicJWKsFor(de.name)
 	if err != nil {
 		http.Error(w, "key error", http.StatusInternalServerError)
 		return
 	}
-
-	pubSet := jwk.NewSet()
-	if err := pubSet.AddKey(pubKey); err != nil {
-		http.Error(w, "key error", http.StatusInternalServerError)
+	if pubSet.Len() == 0 {
+		http.Error(w, "no signing key", http.StatusInternalServerError)
 		return
 	}
 
@@ -701,7 +708,7 @@ func (s *Server) validateParams(de *domainEntry, params authorizeParams) error {
 	return nil
 }
 
-func issueJWT(dk *domainKey, issuer, audience, sub, email, name string, ttl time.Duration) (string, error) {
+func issueJWT(k *loadedKey, issuer, audience, sub, email, name string, ttl time.Duration) (string, error) {
 	now := time.Now()
 	b := jwt.NewBuilder().
 		Issuer(issuer).
@@ -717,14 +724,18 @@ func issueJWT(dk *domainKey, issuer, audience, sub, email, name string, ttl time
 	if err != nil {
 		return "", fmt.Errorf("build jwt: %w", err)
 	}
-	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256, dk.privJWK))
+	alg, err := jwaAlgorithm(k.algorithm)
+	if err != nil {
+		return "", err
+	}
+	signed, err := jwt.Sign(tok, jwt.WithKey(alg, k.privJWK))
 	if err != nil {
 		return "", fmt.Errorf("sign jwt: %w", err)
 	}
 	return string(signed), nil
 }
 
-func issueIDToken(dk *domainKey, issuer, audience, sub, email, nonce string, ttl time.Duration) (string, error) {
+func issueIDToken(k *loadedKey, issuer, audience, sub, email, nonce string, ttl time.Duration) (string, error) {
 	now := time.Now()
 	b := jwt.NewBuilder().
 		Issuer(issuer).
@@ -741,7 +752,11 @@ func issueIDToken(dk *domainKey, issuer, audience, sub, email, nonce string, ttl
 	if err != nil {
 		return "", fmt.Errorf("build id_token: %w", err)
 	}
-	signed, err := jwt.Sign(tok, jwt.WithKey(jwa.RS256, dk.privJWK))
+	alg, err := jwaAlgorithm(k.algorithm)
+	if err != nil {
+		return "", err
+	}
+	signed, err := jwt.Sign(tok, jwt.WithKey(alg, k.privJWK))
 	if err != nil {
 		return "", fmt.Errorf("sign id_token: %w", err)
 	}

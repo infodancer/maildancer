@@ -2,18 +2,29 @@ package authoidc
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/lestrrat-go/jwx/v2/jwk"
 
 	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/auth/passwd"
 )
+
+// defaultKeyRetentionAfterRetire is the retention window applied to a key
+// when it transitions to retiring. Configurable in a later commit; the
+// default comes from docs/signing-key-rotation.md ("24× jwt_ttl_sec" = 24h).
+const defaultKeyRetentionAfterRetire = 24 * time.Hour
 
 // sweepInterval is how often the background goroutine drops expired codes and
 // sessions from the store. Five minutes matches the "every few minutes" cadence
@@ -109,9 +120,13 @@ func (s *Server) loadDomain(name string) error {
 		return fmt.Errorf("passwd agent: %w", err)
 	}
 
-	if err := s.keys.LoadOrGenerate(name, s.cfg.Server.DataDir); err != nil {
+	if err := s.ensureSigningKeys(name); err != nil {
 		_ = agent.Close()
-		return fmt.Errorf("load keys: %w", err)
+		return fmt.Errorf("ensure signing keys: %w", err)
+	}
+	if err := s.primeKeyCache(name); err != nil {
+		_ = agent.Close()
+		return fmt.Errorf("prime key cache: %w", err)
 	}
 
 	var clients []ClientConfig
@@ -256,4 +271,177 @@ func validRedirectURI(client *ClientConfig, uri string) bool {
 		}
 	}
 	return false
+}
+
+// --- signing-key plumbing (see docs/signing-key-rotation.md) ---
+
+// ensureSigningKeys guarantees that the signing_keys table has at least one
+// row for domain. Three cases:
+//
+//  1. Rows already exist — nothing to do; primeKeyCache will load them.
+//  2. No rows, but the legacy {data_dir}/{domain}/signing.key exists —
+//     migrate it: move to keys/{domain}-1.key and insert one row with
+//     algorithm=RS256, state=current, created_at = file mtime. The legacy
+//     kid {domain}-1 is preserved so tokens signed before the upgrade still
+//     verify against the migrated key in JWKS.
+//  3. No rows and no legacy file — fresh install: generate a new keypair
+//     with the default algorithm and record it as current.
+func (s *Server) ensureSigningKeys(domain string) error {
+	rows, err := s.store.ListSigningKeys(domain)
+	if err != nil {
+		return fmt.Errorf("list signing keys: %w", err)
+	}
+	if len(rows) > 0 {
+		return nil
+	}
+
+	legacyPath := filepath.Join(s.cfg.Server.DataDir, domain, "signing.key")
+	info, err := os.Stat(legacyPath)
+	switch {
+	case err == nil:
+		newKID := domain + "-1"
+		if err := os.MkdirAll(keyDir(s.cfg.Server.DataDir, domain), 0o700); err != nil {
+			return fmt.Errorf("create key dir: %w", err)
+		}
+		target := keyFilePath(s.cfg.Server.DataDir, domain, newKID)
+		if err := os.Rename(legacyPath, target); err != nil {
+			return fmt.Errorf("migrate legacy key: %w", err)
+		}
+		rec := signingKeyRecord{
+			Domain:    domain,
+			KID:       newKID,
+			Algorithm: AlgRS256,
+			State:     keyStateCurrent,
+			CreatedAt: info.ModTime(),
+		}
+		if err := s.store.InsertSigningKey(rec); err != nil {
+			return fmt.Errorf("record migrated key: %w", err)
+		}
+		slog.Info("authoidc: migrated legacy signing key",
+			"event", "key_migration", "domain", domain, "kid", newKID)
+		return nil
+	case errors.Is(err, fs.ErrNotExist):
+		// fall through to fresh-install path
+	default:
+		return fmt.Errorf("stat legacy key: %w", err)
+	}
+
+	now := time.Now()
+	newKID := fmt.Sprintf("%s-%d", domain, now.Unix())
+	alg := AlgES256 // default per docs/signing-key-rotation.md; configurable later
+	if _, err := generateAndWriteKey(s.cfg.Server.DataDir, domain, newKID, alg); err != nil {
+		return fmt.Errorf("generate key: %w", err)
+	}
+	rec := signingKeyRecord{
+		Domain:    domain,
+		KID:       newKID,
+		Algorithm: alg,
+		State:     keyStateCurrent,
+		CreatedAt: now,
+	}
+	if err := s.store.InsertSigningKey(rec); err != nil {
+		return fmt.Errorf("record new key: %w", err)
+	}
+	slog.Info("authoidc: generated initial signing key",
+		"event", "key_generated", "domain", domain, "kid", newKID, "algorithm", alg)
+	return nil
+}
+
+// primeKeyCache loads every signing key for domain from disk into the
+// in-memory keyStore cache so the first request after startup doesn't pay
+// the PEM-parse cost. Any retiring key whose retention has already lapsed
+// is loaded too — the sweep will discard it shortly.
+func (s *Server) primeKeyCache(domain string) error {
+	rows, err := s.store.ListSigningKeys(domain)
+	if err != nil {
+		return fmt.Errorf("list signing keys: %w", err)
+	}
+	for _, rec := range rows {
+		if _, err := s.loadKeyFromRecord(rec); err != nil {
+			return fmt.Errorf("load key %s: %w", rec.KID, err)
+		}
+	}
+	return nil
+}
+
+// loadKeyFromRecord returns the loaded JWK for rec, reading the PEM file on
+// cache miss. Subsequent calls for the same kid hit the cache.
+func (s *Server) loadKeyFromRecord(rec signingKeyRecord) (*loadedKey, error) {
+	if k, ok := s.keys.Get(rec.Domain, rec.KID); ok {
+		return k, nil
+	}
+	k, err := loadKeyFile(s.cfg.Server.DataDir, rec.Domain, rec.KID, rec.Algorithm)
+	if err != nil {
+		return nil, err
+	}
+	s.keys.Put(rec.Domain, k)
+	return k, nil
+}
+
+// currentKeyFor queries the Store for the current signing key for domain
+// and returns the loaded JWK. Called on every signing request — this is
+// option (a) from the design's reload-coordination open question (one
+// indexed query per token issuance, no inotify/SIGHUP coordination needed).
+func (s *Server) currentKeyFor(domain string) (*loadedKey, error) {
+	rows, err := s.store.ListSigningKeys(domain)
+	if err != nil {
+		return nil, fmt.Errorf("list signing keys: %w", err)
+	}
+	for _, rec := range rows {
+		if rec.State == keyStateCurrent {
+			return s.loadKeyFromRecord(rec)
+		}
+	}
+	return nil, fmt.Errorf("no current signing key for domain %s", domain)
+}
+
+// activePublicJWKsFor returns the union of public JWKs for domain that a
+// relying party might need to verify a token: current + retiring keys whose
+// retention window has not yet lapsed. Drives /jwks.json and the
+// verification keyset for /userinfo.
+func (s *Server) activePublicJWKsFor(domain string) (jwk.Set, error) {
+	rows, err := s.store.ListSigningKeys(domain)
+	if err != nil {
+		return nil, fmt.Errorf("list signing keys: %w", err)
+	}
+	now := time.Now()
+	set := jwk.NewSet()
+	for _, rec := range rows {
+		if rec.State == keyStateRetiring && !rec.ExpiresAt.IsZero() && !now.Before(rec.ExpiresAt) {
+			continue
+		}
+		k, err := s.loadKeyFromRecord(rec)
+		if err != nil {
+			return nil, err
+		}
+		if err := set.AddKey(k.pubJWK); err != nil {
+			return nil, fmt.Errorf("add jwk: %w", err)
+		}
+	}
+	return set, nil
+}
+
+// activeAlgorithmsFor returns the sorted set union of JWA algorithm strings
+// across all current + non-expired retiring keys for domain. Drives the
+// discovery document's id_token_signing_alg_values_supported.
+func (s *Server) activeAlgorithmsFor(domain string) ([]string, error) {
+	rows, err := s.store.ListSigningKeys(domain)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	seen := map[string]struct{}{}
+	var out []string
+	for _, rec := range rows {
+		if rec.State == keyStateRetiring && !rec.ExpiresAt.IsZero() && !now.Before(rec.ExpiresAt) {
+			continue
+		}
+		if _, ok := seen[rec.Algorithm]; ok {
+			continue
+		}
+		seen[rec.Algorithm] = struct{}{}
+		out = append(out, rec.Algorithm)
+	}
+	sort.Strings(out)
+	return out, nil
 }

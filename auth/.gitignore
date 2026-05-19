@@ -34,6 +34,7 @@ go.work.sum
 # Claude Code
 .omc/
 
-# Built binaries
-userctl
-auth-oidc
+# Built binaries (anchored to repo root so they don't shadow the
+# cmd/userctl and cmd/auth-oidc package directories).
+/userctl
+/auth-oidc

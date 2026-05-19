@@ -1,16 +1,24 @@
-// Command userctl manages users in infodancer auth passwd files.
+// Command userctl manages users and signing keys in infodancer auth.
 //
-// Usage:
+// User subcommands:
 //
 //	userctl [--domains <path>] [--verbose] add    <user@domain>   add user (prompts for password)
 //	userctl [--domains <path>] [--verbose] del    <user@domain>   remove user
 //	userctl [--domains <path>] [--verbose] list   <domain>        list users and mailboxes
 //	userctl [--domains <path>] [--verbose] verify <user@domain>   verify user password
 //
-// The domains path is resolved in order:
-//  1. --domains flag
-//  2. INFODANCER_DOMAINS_PATH environment variable
-//  3. smtpd.domains_path from /etc/infodancer/config.toml
+// Signing-key subcommands (auth-oidc operator surface, see
+// docs/signing-key-rotation.md):
+//
+//	userctl [--data-dir <path>] [--verbose] keys list   <domain>
+//	userctl [--data-dir <path>] [--verbose] keys rotate <domain> [--algorithm=RS256|ES256|EdDSA]
+//	userctl [--data-dir <path>] [--verbose] keys revoke <domain> <kid>
+//
+// Path resolution for --domains: flag > INFODANCER_DOMAINS_PATH env >
+// smtpd.domains_path in /etc/infodancer/config.toml.
+//
+// Path resolution for --data-dir: flag > AUTH_OIDC_DATA_DIR env >
+// server.data_dir in /etc/auth-oidc/config.toml.
 package main
 
 import (
@@ -30,7 +38,10 @@ import (
 	"github.com/infodancer/maildancer/auth/passwd"
 )
 
-const defaultConfigPath = "/etc/infodancer/config.toml"
+const (
+	defaultConfigPath         = "/etc/infodancer/config.toml"
+	defaultAuthOIDCConfigPath = "/etc/auth-oidc/config.toml"
+)
 
 // serverConfig is a minimal view of the shared server config for path discovery.
 type serverConfig struct {
@@ -39,9 +50,18 @@ type serverConfig struct {
 	} `toml:"smtpd"`
 }
 
+// authOIDCConfig is a minimal view of the auth-oidc config for data_dir
+// discovery. Only the one field we need; the daemon owns the full schema.
+type authOIDCConfig struct {
+	Server struct {
+		DataDir string `toml:"data_dir"`
+	} `toml:"server"`
+}
+
 func main() {
 	fs := flag.NewFlagSet("userctl", flag.ExitOnError)
 	domainsFlag := fs.String("domains", "", "path to domains directory")
+	dataDirFlag := fs.String("data-dir", "", "path to auth-oidc data dir (for keys subcommands)")
 	verboseFlag := fs.Bool("verbose", true, "enable debug logging")
 	fs.Usage = usage
 
@@ -56,6 +76,21 @@ func main() {
 	}
 
 	args := fs.Args()
+	if len(args) < 1 {
+		usage()
+		os.Exit(1)
+	}
+
+	subcmd := args[0]
+
+	// keys is dispatched separately because it has sub-subcommands and its
+	// own data-dir resolution path. The other subcommands all need the
+	// domains path and a target arg.
+	if subcmd == "keys" {
+		exitOnErr(runKeysSubcommand(args[1:], *dataDirFlag))
+		return
+	}
+
 	if len(args) < 2 {
 		usage()
 		os.Exit(1)
@@ -66,10 +101,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
 	slog.Debug("resolved domains path", "path", domainsPath)
 
-	subcmd := args[0]
 	target := args[1]
 
 	switch subcmd {
@@ -271,18 +304,30 @@ func exitOnErr(err error) {
 
 func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
-  userctl [--domains <path>] [--verbose] add    <user@domain>   add user (prompts for password)
-  userctl [--domains <path>] [--verbose] del    <user@domain>   remove user
-  userctl [--domains <path>] [--verbose] list   <domain>        list users and mailboxes
-  userctl [--domains <path>] [--verbose] verify <user@domain>   verify user password
+  Users:
+    userctl [--domains <path>]  add    <user@domain>   add user (prompts for password)
+    userctl [--domains <path>]  del    <user@domain>   remove user
+    userctl [--domains <path>]  list   <domain>        list users and mailboxes
+    userctl [--domains <path>]  verify <user@domain>   verify user password
+
+  Signing keys (auth-oidc operator):
+    userctl [--data-dir <path>] keys list   <domain>
+    userctl [--data-dir <path>] keys rotate <domain> [--algorithm=RS256|ES256|EdDSA]
+    userctl [--data-dir <path>] keys revoke <domain> <kid>
 
 Flags:
-  --domains   path to domains directory (overrides env and config)
-  --verbose   enable debug logging (default: true)
+  --domains    path to domains directory (overrides env and config)
+  --data-dir   path to auth-oidc data dir (overrides env and config)
+  --verbose    enable debug logging (default: true)
 
 Domains path resolution order:
   1. --domains flag
   2. INFODANCER_DOMAINS_PATH environment variable
   3. smtpd.domains_path from /etc/infodancer/config.toml
+
+Data dir resolution order (for keys subcommands):
+  1. --data-dir flag
+  2. AUTH_OIDC_DATA_DIR environment variable
+  3. server.data_dir from /etc/auth-oidc/config.toml
 `)
 }

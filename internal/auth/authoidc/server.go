@@ -139,12 +139,11 @@ func (s *Server) sweepSigningKeys(now time.Time) {
 	}
 }
 
-// rotatorLoop checks daily whether any domain's current signing key is
-// older than the rotation interval; rotates each that is. Exits when ctx
-// is cancelled.
+// rotatorLoop wakes on the configured check interval and rotates any key
+// older than the rotation interval. Exits when ctx is cancelled.
 func (s *Server) rotatorLoop(ctx context.Context) {
 	defer close(s.rotatorDone)
-	t := time.NewTicker(defaultKeyRotationCheckInterval)
+	t := time.NewTicker(s.cfg.Server.keyRotationCheckInterval())
 	defer t.Stop()
 	for {
 		select {
@@ -160,6 +159,7 @@ func (s *Server) rotatorLoop(ctx context.Context) {
 // if it exceeds the rotation interval. Failures are logged per-domain so
 // one bad domain doesn't stall rotation for the rest.
 func (s *Server) rotateAgedKeys(now time.Time) {
+	interval := s.cfg.Server.keyRotationInterval()
 	for name := range s.domains {
 		rows, err := s.store.ListSigningKeys(name)
 		if err != nil {
@@ -170,7 +170,7 @@ func (s *Server) rotateAgedKeys(now time.Time) {
 			if rec.State != keyStateCurrent {
 				continue
 			}
-			if now.Sub(rec.CreatedAt) < defaultKeyRotationInterval {
+			if now.Sub(rec.CreatedAt) < interval {
 				continue
 			}
 			if _, err := s.rotateKey(name, ""); err != nil {
@@ -411,7 +411,10 @@ func (s *Server) ensureSigningKeys(domain string) error {
 
 	now := time.Now()
 	newKID := fmt.Sprintf("%s-%d", domain, now.UnixNano())
-	alg := AlgES256 // default per docs/signing-key-rotation.md; configurable later
+	alg := s.cfg.Server.DefaultSigningAlgorithm
+	if alg == "" {
+		alg = AlgES256
+	}
 	if _, err := generateAndWriteKey(s.cfg.Server.DataDir, domain, newKID, alg); err != nil {
 		return fmt.Errorf("generate key: %w", err)
 	}
@@ -505,9 +508,9 @@ func (s *Server) activePublicJWKsFor(domain string) (jwk.Set, error) {
 }
 
 // rotateKey performs one full rotation for domain: generate a new keypair
-// for algorithm (or the default if empty), write the file, atomically swap
-// current+retiring in the Store, prime the cache, and log the event. Used
-// by both the scheduled rotator and the userctl CLI.
+// for algorithm (or default_signing_algorithm if empty), write the file,
+// atomically swap current+retiring in the Store, prime the cache, and log
+// the event. Used by both the scheduled rotator and the userctl CLI.
 //
 // The slog message uses event=key_rotation as a stable label so an external
 // counter (Prometheus exporter, log aggregator) can lift the rate without
@@ -516,10 +519,10 @@ func (s *Server) activePublicJWKsFor(domain string) (jwk.Set, error) {
 // "Open questions" #2).
 func (s *Server) rotateKey(domain, algorithm string) (string, error) {
 	if algorithm == "" {
-		algorithm = AlgES256 // configurable in a later commit
+		algorithm = s.cfg.Server.DefaultSigningAlgorithm
 	}
-	if _, err := jwaAlgorithm(algorithm); err != nil {
-		return "", err
+	if _, ok := supportedSigningAlgorithms[algorithm]; !ok {
+		return "", fmt.Errorf("unsupported algorithm: %s", algorithm)
 	}
 	now := time.Now()
 	newKID := fmt.Sprintf("%s-%d", domain, now.UnixNano())
@@ -534,7 +537,7 @@ func (s *Server) rotateKey(domain, algorithm string) (string, error) {
 		State:     keyStateCurrent,
 		CreatedAt: now,
 	}
-	if err := s.store.RotateSigningKey(domain, rec, defaultKeyRetentionAfterRetire); err != nil {
+	if err := s.store.RotateSigningKey(domain, rec, s.cfg.Server.keyRetentionAfterRetire()); err != nil {
 		return "", fmt.Errorf("rotate signing key: %w", err)
 	}
 	s.keys.Put(domain, loaded)

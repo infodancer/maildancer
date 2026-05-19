@@ -2,6 +2,8 @@ package config
 
 import (
 	"crypto/tls"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -444,6 +446,98 @@ func TestTimeoutHelpers(t *testing.T) {
 		if got := tc.SessionKeepaliveInterval(); got != 5*time.Minute {
 			t.Errorf("SessionKeepaliveInterval() with invalid string = %v, want 5m", got)
 		}
+	})
+
+	t.Run("default upstream session idle", func(t *testing.T) {
+		tc := TimeoutsConfig{}
+		if got := tc.UpstreamSessionIdleTimeout(); got != 30*time.Minute {
+			t.Errorf("UpstreamSessionIdleTimeout() = %v, want 30m", got)
+		}
+	})
+
+	t.Run("custom upstream session idle", func(t *testing.T) {
+		tc := TimeoutsConfig{UpstreamSessionIdle: "15m"}
+		if got := tc.UpstreamSessionIdleTimeout(); got != 15*time.Minute {
+			t.Errorf("UpstreamSessionIdleTimeout() = %v, want 15m", got)
+		}
+	})
+}
+
+// TestNormalizeSessionKeepalive verifies the auto-clamp adjusts dangerous
+// timer combinations and leaves safe ones alone.
+func TestNormalizeSessionKeepalive(t *testing.T) {
+	silent := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("safe values are not adjusted", func(t *testing.T) {
+		tc := TimeoutsConfig{
+			SessionKeepalive:    "5m",
+			UpstreamSessionIdle: "30m",
+		}
+		if adjusted := tc.NormalizeSessionKeepalive(silent); adjusted {
+			t.Error("expected no adjustment for safe values")
+		}
+		if tc.SessionKeepalive != "5m" {
+			t.Errorf("SessionKeepalive = %q, want unchanged 5m", tc.SessionKeepalive)
+		}
+	})
+
+	t.Run("keepalive equal to upstream is clamped", func(t *testing.T) {
+		tc := TimeoutsConfig{
+			SessionKeepalive:    "30m",
+			UpstreamSessionIdle: "30m",
+		}
+		if adjusted := tc.NormalizeSessionKeepalive(silent); !adjusted {
+			t.Error("expected adjustment when keepalive >= upstream")
+		}
+		if got := tc.SessionKeepaliveInterval(); got != 15*time.Minute {
+			t.Errorf("clamped SessionKeepalive = %v, want 15m (upstream/2)", got)
+		}
+	})
+
+	t.Run("keepalive within slop of upstream is clamped", func(t *testing.T) {
+		// Upstream 30m, keepalive 29m50s. Slop is 60s, so keepalive+slop = 30m50s > upstream.
+		tc := TimeoutsConfig{
+			SessionKeepalive:    "29m50s",
+			UpstreamSessionIdle: "30m",
+		}
+		if adjusted := tc.NormalizeSessionKeepalive(silent); !adjusted {
+			t.Error("expected adjustment when keepalive is within slop of upstream")
+		}
+		if got := tc.SessionKeepaliveInterval(); got != 15*time.Minute {
+			t.Errorf("clamped SessionKeepalive = %v, want 15m (upstream/2)", got)
+		}
+	})
+
+	t.Run("keepalive just outside slop is left alone", func(t *testing.T) {
+		// Upstream 30m, keepalive 28m. keepalive+slop = 29m < upstream. Safe.
+		tc := TimeoutsConfig{
+			SessionKeepalive:    "28m",
+			UpstreamSessionIdle: "30m",
+		}
+		if adjusted := tc.NormalizeSessionKeepalive(silent); adjusted {
+			t.Error("expected no adjustment when keepalive+slop < upstream")
+		}
+	})
+
+	t.Run("disabled keepalive is honored", func(t *testing.T) {
+		tc := TimeoutsConfig{
+			SessionKeepalive:    "0s",
+			UpstreamSessionIdle: "30m",
+		}
+		if adjusted := tc.NormalizeSessionKeepalive(silent); adjusted {
+			t.Error("expected zero keepalive to be left alone")
+		}
+		if got := tc.SessionKeepaliveInterval(); got != 0 {
+			t.Errorf("SessionKeepalive = %v, want 0", got)
+		}
+	})
+
+	t.Run("nil logger does not panic", func(t *testing.T) {
+		tc := TimeoutsConfig{
+			SessionKeepalive:    "30m",
+			UpstreamSessionIdle: "30m",
+		}
+		_ = tc.NormalizeSessionKeepalive(nil)
 	})
 
 	t.Run("custom connection timeout", func(t *testing.T) {

@@ -5,8 +5,13 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
+
+// upstreamIdleSlop is the safety margin reserved below upstream_session_idle
+// when validating session_keepalive. Covers RPC latency and clock drift.
+const upstreamIdleSlop = 60 * time.Second
 
 // ListenerMode defines the operational mode for a listener.
 type ListenerMode string
@@ -104,6 +109,10 @@ type TimeoutsConfig struct {
 	// subprocess from reaping itself. Must be safely below the upstream
 	// idle timeout (mail-session default is 30m). Zero disables keepalive.
 	SessionKeepalive string `toml:"session_keepalive"`
+	// UpstreamSessionIdle is the operator's declared value for mail-session's
+	// own --idle-timeout. imapd uses this to validate SessionKeepalive at
+	// startup. Default 30m matches mail-session's daemon-mode default.
+	UpstreamSessionIdle string `toml:"upstream_session_idle"`
 }
 
 // LimitsConfig defines resource limits for the server.
@@ -131,10 +140,11 @@ func Default() Config {
 			MinVersion: "1.2",
 		},
 		Timeouts: TimeoutsConfig{
-			Connection:       "10m",
-			Command:          "1m",
-			Idle:             "30m",
-			SessionKeepalive: "5m",
+			Connection:          "10m",
+			Command:             "1m",
+			Idle:                "30m",
+			SessionKeepalive:    "5m",
+			UpstreamSessionIdle: "30m",
 		},
 		Limits: LimitsConfig{
 			MaxConnections: 200,
@@ -192,6 +202,12 @@ func (c *Config) Validate() error {
 	if c.Timeouts.SessionKeepalive != "" {
 		if _, err := time.ParseDuration(c.Timeouts.SessionKeepalive); err != nil {
 			return fmt.Errorf("invalid session keepalive: %w", err)
+		}
+	}
+
+	if c.Timeouts.UpstreamSessionIdle != "" {
+		if _, err := time.ParseDuration(c.Timeouts.UpstreamSessionIdle); err != nil {
+			return fmt.Errorf("invalid upstream session idle: %w", err)
 		}
 	}
 
@@ -273,6 +289,51 @@ func (c *TimeoutsConfig) SessionKeepaliveInterval() time.Duration {
 		return 5 * time.Minute
 	}
 	return d
+}
+
+// UpstreamSessionIdleTimeout returns the declared mail-session idle timeout
+// that imapd validates SessionKeepalive against. Returns 30 minutes if not
+// configured or invalid (matches mail-session's daemon-mode default).
+func (c *TimeoutsConfig) UpstreamSessionIdleTimeout() time.Duration {
+	if c.UpstreamSessionIdle == "" {
+		return 30 * time.Minute
+	}
+	d, err := time.ParseDuration(c.UpstreamSessionIdle)
+	if err != nil {
+		return 30 * time.Minute
+	}
+	return d
+}
+
+// NormalizeSessionKeepalive clamps SessionKeepalive to a safe value below
+// UpstreamSessionIdle if the operator-supplied value would race the upstream
+// reaper. The clamp is to upstream/2, which gives at least one safe tick
+// before the upstream idle timer would fire even if the first tick misses.
+// Mutates c in place; logs a warning when an adjustment is made.
+//
+// Returns true if the value was adjusted.
+func (c *TimeoutsConfig) NormalizeSessionKeepalive(logger *slog.Logger) bool {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	keepalive := c.SessionKeepaliveInterval()
+	upstream := c.UpstreamSessionIdleTimeout()
+	if keepalive <= 0 {
+		// Explicit zero disables keepalive entirely; trust the operator.
+		return false
+	}
+	if keepalive+upstreamIdleSlop < upstream {
+		return false
+	}
+	clamped := upstream / 2
+	logger.Warn("session_keepalive is too close to upstream_session_idle; clamping to upstream/2",
+		"configured_keepalive", keepalive,
+		"upstream_session_idle", upstream,
+		"slop", upstreamIdleSlop,
+		"clamped_keepalive", clamped,
+		"reason", "keepalive must fire well before upstream mail-session reaps itself")
+	c.SessionKeepalive = clamped.String()
+	return true
 }
 
 var minTLSVersions = map[string]uint16{

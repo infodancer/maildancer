@@ -184,6 +184,14 @@ func mergeConfig(dst, src Config) Config {
 		dst.Timeouts.Idle = src.Timeouts.Idle
 	}
 
+	if src.Timeouts.SessionKeepalive != "" {
+		dst.Timeouts.SessionKeepalive = src.Timeouts.SessionKeepalive
+	}
+
+	if src.Timeouts.UpstreamSessionIdle != "" {
+		dst.Timeouts.UpstreamSessionIdle = src.Timeouts.UpstreamSessionIdle
+	}
+
 	if src.Limits.MaxConnections > 0 {
 		dst.Limits.MaxConnections = src.Limits.MaxConnections
 	}

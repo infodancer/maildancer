@@ -425,6 +425,27 @@ func TestTimeoutHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("default session keepalive", func(t *testing.T) {
+		tc := TimeoutsConfig{}
+		if got := tc.SessionKeepaliveInterval(); got != 5*time.Minute {
+			t.Errorf("SessionKeepaliveInterval() = %v, want 5m", got)
+		}
+	})
+
+	t.Run("custom session keepalive", func(t *testing.T) {
+		tc := TimeoutsConfig{SessionKeepalive: "2m"}
+		if got := tc.SessionKeepaliveInterval(); got != 2*time.Minute {
+			t.Errorf("SessionKeepaliveInterval() = %v, want 2m", got)
+		}
+	})
+
+	t.Run("invalid session keepalive falls back to default", func(t *testing.T) {
+		tc := TimeoutsConfig{SessionKeepalive: "notaduration"}
+		if got := tc.SessionKeepaliveInterval(); got != 5*time.Minute {
+			t.Errorf("SessionKeepaliveInterval() with invalid string = %v, want 5m", got)
+		}
+	})
+
 	t.Run("custom connection timeout", func(t *testing.T) {
 		tc := TimeoutsConfig{Connection: "5m"}
 		if got := tc.ConnectionTimeout(); got != 5*time.Minute {

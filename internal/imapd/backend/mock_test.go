@@ -19,6 +19,8 @@ type mockStore struct {
 	content map[uint32]string                            // uid -> content
 	deleted map[uint32]bool                              // uid -> pending deletion
 	uidSeq  uint32
+
+	uidValidityCalls int // counts UIDValidity invocations (test hook)
 }
 
 func newMockStore() *mockStore {
@@ -342,7 +344,17 @@ func (m *mockStore) CopyMessage(_ context.Context, mailbox string, srcFolder str
 }
 
 func (m *mockStore) UIDValidity(_ context.Context, _ string, _ string) (uint32, error) {
+	m.mu.Lock()
+	m.uidValidityCalls++
+	m.mu.Unlock()
 	return 12345, nil
+}
+
+// uidValidityCallCount returns the number of times UIDValidity has been called.
+func (m *mockStore) uidValidityCallCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.uidValidityCalls
 }
 
 func (m *mockStore) UIDNext(_ context.Context, _ string, _ string) (uint32, error) {

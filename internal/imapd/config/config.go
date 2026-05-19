@@ -99,6 +99,11 @@ type TimeoutsConfig struct {
 	Connection string `toml:"connection"`
 	Command    string `toml:"command"`
 	Idle       string `toml:"idle"`
+	// SessionKeepalive is the interval at which an IDLE'ing connection sends
+	// a no-op RPC to session-manager to keep the upstream mail-session
+	// subprocess from reaping itself. Must be safely below the upstream
+	// idle timeout (mail-session default is 30m). Zero disables keepalive.
+	SessionKeepalive string `toml:"session_keepalive"`
 }
 
 // LimitsConfig defines resource limits for the server.
@@ -126,9 +131,10 @@ func Default() Config {
 			MinVersion: "1.2",
 		},
 		Timeouts: TimeoutsConfig{
-			Connection: "10m",
-			Command:    "1m",
-			Idle:       "30m",
+			Connection:       "10m",
+			Command:          "1m",
+			Idle:             "30m",
+			SessionKeepalive: "5m",
 		},
 		Limits: LimitsConfig{
 			MaxConnections: 200,
@@ -180,6 +186,12 @@ func (c *Config) Validate() error {
 	if c.Timeouts.Idle != "" {
 		if _, err := time.ParseDuration(c.Timeouts.Idle); err != nil {
 			return fmt.Errorf("invalid idle timeout: %w", err)
+		}
+	}
+
+	if c.Timeouts.SessionKeepalive != "" {
+		if _, err := time.ParseDuration(c.Timeouts.SessionKeepalive); err != nil {
+			return fmt.Errorf("invalid session keepalive: %w", err)
 		}
 	}
 
@@ -245,6 +257,20 @@ func (c *TimeoutsConfig) IdleTimeout() time.Duration {
 	d, err := time.ParseDuration(c.Idle)
 	if err != nil {
 		return 30 * time.Minute
+	}
+	return d
+}
+
+// SessionKeepaliveInterval returns the IDLE-time keepalive interval as a
+// time.Duration. Returns 5 minutes if not configured or invalid. Returns 0
+// only if explicitly set to "0" (disabled).
+func (c *TimeoutsConfig) SessionKeepaliveInterval() time.Duration {
+	if c.SessionKeepalive == "" {
+		return 5 * time.Minute
+	}
+	d, err := time.ParseDuration(c.SessionKeepalive)
+	if err != nil {
+		return 5 * time.Minute
 	}
 	return d
 }

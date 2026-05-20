@@ -35,6 +35,13 @@ type ServerConfig struct {
 	KeyRotationInterval      string `toml:"key_rotation_interval"`
 	KeyRetentionAfterRetire  string `toml:"key_retention_after_retire"`
 	KeyRotationCheckInterval string `toml:"key_rotation_check_interval"`
+
+	// WebfingerIssuerTemplate is the URL template advertised by the RFC 7033
+	// webfinger handler for a domain. The literal "{domain}" is substituted
+	// with the request's resolved domain name. Empty falls back to
+	// "https://auth.{domain}", matching the default homelab topology where
+	// auth-oidc serves OIDC at auth.<domain> while the apex answers webfinger.
+	WebfingerIssuerTemplate string `toml:"webfinger_issuer_template"`
 }
 
 // supportedSigningAlgorithms lists the JWA algorithm strings auth-oidc can

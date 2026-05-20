@@ -259,6 +259,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /register", s.register)
 	mux.HandleFunc("GET /.well-known/openid-configuration", s.discovery)
 	mux.HandleFunc("GET /.well-known/jwks.json", s.jwks)
+	mux.HandleFunc("GET /.well-known/webfinger", s.webfinger)
 	mux.HandleFunc("GET /authorize", s.authorize)
 	mux.HandleFunc("POST /login", s.login)
 	mux.HandleFunc("POST /token", s.token)

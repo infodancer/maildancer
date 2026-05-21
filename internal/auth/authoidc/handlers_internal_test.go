@@ -1,9 +1,54 @@
 package authoidc
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestIssuerBase_HonorsForwardedProto(t *testing.T) {
+	// Behind a TLS-terminating proxy (Traefik), the backend connection is
+	// plain HTTP (r.TLS == nil) but the proxy sets X-Forwarded-Proto: https.
+	// The advertised issuer must be https, or conformant brokers reject the
+	// discovery document and the ID-token iss claim.
+	req := httptest.NewRequest("GET", "http://auth.example.com/.well-known/openid-configuration", nil)
+	req.Header.Set("X-Forwarded-Proto", "https")
+
+	if got := issuerBase(req); got != "https://auth.example.com" {
+		t.Errorf("issuerBase = %q, want https://auth.example.com", got)
+	}
+}
+
+func TestIssuerBase_ForwardedProtoMultiValue(t *testing.T) {
+	// X-Forwarded-Proto may be a comma-separated list when chained through
+	// multiple proxies; the client-facing (first) value is authoritative.
+	req := httptest.NewRequest("GET", "http://auth.example.com/x", nil)
+	req.Header.Set("X-Forwarded-Proto", "https, http")
+
+	if got := issuerBase(req); got != "https://auth.example.com" {
+		t.Errorf("issuerBase = %q, want https://auth.example.com", got)
+	}
+}
+
+func TestIssuerBase_DirectTLS(t *testing.T) {
+	// No proxy: TLS terminated in-process. httptest populates req.TLS for an
+	// https target.
+	req := httptest.NewRequest("GET", "https://auth.example.com/x", nil)
+
+	if got := issuerBase(req); got != "https://auth.example.com" {
+		t.Errorf("issuerBase = %q, want https://auth.example.com", got)
+	}
+}
+
+func TestIssuerBase_PlainHTTPLocalDev(t *testing.T) {
+	// Local development with neither TLS nor a forwarding proxy stays http,
+	// per the project's "document when HTTP is intentionally used locally".
+	req := httptest.NewRequest("GET", "http://localhost:8080/x", nil)
+
+	if got := issuerBase(req); got != "http://localhost:8080" {
+		t.Errorf("issuerBase = %q, want http://localhost:8080", got)
+	}
+}
 
 func TestDeriveClientID_Stable(t *testing.T) {
 	a := deriveClientID("test.example", "myapp", []string{"https://app.example/cb"})

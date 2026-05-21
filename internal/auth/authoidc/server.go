@@ -306,12 +306,36 @@ func (s *Server) Handler() http.Handler {
 
 // issuerBase returns the OIDC issuer string for the request.
 // Since routing is host-based, the issuer is always scheme://host.
+//
+// Scheme detection honors X-Forwarded-Proto first: in production auth-oidc
+// runs behind a TLS-terminating reverse proxy (Traefik), so the backend
+// connection is plain HTTP (r.TLS == nil) even though the user-facing scheme
+// is https. Trusting the header is safe here because the service is only
+// reachable through that proxy, which overwrites the header. Falling back to
+// r.TLS keeps plain http for direct local-dev requests.
 func issuerBase(r *http.Request) string {
-	scheme := "https"
-	if r.TLS == nil {
-		scheme = "http"
+	scheme := "http"
+	if proto := forwardedProto(r); proto != "" {
+		scheme = proto
+	} else if r.TLS != nil {
+		scheme = "https"
 	}
 	return scheme + "://" + r.Host
+}
+
+// forwardedProto returns the client-facing scheme from X-Forwarded-Proto, or
+// "" when the header is absent. When chained through multiple proxies the
+// value is a comma-separated list whose first element is the original
+// client-facing scheme.
+func forwardedProto(r *http.Request) string {
+	xfp := r.Header.Get("X-Forwarded-Proto")
+	if xfp == "" {
+		return ""
+	}
+	if i := strings.IndexByte(xfp, ','); i >= 0 {
+		xfp = xfp[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(xfp))
 }
 
 // domainForHost resolves the domain entry by progressively stripping labels from

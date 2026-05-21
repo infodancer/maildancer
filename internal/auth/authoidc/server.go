@@ -56,9 +56,13 @@ type Server struct {
 }
 
 // New builds a Server from cfg, loading/generating keypairs and auth agents for
-// every domain referenced in the client list. The store is a SQLite database
-// at {DataDir}/oidc-state.db — co-located with per-domain signing keys under
-// DataDir because OIDC state is server-private, not domain-admin editable.
+// every owned domain. The authoritative set of served domains is the directories
+// present under DomainDataPath (see docs/oidc-federation-design.md) — domain
+// availability is independent of client registration, since registration is open
+// (RFC 7591). Any domain referenced only by a static [[client]] entry is loaded
+// too. The store is a SQLite database at {DataDir}/oidc-state.db — co-located with
+// per-domain signing keys under DataDir because OIDC state is server-private, not
+// domain-admin editable.
 func New(cfg *Config) (*Server, error) {
 	store, err := newSQLiteStore(filepath.Join(cfg.Server.DataDir, "oidc-state.db"), nil)
 	if err != nil {
@@ -73,6 +77,37 @@ func New(cfg *Config) (*Server, error) {
 	}
 
 	seen := make(map[string]struct{})
+
+	// Primary source: every domain provisioned under DomainDataPath. A domain
+	// directory is one carrying a config.toml; anything else (e.g. a stray
+	// "postmaster" dir) is skipped rather than aborting startup.
+	if dir := cfg.Server.DomainDataPath; dir != "" {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			_ = store.Close()
+			return nil, fmt.Errorf("read domain_data_path %q: %w", dir, err)
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if _, statErr := os.Stat(filepath.Join(dir, name, "config.toml")); statErr != nil {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			if err := s.loadDomain(name); err != nil {
+				_ = store.Close()
+				return nil, fmt.Errorf("domain %s: %w", name, err)
+			}
+		}
+	}
+
+	// Also load any domain referenced only by static client config (a [[client]]
+	// may be declared ahead of, or independent of, the data-path directory).
 	for _, c := range cfg.Clients {
 		if _, ok := seen[c.Domain]; ok {
 			continue

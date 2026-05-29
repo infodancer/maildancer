@@ -14,7 +14,7 @@ permissions:
 jobs:
   build-and-push:
     name: Build and push image
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ci]
     steps:
       - uses: actions/checkout@v6
 

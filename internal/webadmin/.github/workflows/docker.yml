@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   docker:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, ci]
     steps:
       - uses: actions/checkout@v6
 

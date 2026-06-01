@@ -3,7 +3,6 @@ package maildir
 import (
 	"bytes"
 	"context"
-	"hash/fnv"
 	"io"
 	"log/slog"
 	"os"
@@ -25,10 +24,15 @@ type MaildirStore struct {
 	maildirSubdir string // optional subdirectory under each mailbox (e.g., "Maildir")
 	pathTemplate  string // optional path template for domain-aware storage
 
-	// deleted tracks messages marked for deletion.
+	// deleted tracks messages marked for deletion by uint32 UID.
 	// Keys are mailbox names for INBOX, or composite keys for folders.
 	deletedMu sync.Mutex
-	deleted   map[string]map[string]bool // key -> uid -> deleted
+	deleted   map[string]map[uint32]bool // deletion key -> uid -> deleted
+
+	// uidlistCache caches parsed uidlists per folder path.
+	// Invalidated on mutating operations (Deliver, Append, Copy, Expunge).
+	uidlistMu    sync.Mutex
+	uidlistCache map[string]*uidList // folder path -> uidlist
 }
 
 // NewStore creates a new MaildirStore with the given base path.
@@ -41,7 +45,8 @@ func NewStore(basePath string, maildirSubdir string, pathTemplate string) *Maild
 		basePath:      basePath,
 		maildirSubdir: maildirSubdir,
 		pathTemplate:  pathTemplate,
-		deleted:       make(map[string]map[string]bool),
+		deleted:       make(map[string]map[uint32]bool),
+		uidlistCache:  make(map[string]*uidList),
 	}
 }
 
@@ -154,6 +159,7 @@ func (s *MaildirStore) EnsureDefaultFolders(ctx context.Context, mailbox string)
 
 // listDir returns message metadata for all non-deleted messages in the given maildir path.
 // deletionKey identifies which set of soft-deleted messages to filter out.
+// Messages are returned sorted by UID ascending with persistent UIDs from .uidlist.
 func (s *MaildirStore) listDir(path string, deletionKey string) ([]msgstore.MessageInfo, error) {
 	dir := maildir.Dir(path)
 
@@ -170,34 +176,63 @@ func (s *MaildirStore) listDir(path string, deletionKey string) ([]msgstore.Mess
 		recentKeys[msg.Key()] = true
 	}
 
-	// Now get all messages (which are all in cur/ after Unseen())
-	allMsgs, err := dir.Messages()
+	// Load/reconcile uidlist against current cur/ contents.
+	keys, err := curDirKeys(path)
 	if err != nil {
 		return nil, err
 	}
 
-	var messages []msgstore.MessageInfo
+	lock, err := lockUIDList(path)
+	if err != nil {
+		return nil, err
+	}
+	ul, err := loadOrBootstrapUIDList(path, keys)
+	unlockUIDList(lock)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the uidlist for subsequent Retrieve/Delete calls.
+	s.cacheUIDList(path, ul)
+
+	// Build a map from key to go-maildir Message for flag/stat lookup.
+	allMsgs, err := dir.Messages()
+	if err != nil {
+		return nil, err
+	}
+	msgByKey := make(map[string]*maildir.Message, len(allMsgs))
 	for _, msg := range allMsgs {
-		key := msg.Key()
-		if s.isDeleted(deletionKey, key) {
+		msgByKey[msg.Key()] = msg
+	}
+
+	// Walk uidlist entries (sorted by UID ascending) to build results.
+	var messages []msgstore.MessageInfo
+	for _, entry := range ul.entries {
+		if s.isDeleted(deletionKey, entry.uid) {
 			continue
+		}
+
+		msg, ok := msgByKey[entry.key]
+		if !ok {
+			continue // Key in uidlist but not in cur/; already reconciled
 		}
 
 		filename := msg.Filename()
 		fi, err := os.Stat(filename)
 		if err != nil {
-			continue // Skip on error
+			continue
 		}
 
 		flags := msg.Flags()
 		var flagStrings []string
-		if recentKeys[key] {
+		if recentKeys[entry.key] {
 			flagStrings = append(flagStrings, "\\Recent")
 		}
 		flagStrings = append(flagStrings, convertFlags(flags)...)
 
 		messages = append(messages, msgstore.MessageInfo{
-			UID:          key,
+			UID:          entry.uid,
+			Key:          entry.key,
 			Size:         fi.Size(),
 			Flags:        flagStrings,
 			InternalDate: fi.ModTime(),
@@ -207,22 +242,72 @@ func (s *MaildirStore) listDir(path string, deletionKey string) ([]msgstore.Mess
 	return messages, nil
 }
 
-// retrieveFromDir retrieves a single message from the given maildir path.
-func (s *MaildirStore) retrieveFromDir(path string, uid string) (io.ReadCloser, error) {
+// cacheUIDList stores a uidlist in the per-folder cache.
+func (s *MaildirStore) cacheUIDList(path string, ul *uidList) {
+	s.uidlistMu.Lock()
+	s.uidlistCache[path] = ul
+	s.uidlistMu.Unlock()
+}
+
+// invalidateUIDListCache removes a cached uidlist for the given path.
+func (s *MaildirStore) invalidateUIDListCache(path string) {
+	s.uidlistMu.Lock()
+	delete(s.uidlistCache, path)
+	s.uidlistMu.Unlock()
+}
+
+// lookupKey resolves a uint32 UID to its Maildir key using the cache or disk.
+func (s *MaildirStore) lookupKey(path string, uid uint32) (string, error) {
+	// Try cache first.
+	s.uidlistMu.Lock()
+	if ul, ok := s.uidlistCache[path]; ok {
+		s.uidlistMu.Unlock()
+		if key, ok := ul.uidToKey[uid]; ok {
+			return key, nil
+		}
+		return "", errors.ErrMessageNotFound
+	}
+	s.uidlistMu.Unlock()
+
+	// Cache miss — load from disk.
+	lock, err := lockUIDList(path)
+	if err != nil {
+		return "", err
+	}
+	keys, err := curDirKeys(path)
+	if err != nil {
+		unlockUIDList(lock)
+		return "", err
+	}
+	ul, err := loadOrBootstrapUIDList(path, keys)
+	unlockUIDList(lock)
+	if err != nil {
+		return "", err
+	}
+	s.cacheUIDList(path, ul)
+
+	if key, ok := ul.uidToKey[uid]; ok {
+		return key, nil
+	}
+	return "", errors.ErrMessageNotFound
+}
+
+// retrieveFromDir retrieves a single message from the given maildir path by Maildir key.
+func (s *MaildirStore) retrieveFromDir(path string, key string) (io.ReadCloser, error) {
 	dir := maildir.Dir(path)
-	msg, err := dir.MessageByKey(uid)
+	msg, err := dir.MessageByKey(key)
 	if err != nil {
 		return nil, err
 	}
 	return msg.Open()
 }
 
-// removeMessages permanently removes the specified messages from a maildir.
-func (s *MaildirStore) removeMessages(path string, uids map[string]bool) error {
+// removeMessages permanently removes the specified messages from a maildir by key.
+func (s *MaildirStore) removeMessages(path string, keys map[string]bool) error {
 	dir := maildir.Dir(path)
 	var lastErr error
-	for uid := range uids {
-		msg, err := dir.MessageByKey(uid)
+	for key := range keys {
+		msg, err := dir.MessageByKey(key)
 		if err != nil {
 			// Message might not exist, skip
 			continue
@@ -254,7 +339,7 @@ func convertFlags(flags []maildir.Flag) []string {
 	return result
 }
 
-func (s *MaildirStore) isDeleted(key, uid string) bool {
+func (s *MaildirStore) isDeleted(key string, uid uint32) bool {
 	s.deletedMu.Lock()
 	defer s.deletedMu.Unlock()
 
@@ -360,7 +445,7 @@ func (s *MaildirStore) List(ctx context.Context, mailbox string) ([]msgstore.Mes
 }
 
 // Retrieve implements msgstore.MessageStore.
-func (s *MaildirStore) Retrieve(ctx context.Context, mailbox string, uid string) (io.ReadCloser, error) {
+func (s *MaildirStore) Retrieve(ctx context.Context, mailbox string, uid uint32) (io.ReadCloser, error) {
 	if s.isDeleted(mailbox, uid) {
 		return nil, errors.ErrMessageDeleted
 	}
@@ -370,22 +455,26 @@ func (s *MaildirStore) Retrieve(ctx context.Context, mailbox string, uid string)
 		return nil, err
 	}
 
-	// Check if maildir exists
 	curPath := filepath.Join(path, "cur")
 	if _, err := os.Stat(curPath); os.IsNotExist(err) {
 		return nil, errors.ErrMailboxNotFound
 	}
 
-	return s.retrieveFromDir(path, uid)
+	key, err := s.lookupKey(path, uid)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.retrieveFromDir(path, key)
 }
 
 // Delete implements msgstore.MessageStore.
-func (s *MaildirStore) Delete(ctx context.Context, mailbox string, uid string) error {
+func (s *MaildirStore) Delete(ctx context.Context, mailbox string, uid uint32) error {
 	s.deletedMu.Lock()
 	defer s.deletedMu.Unlock()
 
 	if s.deleted[mailbox] == nil {
-		s.deleted[mailbox] = make(map[string]bool)
+		s.deleted[mailbox] = make(map[uint32]bool)
 	}
 	s.deleted[mailbox][uid] = true
 	return nil
@@ -407,13 +496,51 @@ func (s *MaildirStore) Expunge(ctx context.Context, mailbox string) error {
 		return err
 	}
 
-	// Check if maildir exists
 	curPath := filepath.Join(path, "cur")
 	if _, err := os.Stat(curPath); os.IsNotExist(err) {
 		return errors.ErrMailboxNotFound
 	}
 
-	return s.removeMessages(path, deletedUIDs)
+	// Resolve uint32 UIDs to Maildir keys for removal.
+	lock, err := lockUIDList(path)
+	if err != nil {
+		return err
+	}
+	keys, err := curDirKeys(path)
+	if err != nil {
+		unlockUIDList(lock)
+		return err
+	}
+	ul, err := loadOrBootstrapUIDList(path, keys)
+	if err != nil {
+		unlockUIDList(lock)
+		return err
+	}
+
+	keysToRemove := make(map[string]bool)
+	for uid := range deletedUIDs {
+		if key, ok := ul.uidToKey[uid]; ok {
+			keysToRemove[key] = true
+		}
+	}
+
+	if err := s.removeMessages(path, keysToRemove); err != nil {
+		unlockUIDList(lock)
+		return err
+	}
+
+	// Reconcile uidlist after removal (removes entries for deleted keys).
+	remainingKeys, err := curDirKeys(path)
+	if err != nil {
+		unlockUIDList(lock)
+		return err
+	}
+	ul.reconcile(remainingKeys)
+	err = ul.write(path)
+	unlockUIDList(lock)
+
+	s.invalidateUIDListCache(path)
+	return err
 }
 
 // Stat implements msgstore.MessageStore.
@@ -652,9 +779,9 @@ func (s *MaildirStore) StatFolder(ctx context.Context, mailbox string, folder st
 }
 
 // RetrieveFromFolder implements msgstore.FolderStore.
-func (s *MaildirStore) RetrieveFromFolder(ctx context.Context, mailbox string, folder string, uid string) (io.ReadCloser, error) {
-	key := folderDeletionKey(mailbox, folder)
-	if s.isDeleted(key, uid) {
+func (s *MaildirStore) RetrieveFromFolder(ctx context.Context, mailbox string, folder string, uid uint32) (io.ReadCloser, error) {
+	delKey := folderDeletionKey(mailbox, folder)
+	if s.isDeleted(delKey, uid) {
 		return nil, errors.ErrMessageDeleted
 	}
 
@@ -668,33 +795,38 @@ func (s *MaildirStore) RetrieveFromFolder(ctx context.Context, mailbox string, f
 		return nil, errors.ErrFolderNotFound
 	}
 
-	return s.retrieveFromDir(path, uid)
+	key, err := s.lookupKey(path, uid)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.retrieveFromDir(path, key)
 }
 
 // DeleteInFolder implements msgstore.FolderStore.
-func (s *MaildirStore) DeleteInFolder(ctx context.Context, mailbox string, folder string, uid string) error {
+func (s *MaildirStore) DeleteInFolder(ctx context.Context, mailbox string, folder string, uid uint32) error {
 	if err := validateFolderName(folder); err != nil {
 		return err
 	}
 
-	key := folderDeletionKey(mailbox, folder)
+	delKey := folderDeletionKey(mailbox, folder)
 	s.deletedMu.Lock()
 	defer s.deletedMu.Unlock()
 
-	if s.deleted[key] == nil {
-		s.deleted[key] = make(map[string]bool)
+	if s.deleted[delKey] == nil {
+		s.deleted[delKey] = make(map[uint32]bool)
 	}
-	s.deleted[key][uid] = true
+	s.deleted[delKey][uid] = true
 	return nil
 }
 
 // ExpungeFolder implements msgstore.FolderStore.
 func (s *MaildirStore) ExpungeFolder(ctx context.Context, mailbox string, folder string) error {
-	key := folderDeletionKey(mailbox, folder)
+	delKey := folderDeletionKey(mailbox, folder)
 
 	s.deletedMu.Lock()
-	deletedUIDs := s.deleted[key]
-	delete(s.deleted, key)
+	deletedUIDs := s.deleted[delKey]
+	delete(s.deleted, delKey)
 	s.deletedMu.Unlock()
 
 	if len(deletedUIDs) == 0 {
@@ -711,7 +843,46 @@ func (s *MaildirStore) ExpungeFolder(ctx context.Context, mailbox string, folder
 		return errors.ErrFolderNotFound
 	}
 
-	return s.removeMessages(path, deletedUIDs)
+	// Resolve uint32 UIDs to Maildir keys for removal.
+	lock, err := lockUIDList(path)
+	if err != nil {
+		return err
+	}
+	keys, err := curDirKeys(path)
+	if err != nil {
+		unlockUIDList(lock)
+		return err
+	}
+	ul, err := loadOrBootstrapUIDList(path, keys)
+	if err != nil {
+		unlockUIDList(lock)
+		return err
+	}
+
+	keysToRemove := make(map[string]bool)
+	for uid := range deletedUIDs {
+		if key, ok := ul.uidToKey[uid]; ok {
+			keysToRemove[key] = true
+		}
+	}
+
+	if err := s.removeMessages(path, keysToRemove); err != nil {
+		unlockUIDList(lock)
+		return err
+	}
+
+	// Reconcile uidlist after removal.
+	remainingKeys, err := curDirKeys(path)
+	if err != nil {
+		unlockUIDList(lock)
+		return err
+	}
+	ul.reconcile(remainingKeys)
+	err = ul.write(path)
+	unlockUIDList(lock)
+
+	s.invalidateUIDListCache(path)
+	return err
 }
 
 // DeliverToFolder implements msgstore.FolderStore.
@@ -813,52 +984,74 @@ func moveNewToCurWithFlags(dirPath string, key string, flags []maildir.Flag) err
 }
 
 // AppendToFolder implements msgstore.FolderStore.
-func (s *MaildirStore) AppendToFolder(ctx context.Context, mailbox string, folder string, r io.Reader, flags []string, date time.Time) (string, error) {
+func (s *MaildirStore) AppendToFolder(ctx context.Context, mailbox string, folder string, r io.Reader, flags []string, date time.Time) (uint32, error) {
 	path, err := s.folderOrInboxPath(mailbox, folder)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	dir := maildir.Dir(path)
 	if err := os.MkdirAll(path, 0700); err != nil {
-		return "", err
+		return 0, err
 	}
 	if err := dir.Init(); err != nil && !os.IsExist(err) {
-		return "", err
+		return 0, err
 	}
 
 	// Snapshot new/ before delivery to identify the resulting key.
 	newDir := filepath.Join(path, "new")
 	beforeKeys, err := maildirNewKeys(newDir)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	delivery, err := maildir.NewDelivery(path)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	if _, err := io.Copy(delivery, r); err != nil {
 		_ = delivery.Abort()
-		return "", err
+		return 0, err
 	}
 	if err := delivery.Close(); err != nil {
-		return "", err
+		return 0, err
 	}
 
 	// Find the newly added key in new/.
 	key, err := maildirNewKey(newDir, beforeKeys)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 
 	// Move from new/ to cur/ with the requested flags. IMAP APPEND messages
 	// are explicitly placed by the client and must be immediately accessible.
 	if err := moveNewToCurWithFlags(path, key, convertFlagsFromIMAP(flags)); err != nil {
-		return "", err
+		return 0, err
 	}
 
-	return key, nil
+	// Assign a UID in the uidlist.
+	lock, err := lockUIDList(path)
+	if err != nil {
+		return 0, err
+	}
+	curKeys, err := curDirKeys(path)
+	if err != nil {
+		unlockUIDList(lock)
+		return 0, err
+	}
+	ul, err := loadOrBootstrapUIDList(path, curKeys)
+	unlockUIDList(lock)
+	if err != nil {
+		return 0, err
+	}
+
+	s.invalidateUIDListCache(path)
+
+	uid, ok := ul.keyToUID[key]
+	if !ok {
+		return 0, errors.ErrMessageNotFound
+	}
+	return uid, nil
 }
 
 // maildirNewKeys returns the set of filenames currently in the new/ directory.
@@ -894,120 +1087,193 @@ func maildirNewKey(newDir string, beforeKeys map[string]bool) (string, error) {
 }
 
 // SetFlagsInFolder implements msgstore.FolderStore.
-func (s *MaildirStore) SetFlagsInFolder(ctx context.Context, mailbox string, folder string, uid string, flags []string) error {
+func (s *MaildirStore) SetFlagsInFolder(ctx context.Context, mailbox string, folder string, uid uint32, flags []string) error {
 	path, err := s.folderOrInboxPath(mailbox, folder)
 	if err != nil {
 		return err
 	}
+
+	key, err := s.lookupKey(path, uid)
+	if err != nil {
+		return err
+	}
+
 	mdFlags := convertFlagsFromIMAP(flags)
 	dir := maildir.Dir(path)
 
 	// Try cur/ first (most messages live here).
-	msg, err := dir.MessageByKey(uid)
+	msg, err := dir.MessageByKey(key)
 	if err == nil {
 		return msg.SetFlags(mdFlags)
 	}
 
 	// Fall back to new/: move to cur/ with the requested flags.
-	newPath := filepath.Join(path, "new", uid)
+	newPath := filepath.Join(path, "new", key)
 	if _, statErr := os.Stat(newPath); statErr == nil {
-		return moveNewToCurWithFlags(path, uid, mdFlags)
+		return moveNewToCurWithFlags(path, key, mdFlags)
 	}
 
 	return errors.ErrMessageNotFound
 }
 
 // CopyMessage implements msgstore.FolderStore.
-func (s *MaildirStore) CopyMessage(ctx context.Context, mailbox string, srcFolder string, uid string, destFolder string) (string, error) {
+func (s *MaildirStore) CopyMessage(ctx context.Context, mailbox string, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	srcPath, err := s.folderOrInboxPath(mailbox, srcFolder)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	destPath, err := s.folderOrInboxPath(mailbox, destFolder)
 	if err != nil {
-		return "", err
+		return 0, err
+	}
+
+	// Resolve source UID to Maildir key.
+	srcKey, err := s.lookupKey(srcPath, uid)
+	if err != nil {
+		return 0, err
 	}
 
 	// Ensure destination exists.
 	destDir := maildir.Dir(destPath)
 	if err := os.MkdirAll(destPath, 0700); err != nil {
-		return "", err
+		return 0, err
 	}
 	if err := destDir.Init(); err != nil && !os.IsExist(err) {
-		return "", err
+		return 0, err
 	}
 
 	srcDir := maildir.Dir(srcPath)
 
 	// Try cur/ first. CopyTo places the copy in cur/ and returns the new Message.
-	msg, err := srcDir.MessageByKey(uid)
+	msg, err := srcDir.MessageByKey(srcKey)
 	if err == nil {
-		newMsg, err := msg.CopyTo(destDir)
-		if err != nil {
-			return "", err
-		}
-		return newMsg.Key(), nil
-	}
-
-	// Fall back: source is in new/. Read and deliver to destination's new/.
-	newSrcPath := filepath.Join(srcPath, "new", uid)
-	if _, statErr := os.Stat(newSrcPath); statErr != nil {
-		return "", errors.ErrMessageNotFound
-	}
-
-	srcFile, err := os.Open(newSrcPath)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = srcFile.Close() }()
-
-	// Snapshot new/ in destination before delivery.
-	destNewDir := filepath.Join(destPath, "new")
-	beforeKeys, err := maildirNewKeys(destNewDir)
-	if err != nil {
-		return "", err
-	}
-
-	delivery, err := maildir.NewDelivery(destPath)
-	if err != nil {
-		return "", err
-	}
-	if _, err := io.Copy(delivery, srcFile); err != nil {
-		_ = delivery.Abort()
-		return "", err
-	}
-	if err := delivery.Close(); err != nil {
-		return "", err
-	}
-
-	return maildirNewKey(destNewDir, beforeKeys)
-}
-
-// UIDValidity implements msgstore.FolderStore.
-// Returns a stable hash of the folder's base name. For a persistent
-// implementation, see issue #9.
-func (s *MaildirStore) UIDValidity(ctx context.Context, mailbox string, folder string) (uint32, error) {
-	var name string
-	if strings.EqualFold(folder, "INBOX") {
-		path, err := s.mailboxPath(mailbox)
+		_, err := msg.CopyTo(destDir)
 		if err != nil {
 			return 0, err
 		}
-		name = filepath.Base(path)
 	} else {
-		name = folder
+		// Fall back: source is in new/. Read and deliver to destination's new/.
+		newSrcPath := filepath.Join(srcPath, "new", srcKey)
+		if _, statErr := os.Stat(newSrcPath); statErr != nil {
+			return 0, errors.ErrMessageNotFound
+		}
+
+		srcFile, err := os.Open(newSrcPath)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { _ = srcFile.Close() }()
+
+		delivery, err := maildir.NewDelivery(destPath)
+		if err != nil {
+			return 0, err
+		}
+		if _, err := io.Copy(delivery, srcFile); err != nil {
+			_ = delivery.Abort()
+			return 0, err
+		}
+		if err := delivery.Close(); err != nil {
+			return 0, err
+		}
 	}
-	// Strip any maildir++ flag suffix if present.
-	if i := strings.IndexByte(name, ':'); i >= 0 {
-		name = name[:i]
+
+	// Assign a UID in the destination uidlist.
+	lock, err := lockUIDList(destPath)
+	if err != nil {
+		return 0, err
 	}
-	h := fnv.New32a()
-	h.Write([]byte(name))
-	v := h.Sum32()
-	if v == 0 {
-		return 1, nil
+	destKeys, err := curDirKeys(destPath)
+	if err != nil {
+		unlockUIDList(lock)
+		return 0, err
 	}
-	return v, nil
+	ul, err := loadOrBootstrapUIDList(destPath, destKeys)
+	unlockUIDList(lock)
+	if err != nil {
+		return 0, err
+	}
+
+	s.invalidateUIDListCache(destPath)
+
+	// The new message's key will be the highest UID (just assigned by reconcile).
+	// Return uidNext - 1 as the newly assigned UID.
+	newUID := ul.uidNext - 1
+	return newUID, nil
+}
+
+// UIDValidity implements msgstore.FolderStore.
+// Returns the persistent UIDValidity from the .uidlist file.
+// If the file does not exist, bootstraps a new uidlist.
+func (s *MaildirStore) UIDValidity(ctx context.Context, mailbox string, folder string) (uint32, error) {
+	// Ensure the maildir exists so we can create the lock file.
+	if strings.EqualFold(folder, "INBOX") {
+		if _, err := s.ensureMaildir(mailbox); err != nil {
+			return 0, err
+		}
+	} else {
+		if _, err := s.ensureFolderMaildir(mailbox, folder); err != nil {
+			return 0, err
+		}
+	}
+
+	path, err := s.folderOrInboxPath(mailbox, folder)
+	if err != nil {
+		return 0, err
+	}
+
+	lock, err := lockUIDList(path)
+	if err != nil {
+		return 0, err
+	}
+	keys, err := curDirKeys(path)
+	if err != nil {
+		unlockUIDList(lock)
+		return 0, err
+	}
+	ul, err := loadOrBootstrapUIDList(path, keys)
+	unlockUIDList(lock)
+	if err != nil {
+		return 0, err
+	}
+
+	return ul.uidValidity, nil
+}
+
+// UIDNext implements msgstore.FolderStore.
+// Returns the next UID that will be assigned in the folder.
+func (s *MaildirStore) UIDNext(ctx context.Context, mailbox string, folder string) (uint32, error) {
+	// Ensure the maildir exists so we can create the lock file.
+	if strings.EqualFold(folder, "INBOX") {
+		if _, err := s.ensureMaildir(mailbox); err != nil {
+			return 0, err
+		}
+	} else {
+		if _, err := s.ensureFolderMaildir(mailbox, folder); err != nil {
+			return 0, err
+		}
+	}
+
+	path, err := s.folderOrInboxPath(mailbox, folder)
+	if err != nil {
+		return 0, err
+	}
+
+	lock, err := lockUIDList(path)
+	if err != nil {
+		return 0, err
+	}
+	keys, err := curDirKeys(path)
+	if err != nil {
+		unlockUIDList(lock)
+		return 0, err
+	}
+	ul, err := loadOrBootstrapUIDList(path, keys)
+	unlockUIDList(lock)
+	if err != nil {
+		return 0, err
+	}
+
+	return ul.uidNext, nil
 }
 
 // Compile-time interface verification.

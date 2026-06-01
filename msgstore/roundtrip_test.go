@@ -77,7 +77,7 @@ func listMailbox(t *testing.T, cfg msgstore.StoreConfig, mailbox string) []msgst
 }
 
 // retrieveMessage opens a fresh store and retrieves the full message content.
-func retrieveMessage(t *testing.T, cfg msgstore.StoreConfig, mailbox, uid string) string {
+func retrieveMessage(t *testing.T, cfg msgstore.StoreConfig, mailbox string, uid uint32) string {
 	t.Helper()
 	store, err := msgstore.Open(cfg)
 	if err != nil {
@@ -85,7 +85,7 @@ func retrieveMessage(t *testing.T, cfg msgstore.StoreConfig, mailbox, uid string
 	}
 	rc, err := store.Retrieve(context.Background(), mailbox, uid)
 	if err != nil {
-		t.Fatalf("Retrieve %s/%s: %v", mailbox, uid, err)
+		t.Fatalf("Retrieve %s/%d: %v", mailbox, uid, err)
 	}
 	defer func() { _ = rc.Close() }()
 	data, err := io.ReadAll(rc)
@@ -181,7 +181,7 @@ func TestRoundTrip_MultipleMessages(t *testing.T) {
 	for _, m := range msgs {
 		content := retrieveMessage(t, cfg, "carol@test.local", m.UID)
 		if content == "" {
-			t.Errorf("message %s retrieved empty content", m.UID)
+			t.Errorf("message %d retrieved empty content", m.UID)
 		}
 	}
 }
@@ -200,8 +200,8 @@ func TestRoundTrip_SizeReported(t *testing.T) {
 	if msgs[0].Size == 0 {
 		t.Error("MessageInfo.Size should be non-zero")
 	}
-	if msgs[0].UID == "" {
-		t.Error("MessageInfo.UID should be non-empty")
+	if msgs[0].UID == 0 {
+		t.Error("MessageInfo.UID should be non-zero")
 	}
 }
 

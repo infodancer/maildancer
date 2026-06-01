@@ -14,11 +14,11 @@ type MessageStore interface {
 
 	// Retrieve returns the full message content.
 	// The caller is responsible for closing the returned ReadCloser.
-	Retrieve(ctx context.Context, mailbox string, uid string) (io.ReadCloser, error)
+	Retrieve(ctx context.Context, mailbox string, uid uint32) (io.ReadCloser, error)
 
 	// Delete marks a message for deletion.
 	// The message is not permanently removed until Expunge is called.
-	Delete(ctx context.Context, mailbox string, uid string) error
+	Delete(ctx context.Context, mailbox string, uid uint32) error
 
 	// Expunge permanently removes all messages marked for deletion.
 	Expunge(ctx context.Context, mailbox string) error
@@ -30,8 +30,11 @@ type MessageStore interface {
 
 // MessageInfo contains metadata about a stored message.
 type MessageInfo struct {
-	// UID is the unique identifier for the message within the mailbox.
-	UID string
+	// UID is the persistent numeric IMAP UID assigned by the uidlist.
+	UID uint32
+
+	// Key is the storage key (Maildir filename); opaque to consumers.
+	Key string
 
 	// Size is the message size in bytes.
 	Size int64
@@ -68,11 +71,11 @@ type FolderStore interface {
 
 	// RetrieveFromFolder returns the full message content from a folder.
 	// The caller is responsible for closing the returned ReadCloser.
-	RetrieveFromFolder(ctx context.Context, mailbox string, folder string, uid string) (io.ReadCloser, error)
+	RetrieveFromFolder(ctx context.Context, mailbox string, folder string, uid uint32) (io.ReadCloser, error)
 
 	// DeleteInFolder marks a message in a folder for deletion.
 	// The message is not permanently removed until ExpungeFolder is called.
-	DeleteInFolder(ctx context.Context, mailbox string, folder string, uid string) error
+	DeleteInFolder(ctx context.Context, mailbox string, folder string, uid uint32) error
 
 	// ExpungeFolder permanently removes all messages marked for deletion in a folder.
 	ExpungeFolder(ctx context.Context, mailbox string, folder string) error
@@ -91,22 +94,26 @@ type FolderStore interface {
 	// Used by the IMAP APPEND command. Returns the UID assigned to the new message.
 	// Distinct from DeliverToFolder which is for smtpd routing (no flags/date control).
 	// folder may be "INBOX" to append to the inbox.
-	AppendToFolder(ctx context.Context, mailbox string, folder string, r io.Reader, flags []string, date time.Time) (uid string, err error)
+	AppendToFolder(ctx context.Context, mailbox string, folder string, r io.Reader, flags []string, date time.Time) (uid uint32, err error)
 
 	// SetFlagsInFolder replaces the complete flag set on a message.
 	// flags uses IMAP flag strings (e.g. "\\Seen", "\\Deleted", "\\Answered").
 	// folder may be "INBOX" to operate on inbox messages.
-	SetFlagsInFolder(ctx context.Context, mailbox string, folder string, uid string, flags []string) error
+	SetFlagsInFolder(ctx context.Context, mailbox string, folder string, uid uint32, flags []string) error
 
 	// CopyMessage copies a message to another folder within the same mailbox.
 	// Returns the UID assigned to the copy in destFolder.
 	// srcFolder may be "INBOX"; destFolder may be "INBOX".
-	CopyMessage(ctx context.Context, mailbox string, srcFolder string, uid string, destFolder string) (newUID string, err error)
+	CopyMessage(ctx context.Context, mailbox string, srcFolder string, uid uint32, destFolder string) (newUID uint32, err error)
 
 	// UIDValidity returns the UIDValidity value for a folder.
 	// The value must remain constant for a given folder as long as UIDs have
 	// not been reassigned. folder may be "INBOX".
 	UIDValidity(ctx context.Context, mailbox string, folder string) (uint32, error)
+
+	// UIDNext returns the next UID that will be assigned in the folder.
+	// folder may be "INBOX".
+	UIDNext(ctx context.Context, mailbox string, folder string) (uint32, error)
 }
 
 // FolderSpec defines a default folder with an optional IMAP SPECIAL-USE attribute (RFC 6154).

@@ -149,35 +149,10 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 		}, nil
 	}
 
-	// ── 3. Spam check ─────────────────────────────────────────────────────────
-	spamCfg := dlvr.resolveSpamConfig(domainName, localpart)
-	if spamCfg.IsEnabled() {
-		resp, skip, err := dlvr.checkSpam(ctx, spamCfg, msg, req)
-		if err != nil {
-			slog.Warn("rspamd check failed", slog.String("error", err.Error()))
-			switch spamCfg.GetFailMode() {
-			case "reject":
-				return DeliverResponse{
-					Result:    ResultRejected,
-					Temporary: false,
-					Reason:    "spam check unavailable",
-				}, nil
-			case "tempfail":
-				return DeliverResponse{
-					Result:    ResultRejected,
-					Temporary: true,
-					Reason:    "spam check temporarily unavailable",
-				}, nil
-			}
-		} else if !skip {
-			return resp, nil
-		}
-	}
-
-	// ── 4. Sieve script ──────────────────────────────────────────────────────
+	// ── 3. Sieve script ──────────────────────────────────────────────────────
 	dlvr.parseSieve(domainName, localpart)
 
-	// ── 5. Deliver to maildir ────────────────────────────────────────────────
+	// ── 4. Deliver to maildir ────────────────────────────────────────────────
 	if dom.DeliveryAgent == nil {
 		return DeliverResponse{
 			Result:    ResultRejected,
@@ -208,85 +183,6 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 	return DeliverResponse{
 		Result: ResultDelivered,
 	}, nil
-}
-
-// resolveSpamConfig builds an effective SpamConfig for the given domain/localpart
-// by layering: global defaults ← domain spam.toml ← user spam.toml.
-func (dlvr *Deliverer) resolveSpamConfig(domainName, localpart string) SpamConfig {
-	effective := dlvr.cfg.Rspamd
-
-	domainSpam, err := LoadSpamConfig(
-		filepath.Join(dlvr.cfg.DomainsPath, domainName, "spam.toml"),
-	)
-	if err != nil {
-		slog.Warn("loading domain spam config", slog.String("domain", domainName), slog.String("error", err.Error()))
-	} else {
-		effective = effective.Merge(domainSpam)
-	}
-
-	userSpam, err := LoadSpamConfig(
-		filepath.Join(dlvr.cfg.DataPath(), domainName, "users", localpart, "spam.toml"),
-	)
-	if err != nil {
-		slog.Warn("loading user spam config", slog.String("user", localpart), slog.String("error", err.Error()))
-	} else {
-		effective = effective.Merge(userSpam)
-	}
-
-	return effective
-}
-
-// checkSpam runs rspamd and returns (response, passThrough, error).
-// passThrough=true means the check passed and delivery should continue.
-func (dlvr *Deliverer) checkSpam(ctx context.Context, spamCfg SpamConfig, msg []byte, req DeliverRequest) (DeliverResponse, bool, error) {
-	client := newSpamChecker(spamCfg.URL, spamCfg.Password, spamCfg.GetTimeout())
-	result, err := client.check(ctx, msg, SpamCheckOptions{
-		From:       req.Sender,
-		Recipients: []string{req.Recipient},
-		IP:         req.ClientIP,
-		Helo:       req.ClientHostname,
-	})
-	if err != nil {
-		return DeliverResponse{}, false, err
-	}
-
-	slog.Debug("rspamd result",
-		slog.Float64("score", result.Score),
-		slog.String("action", result.Action),
-		slog.Bool("is_spam", result.IsSpam))
-
-	if spamCfg.RejectThreshold != nil && result.Score >= *spamCfg.RejectThreshold {
-		return DeliverResponse{
-			Result:    ResultRejected,
-			Temporary: false,
-			Reason:    fmt.Sprintf("spam score %.1f exceeds reject threshold %.1f", result.Score, *spamCfg.RejectThreshold),
-		}, false, nil
-	}
-
-	if spamCfg.TempFailThreshold != nil && result.Score >= *spamCfg.TempFailThreshold {
-		return DeliverResponse{
-			Result:    ResultRejected,
-			Temporary: true,
-			Reason:    fmt.Sprintf("spam score %.1f exceeds tempfail threshold %.1f", result.Score, *spamCfg.TempFailThreshold),
-		}, false, nil
-	}
-
-	switch result.Action {
-	case "reject":
-		return DeliverResponse{
-			Result:    ResultRejected,
-			Temporary: false,
-			Reason:    fmt.Sprintf("message rejected by rspamd (score %.1f)", result.Score),
-		}, false, nil
-	case "soft reject":
-		return DeliverResponse{
-			Result:    ResultRejected,
-			Temporary: true,
-			Reason:    fmt.Sprintf("message deferred by rspamd (score %.1f)", result.Score),
-		}, false, nil
-	}
-
-	return DeliverResponse{}, true, nil
 }
 
 // parseSieve loads and parses the user's .sieve script.

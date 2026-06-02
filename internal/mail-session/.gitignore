@@ -1,0 +1,21 @@
+# Binaries
+/mail-session
+*.exe
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# GoReleaser
+/dist/
+
+# Task runner
+.task/
+
+# OMC
+.omc/

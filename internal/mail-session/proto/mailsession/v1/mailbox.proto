@@ -1,0 +1,199 @@
+syntax = "proto3";
+
+package mailsession.v1;
+
+option go_package = "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1";
+
+// MailboxService handles message retrieval and management within a user's mailbox.
+// All folder-scoped RPCs include the folder name in the request — the server is
+// stateless with respect to folder selection.
+service MailboxService {
+  // List returns metadata for all messages in a folder.
+  rpc List(ListRequest) returns (ListResponse);
+
+  // Stat returns the message count and total byte size for a folder.
+  rpc Stat(StatRequest) returns (StatResponse);
+
+  // Fetch retrieves the full message content. Server-streaming: the message
+  // body is sent in 64KB chunks to avoid gRPC's default message size limit.
+  rpc Fetch(FetchRequest) returns (stream FetchResponse);
+
+  // FetchHeaders retrieves only the message headers (and optionally a few body lines).
+  rpc FetchHeaders(FetchHeadersRequest) returns (FetchHeadersResponse);
+
+  // Append stores a new message in a folder. Client-streaming: the first chunk
+  // carries metadata (folder, flags, date), subsequent chunks carry message body.
+  rpc Append(stream AppendRequest) returns (AppendResponse);
+
+  // Copy copies a message from one folder to another.
+  rpc Copy(CopyRequest) returns (CopyResponse);
+
+  // Move moves a message between folders.
+  rpc Move(MoveRequest) returns (MoveResponse);
+
+  // SetFlags replaces the complete flag set on a message.
+  rpc SetFlags(SetFlagsRequest) returns (SetFlagsResponse);
+
+  // Expunge permanently removes all messages with the \Deleted flag in a folder.
+  rpc Expunge(ExpungeRequest) returns (ExpungeResponse);
+
+  // Rescan re-reads a folder and returns only newly appeared messages.
+  rpc Rescan(RescanRequest) returns (RescanResponse);
+
+  // UIDValidity returns the IMAP UIDVALIDITY value for a folder.
+  rpc UIDValidity(UIDValidityRequest) returns (UIDValidityResponse);
+
+  // Delete marks a message for POP3-style deletion.
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Undelete clears a POP3-style deletion mark.
+  rpc Undelete(UndeleteRequest) returns (UndeleteResponse);
+
+  // Commit applies all POP3-style pending deletions and exits.
+  rpc Commit(CommitRequest) returns (CommitResponse);
+}
+
+// MessageInfo describes a single message in a folder.
+message MessageInfo {
+  // UID is the msgstore-assigned unique identifier.
+  uint32 uid = 1;
+
+  // Size is the message size in bytes.
+  int64 size = 2;
+
+  // Flags is the set of IMAP flags (e.g. \Seen, \Deleted, \Flagged).
+  repeated string flags = 3;
+}
+
+message ListRequest {
+  string folder = 1;
+}
+
+message ListResponse {
+  repeated MessageInfo messages = 1;
+}
+
+message StatRequest {
+  string folder = 1;
+}
+
+message StatResponse {
+  int32 count = 1;
+  int64 total_bytes = 2;
+}
+
+message FetchRequest {
+  string folder = 1;
+  uint32 uid = 2;
+}
+
+message FetchResponse {
+  // Message body chunk (up to 64KB per message).
+  bytes data = 1;
+}
+
+message FetchHeadersRequest {
+  string folder = 1;
+  uint32 uid = 2;
+
+  // Number of body lines to include after headers. 0 = headers only.
+  int32 body_lines = 3;
+}
+
+message FetchHeadersResponse {
+  bytes headers = 1;
+}
+
+message AppendRequest {
+  oneof payload {
+    // First message in the stream carries metadata.
+    AppendMetadata metadata = 1;
+
+    // Subsequent messages carry body chunks.
+    bytes data = 2;
+  }
+}
+
+message AppendMetadata {
+  string folder = 1;
+  repeated string flags = 2;
+
+  // Internal date as RFC 3339 string.
+  string date = 3;
+}
+
+message AppendResponse {
+  // The UID assigned to the newly stored message.
+  uint32 uid = 1;
+}
+
+message CopyRequest {
+  string folder = 1;
+  uint32 uid = 2;
+  string dest_folder = 3;
+}
+
+message CopyResponse {
+  uint32 new_uid = 1;
+}
+
+message MoveRequest {
+  uint32 uid = 1;
+  string src_folder = 2;
+  string dest_folder = 3;
+}
+
+message MoveResponse {
+  uint32 new_uid = 1;
+}
+
+message SetFlagsRequest {
+  string folder = 1;
+  uint32 uid = 2;
+  repeated string flags = 3;
+}
+
+message SetFlagsResponse {}
+
+message ExpungeRequest {
+  string folder = 1;
+}
+
+message ExpungeResponse {
+  // UIDs of messages that were permanently removed.
+  repeated uint32 expelled_uids = 1;
+}
+
+message RescanRequest {
+  string folder = 1;
+}
+
+message RescanResponse {
+  // Only messages that are new since the last List/Select/Rescan.
+  repeated MessageInfo new_messages = 1;
+}
+
+message UIDValidityRequest {
+  string folder = 1;
+}
+
+message UIDValidityResponse {
+  uint32 uid_validity = 1;
+  uint32 uid_next = 2;
+}
+
+message DeleteRequest {
+  uint32 uid = 1;
+}
+
+message DeleteResponse {}
+
+message UndeleteRequest {
+  uint32 uid = 1;
+}
+
+message UndeleteResponse {}
+
+message CommitRequest {}
+
+message CommitResponse {}

@@ -1,0 +1,82 @@
+syntax = "proto3";
+
+package mailsession.v1;
+
+option go_package = "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1";
+
+// DeliveryService handles inbound message delivery (replaces mail-deliver binary).
+// The delivery pipeline includes forwarding resolution, size checking, spam
+// checking, sieve evaluation, and final maildir write.
+service DeliveryService {
+  // Deliver processes an inbound message through the full delivery pipeline.
+  // Client-streaming: the first chunk carries delivery metadata (sender,
+  // recipient, etc.), subsequent chunks carry the raw message body.
+  rpc Deliver(stream DeliverRequest) returns (DeliverResponse);
+}
+
+// DeliverRequest is client-streaming: metadata first, then body chunks.
+message DeliverRequest {
+  oneof payload {
+    // First message in the stream carries delivery metadata.
+    DeliverMetadata metadata = 1;
+
+    // Subsequent messages carry raw message body chunks.
+    bytes data = 2;
+  }
+}
+
+// DeliverMetadata carries the envelope information for delivery.
+message DeliverMetadata {
+  // Sender is the MAIL FROM reverse-path (may be empty for bounces).
+  string sender = 1;
+
+  // Recipient is the RCPT TO forward-path (single recipient per delivery).
+  string recipient = 2;
+
+  // Client IP address of the submitting MTA.
+  string client_ip = 3;
+
+  // EHLO/HELO hostname from the submitting MTA.
+  string client_hostname = 4;
+
+  // When true, forwarding resolution is skipped (1-hop limit enforcement).
+  bool forwarded = 5;
+
+  // Identifies the recipient's public key for at-rest encryption.
+  // Empty means no encryption. Resolved by the KeyProvider in auth.
+  string encryption_key_hint = 6;
+
+  // When the message was accepted by the upstream daemon (RFC 3339).
+  string received_time = 7;
+}
+
+// DeliverResponse is the outcome of the delivery pipeline.
+message DeliverResponse {
+  // The delivery result.
+  DeliverResult result = 1;
+
+  // True for temporary failures (4xx); false for permanent (5xx).
+  // Only meaningful when result is REJECTED.
+  bool temporary = 2;
+
+  // Human-readable reason for rejection (logging only, not sent to remote MTA).
+  string reason = 3;
+
+  // Redirect target addresses when result is REDIRECTED.
+  repeated string redirect_addresses = 4;
+}
+
+// DeliverResult indicates the outcome of a delivery attempt.
+enum DeliverResult {
+  DELIVER_RESULT_UNSPECIFIED = 0;
+
+  // Message was successfully written to the maildir.
+  DELIVER_RESULT_DELIVERED = 1;
+
+  // Delivery was refused. Check temporary and reason fields.
+  DELIVER_RESULT_REJECTED = 2;
+
+  // Message should be delivered to redirect_addresses instead.
+  // The dispatcher re-delivers with forwarded=true (1-hop limit).
+  DELIVER_RESULT_REDIRECTED = 3;
+}

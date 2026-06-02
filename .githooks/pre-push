@@ -1,0 +1,18 @@
+#!/bin/bash
+#
+# Pre-push hook: run all checks (build, lint, vulncheck, test) before pushing.
+# Install with: task hooks:install
+
+set -e
+
+echo "Running pre-push checks..."
+
+if ! command -v task &> /dev/null; then
+    echo "Error: 'task' is not installed."
+    echo "Please install Task from https://taskfile.dev/installation/"
+    exit 1
+fi
+
+task all
+
+echo "All pre-push checks passed!"

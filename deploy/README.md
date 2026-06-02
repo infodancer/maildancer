@@ -63,12 +63,27 @@ it with a domain and user:
 auth-oidc serves discovery per owned domain (host-based routing); with zero
 domains, `/.well-known/openid-configuration` returns 404 until a domain exists.
 
-## TLS
+## Outbound relay & TLS
 
-The stack runs plaintext listeners (25/587, 110, 143) for local dev. The implicit
--TLS ports (465/995/993) are published but inactive until you add a `[server.tls]`
-block and the matching listeners, and mount certificates. Do not run plaintext
-submission/retrieval over an untrusted network.
+Inbound delivery and POP3/IMAP retrieval work out of the box over plaintext
+(25/587, 110, 143). **Outbound** relay by authenticated users additionally needs
+TLS, because smtpd only advertises `AUTH` after `STARTTLS` (it refuses plaintext
+credentials off-localhost). To enable authenticated submission:
+
+```bash
+./deploy/gen-dev-certs.sh              # self-signed dev cert into deploy/certs/
+# uncomment [server.tls] in deploy/config/config.toml
+docker compose up -d
+```
+
+The certs mount (`./deploy/certs:/etc/ssl/mail`) is already wired into smtpd/pop3d/
+imapd; it's empty until you run the script. The outbound queue is pre-configured
+(`[session-manager.queue]`), so once a user can authenticate, submitting to an
+external address enqueues to `mailqueue` and queue-manager drains it to mail-remote.
+
+The implicit-TLS ports (465/995/993) come up once `[server.tls]` is set and the
+matching listeners are added. Do not run plaintext submission/retrieval over an
+untrusted network.
 
 ## Notes
 

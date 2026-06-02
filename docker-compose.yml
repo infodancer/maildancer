@@ -66,6 +66,7 @@ services:
       # rw: connecting to the unix socket requires write access to the socket file.
       - sessmgr-sock:/run/infodancer
       - ./deploy/config/config.toml:/etc/infodancer/config.toml:ro
+      - ./deploy/certs:/etc/ssl/mail:ro   # empty until gen-dev-certs.sh; enables STARTTLS/AUTH
     depends_on: [session-manager, redis]
     networks: [mail]
     restart: unless-stopped
@@ -80,6 +81,7 @@ services:
     volumes:
       - sessmgr-sock:/run/infodancer
       - ./deploy/config/config.toml:/etc/infodancer/config.toml:ro
+      - ./deploy/certs:/etc/ssl/mail:ro
     depends_on: [session-manager]
     networks: [mail]
     restart: unless-stopped
@@ -94,6 +96,7 @@ services:
     volumes:
       - sessmgr-sock:/run/infodancer
       - ./deploy/config/config.toml:/etc/infodancer/config.toml:ro
+      - ./deploy/certs:/etc/ssl/mail:ro
     depends_on: [session-manager, redis]
     networks: [mail]
     restart: unless-stopped

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Pre-push hook: run vet and tests before pushing.
+set -e
+echo "Running pre-push checks..."
+go vet ./...
+go test -race -count=1 ./...
+echo "Pre-push checks passed."

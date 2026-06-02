@@ -1,0 +1,77 @@
+version: '3'
+
+vars:
+  BINARY: session-manager
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list
+
+  proto:
+    desc: Generate Go code from proto definitions
+    cmds:
+      - protoc --proto_path=proto --go_out=proto --go_opt=paths=source_relative --go-grpc_out=proto --go-grpc_opt=paths=source_relative sessionmanager/v1/session.proto
+    sources:
+      - proto/sessionmanager/v1/*.proto
+
+  build:
+    desc: Build the binary
+    deps: [proto]
+    cmds:
+      - go build -o {{.BINARY}} ./cmd/{{.BINARY}}
+
+  test:
+    desc: Run tests with race detector
+    cmds:
+      - go test -race -count=1 ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  fmt:
+    desc: Check formatting
+    cmds:
+      - test -z "$(gofmt -l .)"
+
+  fmt:fix:
+    desc: Fix formatting
+    cmds:
+      - gofmt -w .
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  vulncheck:
+    desc: Run govulncheck
+    cmds:
+      - govulncheck ./...
+
+  all:
+    desc: Run all CI checks (build, lint, vulncheck, test)
+    cmds:
+      - task: build
+      - task: lint
+      - task: vulncheck
+      - task: test
+
+  check:
+    desc: Alias for all
+    cmds:
+      - task: all
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -f {{.BINARY}}
+
+  hooks:install:
+    desc: Configure git to use the project hooks directory
+    cmds:
+      - git config core.hooksPath .githooks
+      - echo "Git hooks installed from .githooks directory"

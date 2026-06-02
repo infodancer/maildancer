@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package sessionmanager.v1;
+
+option go_package = "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1";
+
+// SessionService handles authentication, session lifecycle, and domain
+// validation. Protocol handlers call Login() for SMTP AUTH, ValidateRecipient()
+// for RCPT TO checks, and Logout() when the protocol session ends.
+service SessionService {
+  // Login authenticates a user and establishes a mail-session.
+  // If the user already has an active mail-session, it is reused
+  // (reference-counted).
+  rpc Login(LoginRequest) returns (LoginResponse);
+
+  // Logout ends a protocol handler's use of a session.
+  // When the last reference is released, an idle timer starts;
+  // if no new Login arrives before it fires, the mail-session
+  // process is terminated.
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+
+  // ValidateRecipient checks whether a recipient address is deliverable.
+  // Used by smtpd at RCPT TO time to determine if the domain is local
+  // and whether the user exists.
+  rpc ValidateRecipient(ValidateRecipientRequest) returns (ValidateRecipientResponse);
+}
+
+message LoginRequest {
+  // Fully-qualified username (localpart@domain or localpart+ext@domain).
+  string username = 1;
+
+  // Password (plaintext over the unix socket / mTLS channel).
+  string password = 2;
+}
+
+message LoginResponse {
+  // Opaque session token. Include as "session-token" gRPC metadata
+  // on all subsequent proxied RPCs.
+  string session_token = 1;
+
+  // The authenticated mailbox identifier (base@domain, subaddress stripped).
+  string mailbox = 2;
+
+  // Subaddress extension (e.g. "ext" from "user+ext@domain"). Empty if none.
+  string extension = 3;
+
+  // Per-domain sender rate limit. 0 means no domain-specific limit
+  // (use the global default).
+  int32 max_sends_per_hour = 4;
+}
+
+message LogoutRequest {
+  string session_token = 1;
+}
+
+message LogoutResponse {}
+
+message ValidateRecipientRequest {
+  // Fully-qualified recipient address (user@domain).
+  string address = 1;
+}
+
+message ValidateRecipientResponse {
+  // True if this server handles the recipient's domain.
+  bool domain_is_local = 1;
+
+  // True if the user exists in the domain. Only meaningful when
+  // domain_is_local is true.
+  bool user_exists = 2;
+
+  // True if unknown-user rejection should be deferred to after DATA
+  // (hides address validity). False means reject at RCPT TO.
+  bool defer_rejection = 3;
+}

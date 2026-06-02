@@ -1,0 +1,149 @@
+{{define "create-domain-form"}}
+<article>
+  <form hx-post="/api/domains" hx-target="#create-form" hx-swap="innerHTML"
+        hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-on::after-request="if(event.detail.successful) location.reload()">
+    <div class="grid">
+      <label>
+        Domain name
+        <input type="text" name="name" placeholder="example.com" required pattern="[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+">
+      </label>
+    </div>
+    <div class="grid">
+      <button type="submit">Create Domain</button>
+      <button type="button" class="secondary" onclick="this.closest('article').remove()">Cancel</button>
+    </div>
+  </form>
+</article>
+{{end}}
+
+{{define "confirm-delete-domain"}}
+<tr>
+  <td colspan="7">
+    <div class="confirm-delete">
+      <p><strong>Delete {{.Name}}?</strong> This cannot be undone.
+        {{if gt .UserCount 0}} This domain has {{.UserCount}} user{{if ne .UserCount 1}}s{{end}}.{{end}}</p>
+      <form style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <button class="secondary" style="padding:0.25em 0.5em;font-size:0.875rem"
+                hx-delete="/api/domains/{{.Name}}?confirm=true"
+                hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
+                hx-target="#domain-{{.Name}}"
+                hx-swap="outerHTML swap:1s"
+                hx-on::after-request="if(event.detail.successful) this.closest('tr').previousElementSibling.remove(); this.closest('tr').remove();">
+          Confirm Delete</button>
+        <button type="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem"
+                onclick="this.closest('tr').remove()">Cancel</button>
+      </form>
+    </div>
+  </td>
+</tr>
+{{end}}
+
+{{define "create-user-form"}}
+<article>
+  <form hx-post="/api/domains/{{.Domain}}/users" hx-target="#create-user-form" hx-swap="innerHTML"
+        hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-on::after-request="if(event.detail.successful) location.reload()">
+    <div class="grid">
+      <label>
+        Username
+        <input type="text" name="username" required pattern="[a-zA-Z][a-zA-Z0-9._-]*" placeholder="alice">
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" required minlength="8" placeholder="min 8 characters">
+      </label>
+    </div>
+    <label>
+      <input type="checkbox" name="generate_keys" value="true">
+      Generate encryption keys
+    </label>
+    <div class="grid">
+      <button type="submit">Create User</button>
+      <button type="button" class="secondary" onclick="this.closest('article').remove()">Cancel</button>
+    </div>
+  </form>
+</article>
+{{end}}
+
+{{define "confirm-delete-user"}}
+<tr>
+  <td colspan="5">
+    <div class="confirm-delete">
+      <p><strong>Delete user {{.Username}}?</strong> This cannot be undone.</p>
+      <button class="secondary" style="padding:0.25em 0.5em;font-size:0.875rem"
+              hx-delete="/api/domains/{{.Domain}}/users/{{.Username}}"
+              hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'
+              hx-on::after-request="if(event.detail.successful) location.reload()">
+        Confirm Delete</button>
+      <button type="button" class="outline" style="padding:0.25em 0.5em;font-size:0.875rem"
+              onclick="this.closest('tr').remove()">Cancel</button>
+    </div>
+  </td>
+</tr>
+{{end}}
+
+{{define "reset-password-form"}}
+<tr>
+  <td colspan="5">
+    <article style="margin:0.5rem 0">
+      <form hx-put="/api/domains/{{.Domain}}/users/{{.Username}}/password"
+            hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+            hx-on::after-request="if(event.detail.successful) this.closest('tr').remove()">
+        <div class="grid" style="align-items:end">
+          <label>
+            New password for {{.Username}}
+            <input type="password" name="password" required minlength="8">
+          </label>
+          <button type="submit" style="margin-bottom:0">Reset</button>
+          <button type="button" class="secondary" style="margin-bottom:0" onclick="this.closest('tr').remove()">Cancel</button>
+        </div>
+      </form>
+    </article>
+  </td>
+</tr>
+{{end}}
+
+{{define "generate-keys-form"}}
+<tr>
+  <td colspan="5">
+    <article style="margin:0.5rem 0">
+      <form hx-post="/api/domains/{{.Domain}}/users/{{.Username}}/keys"
+            hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+            hx-on::after-request="if(event.detail.successful) location.reload()">
+        <div class="grid" style="align-items:end">
+          <label>
+            Password for {{.Username}} (to encrypt private key)
+            <input type="password" name="password" required minlength="8">
+          </label>
+          <button type="submit" style="margin-bottom:0">Generate Keys</button>
+          <button type="button" class="secondary" style="margin-bottom:0" onclick="this.closest('tr').remove()">Cancel</button>
+        </div>
+      </form>
+    </article>
+  </td>
+</tr>
+{{end}}
+
+{{define "generate-domain-keys-form"}}
+<article style="margin:0.5rem 0">
+  <form hx-post="/api/domains/{{.Domain}}/keys"
+        hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}' hx-ext="json-enc"
+        hx-on::after-request="if(event.detail.successful) location.reload()">
+    <div class="grid" style="align-items:end">
+      <label>
+        Domain key password (to encrypt private key)
+        <input type="password" name="password" required minlength="8" placeholder="min 8 characters">
+      </label>
+      <button type="submit" style="margin-bottom:0">Generate Domain Keys</button>
+      <button type="button" class="secondary" style="margin-bottom:0"
+              onclick="this.closest('article').remove()">Cancel</button>
+    </div>
+  </form>
+</article>
+{{end}}
+
+{{define "user-stats"}}{{.Count}} msg{{if ne .Count 1}}s{{end}}<script>
+document.getElementById('size-{{.Username}}').textContent = '{{.SizeHuman}}';
+</script>{{end}}

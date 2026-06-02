@@ -1,0 +1,46 @@
+# Web Admin Configuration
+#
+# webadmin reads its own settings from the [webadmin] section of the shared
+# mail server config file (the same file used by smtpd, pop3d, etc.).
+# Pass the path to that file as the -config argument when starting webadmin.
+#
+# webadmin can also read and write rspamd connection settings directly in the
+# [spamcheck] section of the shared config, so smtpd picks them up automatically.
+
+[webadmin]
+listen_address = "localhost:8080"
+domains_path = "/etc/mail/domains"
+log_level = "info"
+
+[webadmin.auth]
+passwd_file = "/etc/mail/admin-passwd"
+
+# Optional: RBAC roles file. If omitted, all authenticated admins have super_admin access.
+# roles_file = "/etc/mail/admin-roles.toml"
+
+[webadmin.audit]
+# Optional: write JSON audit log lines to this file. If omitted, audit events go to slog only.
+# log_file = "/var/log/webadmin/audit.log"
+
+[webadmin.session]
+timeout_minutes = 30
+
+# Optional TLS configuration
+# [webadmin.tls]
+# cert_file = "/etc/ssl/certs/mail.pem"
+# key_file = "/etc/ssl/private/mail.key"
+
+# Optional: Prometheus integration for mail server stats on the dashboard.
+# List all Prometheus instances; results are aggregated across them.
+# [webadmin.prometheus]
+# urls = ["http://prometheus:9090"]
+
+# rspamd connection settings live in [spamcheck] alongside smtpd's config.
+# webadmin edits these in-place when the super_admin saves settings.
+# [spamcheck]
+# enabled = true
+#
+# [[spamcheck.checkers]]
+# type = "rspamd"
+# url = "http://localhost:11334"
+# password = "your-rspamd-password"

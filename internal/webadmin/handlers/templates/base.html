@@ -1,0 +1,83 @@
+{{define "base"}}<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{template "title" .}} - Mail Admin</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/htmx-ext-json-enc@2.0.1/json-enc.js"></script>
+  <style>
+    .flash { padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
+    .flash-success { background: var(--pico-ins-color); color: var(--pico-color); }
+    .flash-error { background: var(--pico-del-color); color: var(--pico-color); }
+    .stats-cell { font-variant-numeric: tabular-nums; }
+    .actions { display: flex; gap: 0.5rem; align-items: center; }
+    .actions form { margin: 0; }
+    .actions button { margin: 0; padding: 0.25em 0.5em; font-size: 0.875rem; }
+    kbd.badge { font-size: 0.75rem; padding: 0.15em 0.4em; border-radius: 4px; }
+    kbd.badge-yes { background: var(--pico-ins-color); }
+    kbd.badge-no { background: var(--pico-secondary-background); }
+    kbd.badge-warn { background: var(--pico-mark-background-color); }
+    kbd.badge-err { background: var(--pico-del-color); }
+    .confirm-delete { background: var(--pico-del-color); padding: 1rem; border-radius: 4px; margin: 0.5rem 0; }
+    .confirm-delete p { margin-bottom: 0.5rem; }
+    [hx-indicator] .htmx-indicator { display: none; }
+    [hx-indicator] .htmx-request .htmx-indicator { display: inline; }
+  </style>
+</head>
+<body>
+  <nav class="container">
+    <ul><li><a href="/"><strong>Mail Admin</strong></a></li></ul>
+    <ul>
+      {{if .Username}}
+      <li><a href="/settings" class="secondary">Settings</a></li>
+      <li>{{.Username}}</li>
+      <li>
+        <form method="post" action="/logout" style="margin:0">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <button type="submit" class="outline secondary" style="margin:0;padding:0.25em 0.5em">Logout</button>
+        </form>
+      </li>
+      {{end}}
+    </ul>
+  </nav>
+  <main class="container">
+    {{if .Flash}}
+    <div class="flash flash-{{.FlashType}}">{{.Flash}}</div>
+    {{end}}
+    {{template "content" .}}
+  </main>
+  <script>
+    // Display API error responses as flash messages
+    document.body.addEventListener('htmx:responseError', function(e) {
+      var msg = 'Request failed';
+      try {
+        var data = JSON.parse(e.detail.xhr.responseText);
+        if (data.error) msg = data.error;
+      } catch(ignored) {}
+      showFlash(msg, 'error');
+    });
+    document.body.addEventListener('htmx:afterRequest', function(e) {
+      if (e.detail.failed && e.detail.xhr) {
+        var msg = 'Request failed';
+        try {
+          var data = JSON.parse(e.detail.xhr.responseText);
+          if (data.error) msg = data.error;
+        } catch(ignored) {}
+        showFlash(msg, 'error');
+      }
+    });
+    function showFlash(msg, type) {
+      var existing = document.querySelector('.flash');
+      if (existing) existing.remove();
+      var div = document.createElement('div');
+      div.className = 'flash flash-' + type;
+      div.textContent = msg;
+      var main = document.querySelector('main.container');
+      main.insertBefore(div, main.firstChild);
+      setTimeout(function() { div.remove(); }, 5000);
+    }
+  </script>
+</body>
+</html>{{end}}

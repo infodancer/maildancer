@@ -1,0 +1,21 @@
+# Run from the parent infodancer/ directory:
+#   docker compose -f webadmin/docker-compose.example.yml up --build
+
+services:
+  webadmin:
+    build:
+      context: ..
+      dockerfile: webadmin/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      # Configuration file
+      - ./webadmin/webadmin.toml.docker:/etc/webadmin/webadmin.toml:ro
+      # Mail domain directories (read/write for user and domain management)
+      - /var/mail/domains:/var/mail/domains
+      # Admin credentials file
+      - ./webadmin/admin-passwd:/etc/webadmin/admin-passwd:ro
+      # Optional: TLS certificates
+      # - /etc/ssl/certs/mail.pem:/etc/ssl/certs/mail.pem:ro
+      # - /etc/ssl/private/mail.key:/etc/ssl/private/mail.key:ro
+    restart: unless-stopped

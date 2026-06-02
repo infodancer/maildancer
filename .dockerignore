@@ -1,0 +1,7 @@
+# Keep the build context small. Source is still fully copied; these are
+# artifacts and VCS data the build never needs.
+.git
+bin/
+coverage.out
+coverage.html
+*.bak

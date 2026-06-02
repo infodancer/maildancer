@@ -1,0 +1,20 @@
+This is an automatically generated Delivery Status Notification.
+
+Delivery to the following recipient has failed permanently:
+
+    {{.Recipient}}
+
+Technical details:
+{{- if .RemoteMTA}}
+    Remote server: {{.RemoteMTA}}
+{{- end}}
+    Response:      {{.Diagnostic}}
+
+The message{{if .MessageID}} (ID: {{.MessageID}}){{end}} was queued{{if .QueuedAt}} on {{.QueuedAt}}{{end}} and all delivery
+attempts have been exhausted{{if .ExpiredAt}} (TTL expired {{.ExpiredAt}}){{end}}.
+
+No further delivery attempts will be made. If this message was important,
+consider contacting the recipient through another channel to verify their
+address.
+
+-- {{.Hostname}} mail delivery system

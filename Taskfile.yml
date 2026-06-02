@@ -77,3 +77,18 @@ tasks:
     cmds:
       - git config core.hooksPath .githooks
       - echo "Git hooks installed from .githooks directory"
+
+  docker:build:
+    desc: Build all service images (usage; or docker:build:smtpd for one)
+    cmds:
+      - for: { var: SERVICES }
+        cmd: docker build -f docker/{{.ITEM}}.Dockerfile -t maildancer-{{.ITEM}}:latest .
+    vars:
+      SERVICES: smtpd pop3d imapd session-manager queue-manager webadmin auth-oidc
+
+  docker:build:*:
+    desc: Build a single service image (e.g. task docker:build:smtpd)
+    vars:
+      SERVICE: '{{index .MATCH 0}}'
+    cmds:
+      - docker build -f docker/{{.SERVICE}}.Dockerfile -t maildancer-{{.SERVICE}}:latest .

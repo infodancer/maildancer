@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/infodancer/auth"
+	"github.com/infodancer/maildancer/auth"
 	"golang.org/x/crypto/nacl/box"
 )
 

@@ -11,7 +11,6 @@ require (
 	github.com/emersion/go-msgauth v0.7.0
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.24.0
-	github.com/infodancer/auth v0.1.16
 	github.com/infodancer/logging v0.1.0
 	github.com/lestrrat-go/jwx/v2 v2.1.6
 	github.com/pelletier/go-toml/v2 v2.2.4

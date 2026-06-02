@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/crypto/nacl/box"
 
-	autherrors "github.com/infodancer/auth/errors"
+	autherrors "github.com/infodancer/maildancer/auth/errors"
 )
 
 // mockDeliveryAgent records deliveries for testing.

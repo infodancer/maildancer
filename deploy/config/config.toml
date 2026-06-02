@@ -1,0 +1,95 @@
+# maildancer shared config — read by smtpd, pop3d, imapd, session-manager,
+# queue-manager (each consumes its own sections). Mounted at
+# /etc/infodancer/config.toml. This is a local-dev starting point; review
+# against each daemon's *.toml.example and config structs before production.
+
+[server]
+hostname = "mail.example.com"
+# Per-domain directories (config.toml, passwd, keys) and mail data.
+domains_path = "/var/mail/domains"
+domains_data_path = "/var/mail/domains"
+maildir = "/var/mail/domains"
+
+# Shared Redis — greylisting (smtpd) and IMAP notifications (imapd).
+[redis]
+url = "redis://redis:6379/1"
+
+# session-manager: daemons CONNECT to this socket; session-manager LISTENS on it.
+[session-manager]
+socket = "/run/infodancer/session-manager.sock"
+domains_path = "/var/mail/domains"
+domains_data_path = "/var/mail/domains"
+mail_session_cmd = "/mail-session"
+idle_timeout = "5m"
+
+[session-manager.auth]
+agent_type = "passwd"
+credential_backend = "passwd"   # passwd filename within each domain dir
+key_backend = "keys"            # key store dir within each domain dir
+
+[smtpd]
+log_level = "info"
+
+[smtpd.limits]
+max_message_size = 26214400  # 25 MB
+max_recipients = 100
+
+[smtpd.timeouts]
+connection = "5m"
+command = "1m"
+
+# Plaintext listeners for no-cert local dev. Add the smtps (465) listener and
+# [server.tls] once you mount certificates.
+[[smtpd.listeners]]
+address = ":25"
+mode = "smtp"
+
+[[smtpd.listeners]]
+address = ":587"
+mode = "submission"
+
+[smtpd.metrics]
+enabled = true
+address = ":9100"
+path = "/metrics"
+
+[pop3d]
+log_level = "info"
+
+[pop3d.timeouts]
+connection = "10m"
+command = "1m"
+idle = "30m"
+
+[pop3d.limits]
+max_connections = 100
+
+[[pop3d.listeners]]
+address = ":110"
+mode = "pop3"
+
+[pop3d.metrics]
+enabled = true
+address = ":9101"
+path = "/metrics"
+
+[imapd]
+log_level = "info"
+
+[[imapd.listeners]]
+address = ":143"
+mode = "imap"
+
+[imapd.metrics]
+enabled = true
+address = ":9102"
+path = "/metrics"
+
+# Outbound delivery. "direct" does MX-based delivery; set "smarthost" to relay.
+[queue-manager]
+
+[queue-manager.outbound]
+strategy = "direct"
+
+[queue-manager.queue]
+path = "/var/spool/mail-queue"

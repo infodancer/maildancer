@@ -1,0 +1,7 @@
+# auth-oidc config (mounted at /etc/auth-oidc/config.toml). Leaf OIDC IdP for
+# owned mail domains; authenticates against per-domain passwd files.
+[server]
+listen = "0.0.0.0:9000"
+data_dir = "/var/lib/auth-oidc"
+# Served domains are loaded from the per-domain data directory.
+domain_data_path = "/var/mail/domains"

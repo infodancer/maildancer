@@ -371,7 +371,7 @@ const file_mailsession_v1_folders_proto_rawDesc = "" +
 	"\vListFolders\x12\".mailsession.v1.ListFoldersRequest\x1a#.mailsession.v1.ListFoldersResponse\x12Y\n" +
 	"\fCreateFolder\x12#.mailsession.v1.CreateFolderRequest\x1a$.mailsession.v1.CreateFolderResponse\x12Y\n" +
 	"\fDeleteFolder\x12#.mailsession.v1.DeleteFolderRequest\x1a$.mailsession.v1.DeleteFolderResponse\x12Y\n" +
-	"\fRenameFolder\x12#.mailsession.v1.RenameFolderRequest\x1a$.mailsession.v1.RenameFolderResponseB9Z7github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
+	"\fRenameFolder\x12#.mailsession.v1.RenameFolderRequest\x1a$.mailsession.v1.RenameFolderResponseBMZKgithub.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
 
 var (
 	file_mailsession_v1_folders_proto_rawDescOnce sync.Once

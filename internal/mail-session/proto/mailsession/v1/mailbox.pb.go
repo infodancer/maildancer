@@ -1567,7 +1567,7 @@ const file_mailsession_v1_mailbox_proto_rawDesc = "" +
 	"\vUIDValidity\x12\".mailsession.v1.UIDValidityRequest\x1a#.mailsession.v1.UIDValidityResponse\x12G\n" +
 	"\x06Delete\x12\x1d.mailsession.v1.DeleteRequest\x1a\x1e.mailsession.v1.DeleteResponse\x12M\n" +
 	"\bUndelete\x12\x1f.mailsession.v1.UndeleteRequest\x1a .mailsession.v1.UndeleteResponse\x12G\n" +
-	"\x06Commit\x12\x1d.mailsession.v1.CommitRequest\x1a\x1e.mailsession.v1.CommitResponseB9Z7github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
+	"\x06Commit\x12\x1d.mailsession.v1.CommitRequest\x1a\x1e.mailsession.v1.CommitResponseBMZKgithub.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
 
 var (
 	file_mailsession_v1_mailbox_proto_rawDescOnce sync.Once

@@ -365,7 +365,7 @@ const file_sessionmanager_v1_session_proto_rawDesc = "" +
 	"\x0eSessionService\x12J\n" +
 	"\x05Login\x12\x1f.sessionmanager.v1.LoginRequest\x1a .sessionmanager.v1.LoginResponse\x12M\n" +
 	"\x06Logout\x12 .sessionmanager.v1.LogoutRequest\x1a!.sessionmanager.v1.LogoutResponse\x12n\n" +
-	"\x11ValidateRecipient\x12+.sessionmanager.v1.ValidateRecipientRequest\x1a,.sessionmanager.v1.ValidateRecipientResponseB?Z=github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1b\x06proto3"
+	"\x11ValidateRecipient\x12+.sessionmanager.v1.ValidateRecipientRequest\x1a,.sessionmanager.v1.ValidateRecipientResponseBSZQgithub.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1b\x06proto3"
 
 var (
 	file_sessionmanager_v1_session_proto_rawDescOnce sync.Once

@@ -366,7 +366,7 @@ const file_mailsession_v1_delivery_proto_rawDesc = "" +
 	"\x17DELIVER_RESULT_REJECTED\x10\x02\x12\x1d\n" +
 	"\x19DELIVER_RESULT_REDIRECTED\x10\x032_\n" +
 	"\x0fDeliveryService\x12L\n" +
-	"\aDeliver\x12\x1e.mailsession.v1.DeliverRequest\x1a\x1f.mailsession.v1.DeliverResponse(\x01B9Z7github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
+	"\aDeliver\x12\x1e.mailsession.v1.DeliverRequest\x1a\x1f.mailsession.v1.DeliverResponse(\x01BMZKgithub.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
 
 var (
 	file_mailsession_v1_delivery_proto_rawDescOnce sync.Once

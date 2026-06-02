@@ -333,7 +333,7 @@ const file_mailsession_v1_watch_proto_rawDesc = "" +
 	"\x03uid\x18\x01 \x01(\rR\x03uid\x12\x14\n" +
 	"\x05flags\x18\x02 \x03(\tR\x05flags2S\n" +
 	"\fWatchService\x12C\n" +
-	"\x05Watch\x12\x1c.mailsession.v1.WatchRequest\x1a\x1a.mailsession.v1.WatchEvent0\x01B9Z7github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
+	"\x05Watch\x12\x1c.mailsession.v1.WatchRequest\x1a\x1a.mailsession.v1.WatchEvent0\x01BMZKgithub.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
 
 var (
 	file_mailsession_v1_watch_proto_rawDescOnce sync.Once

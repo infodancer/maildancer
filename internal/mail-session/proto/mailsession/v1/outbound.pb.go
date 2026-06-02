@@ -226,7 +226,7 @@ const file_mailsession_v1_outbound_proto_rawDesc = "" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId2_\n" +
 	"\x0fOutboundService\x12L\n" +
-	"\aEnqueue\x12\x1e.mailsession.v1.EnqueueRequest\x1a\x1f.mailsession.v1.EnqueueResponse(\x01B9Z7github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
+	"\aEnqueue\x12\x1e.mailsession.v1.EnqueueRequest\x1a\x1f.mailsession.v1.EnqueueResponse(\x01BMZKgithub.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1b\x06proto3"
 
 var (
 	file_mailsession_v1_outbound_proto_rawDescOnce sync.Once

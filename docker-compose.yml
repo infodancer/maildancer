@@ -1,0 +1,155 @@
+# maildancer — full mail-suite stack for local development / deploy validation.
+#
+#   docker compose up -d
+#
+# session-manager is the hub: it owns mail storage and the outbound queue, and
+# listens on a unix socket shared (via the sessmgr-sock volume) with the
+# protocol daemons. smtpd/pop3d/imapd reach storage ONLY through that socket —
+# they never mount maildata, matching the depguard privilege-separation boundary.
+#
+# This is a topology scaffold: full mail flow also needs a provisioned domain/user
+# (see deploy/README.md) and, for the TLS listeners, certificates.
+name: maildancer
+
+services:
+  # One-shot: ensure the domains directory exists in the maildata volume so the
+  # services that read it start cleanly on a fresh (empty) volume.
+  init:
+    image: alpine:3
+    command: ["sh", "-c", "mkdir -p /var/mail/domains && chmod 755 /var/mail/domains"]
+    volumes:
+      - maildata:/var/mail
+    restart: "no"
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    networks: [mail]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # The hub. Owns maildata + the outbound queue; spawns the bundled mail-session
+  # per user (so it runs as root to set per-user uid/gid). Creates the socket
+  # other daemons connect to.
+  session-manager:
+    build:
+      context: .
+      dockerfile: docker/session-manager.Dockerfile
+    volumes:
+      - maildata:/var/mail
+      - mailqueue:/var/spool/mail-queue
+      - sessmgr-sock:/run/infodancer
+      - ./deploy/config/config.toml:/etc/infodancer/config.toml:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    networks: [mail]
+    restart: unless-stopped
+
+  smtpd:
+    build:
+      context: .
+      dockerfile: docker/smtpd.Dockerfile
+    ports:
+      - "25:25"     # smtp
+      - "587:587"   # submission
+      - "465:465"   # smtps (needs TLS certs configured)
+    volumes:
+      # rw: connecting to the unix socket requires write access to the socket file.
+      - sessmgr-sock:/run/infodancer
+      - ./deploy/config/config.toml:/etc/infodancer/config.toml:ro
+    depends_on: [session-manager, redis]
+    networks: [mail]
+    restart: unless-stopped
+
+  pop3d:
+    build:
+      context: .
+      dockerfile: docker/pop3d.Dockerfile
+    ports:
+      - "110:110"   # pop3
+      - "995:995"   # pop3s (needs TLS certs configured)
+    volumes:
+      - sessmgr-sock:/run/infodancer
+      - ./deploy/config/config.toml:/etc/infodancer/config.toml:ro
+    depends_on: [session-manager]
+    networks: [mail]
+    restart: unless-stopped
+
+  imapd:
+    build:
+      context: .
+      dockerfile: docker/imapd.Dockerfile
+    ports:
+      - "143:143"   # imap
+      - "993:993"   # imaps (needs TLS certs configured)
+    volumes:
+      - sessmgr-sock:/run/infodancer
+      - ./deploy/config/config.toml:/etc/infodancer/config.toml:ro
+    depends_on: [session-manager, redis]
+    networks: [mail]
+    restart: unless-stopped
+
+  # Drains the shared outbound queue and invokes the bundled mail-remote.
+  queue-manager:
+    build:
+      context: .
+      dockerfile: docker/queue-manager.Dockerfile
+    volumes:
+      - mailqueue:/var/spool/mail-queue
+      - ./deploy/config/config.toml:/etc/infodancer/config.toml:ro
+    depends_on: [session-manager]
+    networks: [mail]
+    restart: unless-stopped
+
+  webadmin:
+    build:
+      context: .
+      dockerfile: docker/webadmin.Dockerfile
+    ports:
+      - "8080:8080"
+    command: ["--config", "/etc/webadmin/webadmin.toml"]
+    volumes:
+      - maildata:/var/mail
+      - ./deploy/config/webadmin.toml:/etc/webadmin/webadmin.toml:ro
+      - ./deploy/config/admin-passwd:/etc/webadmin/admin-passwd:ro
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks: [mail]
+    restart: unless-stopped
+
+  auth-oidc:
+    build:
+      context: .
+      dockerfile: docker/auth-oidc.Dockerfile
+    ports:
+      - "9000:9000"
+    volumes:
+      - maildata:/var/mail:ro          # reads per-domain passwd files for auth
+      - authoidc-data:/var/lib/auth-oidc
+      - ./deploy/config/auth-oidc.toml:/etc/auth-oidc/config.toml:ro
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    networks: [mail]
+    restart: unless-stopped
+
+networks:
+  mail:
+    driver: bridge
+
+volumes:
+  maildata:
+  mailqueue:
+  sessmgr-sock:
+  redis-data:
+  authoidc-data:

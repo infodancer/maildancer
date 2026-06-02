@@ -1,0 +1,2 @@
+# webadmin admin users (one per line). Create a real admin with the auth
+# passwd format before relying on the UI. Placeholder so the bind-mount works.

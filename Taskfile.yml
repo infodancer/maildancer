@@ -1,0 +1,79 @@
+version: '3'
+
+vars:
+  BUILD_DIR: ./bin
+
+tasks:
+  default:
+    desc: Run all checks (build, lint, vulncheck, test)
+    cmds:
+      - task: all
+
+  build:
+    desc: Build all binaries into ./bin
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - for: { var: BINARIES }
+        cmd: go build -o {{.BUILD_DIR}}/{{.ITEM}} ./cmd/{{.ITEM}}
+    vars:
+      BINARIES:
+        sh: ls cmd
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  vulncheck:
+    desc: Run govulncheck for security vulnerabilities
+    cmds:
+      - govulncheck ./...
+
+  test:
+    desc: Run tests with the race detector
+    cmds:
+      - go test -race -count=1 ./...
+
+  test:coverage:
+    desc: Run tests with coverage
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+
+  fmt:
+    desc: Check formatting
+    cmds:
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "Files not formatted:"; echo "$unformatted"; exit 1
+        fi
+
+  all:
+    desc: Run all checks (build, lint, vulncheck, test)
+    cmds:
+      - task: build
+      - task: lint
+      - cmd: task vulncheck
+        ignore_error: true
+      - task: test
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+      - rm -f coverage.out coverage.html
+
+  install:deps:
+    desc: Install development dependencies
+    cmds:
+      - go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+      - go install golang.org/x/vuln/cmd/govulncheck@latest
+      - go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+      - go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+  hooks:install:
+    desc: Configure git to use the project hooks directory
+    cmds:
+      - git config core.hooksPath .githooks
+      - echo "Git hooks installed from .githooks directory"

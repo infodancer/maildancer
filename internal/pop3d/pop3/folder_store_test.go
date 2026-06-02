@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
+	"github.com/infodancer/maildancer/msgstore"
 )
 
 // mockFolderStore implements both msgstore.MessageStore and msgstore.FolderStore.

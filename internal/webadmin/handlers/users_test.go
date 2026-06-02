@@ -27,7 +27,9 @@ func TestHandleListUsers_Empty(t *testing.T) {
 	createTestDomain(t, dir, "example.com")
 
 	// Overwrite with empty passwd
-	os.WriteFile(filepath.Join(dir, "example.com", "passwd"), []byte("# Users\n"), 0o640)
+	if err := os.WriteFile(filepath.Join(dir, "example.com", "passwd"), []byte("# Users\n"), 0o640); err != nil {
+		t.Fatalf("write passwd: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/domains/example.com/users", nil)
 	req.SetPathValue("domain", "example.com")
@@ -39,7 +41,9 @@ func TestHandleListUsers_Empty(t *testing.T) {
 	}
 
 	var users []UserSummary
-	json.NewDecoder(rr.Body).Decode(&users)
+	if err := json.NewDecoder(rr.Body).Decode(&users); err != nil {
+		t.Fatalf("decode users: %v", err)
+	}
 	if len(users) != 0 {
 		t.Errorf("expected 0 users, got %d", len(users))
 	}
@@ -59,7 +63,9 @@ func TestHandleListUsers_WithUsers(t *testing.T) {
 	}
 
 	var users []UserSummary
-	json.NewDecoder(rr.Body).Decode(&users)
+	if err := json.NewDecoder(rr.Body).Decode(&users); err != nil {
+		t.Fatalf("decode users: %v", err)
+	}
 	if len(users) != 1 {
 		t.Fatalf("expected 1 user, got %d", len(users))
 	}
@@ -249,7 +255,9 @@ func TestHandleGetKeys(t *testing.T) {
 	}
 
 	var result map[string]any
-	json.NewDecoder(rr.Body).Decode(&result)
+	if err := json.NewDecoder(rr.Body).Decode(&result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
 	if result["encryption_enabled"] != false {
 		t.Error("expected encryption_enabled=false without keys")
 	}

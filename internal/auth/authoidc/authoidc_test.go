@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infodancer/maildancer/internal/auth/authoidc"
 	"github.com/infodancer/maildancer/auth/passwd"
+	"github.com/infodancer/maildancer/internal/auth/authoidc"
 )
 
 const testHost = "auth.test.example" // resolves → "test.example" via label-strip

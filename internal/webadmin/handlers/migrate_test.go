@@ -217,7 +217,9 @@ func TestMigrateUIDs_Idempotent(t *testing.T) {
 		t.Fatalf("first run: expected 200, got %d", rr1.Code)
 	}
 	var result1 migrateResult
-	json.NewDecoder(rr1.Body).Decode(&result1)
+	if err := json.NewDecoder(rr1.Body).Decode(&result1); err != nil {
+		t.Fatalf("decode result1: %v", err)
+	}
 
 	// Record gid from first run (stored in data volume).
 	dataConfigPath := filepath.Join(dataDir, "example.com", "config.toml")
@@ -232,7 +234,9 @@ func TestMigrateUIDs_Idempotent(t *testing.T) {
 		t.Fatalf("second run: expected 200, got %d", rr2.Code)
 	}
 	var result2 migrateResult
-	json.NewDecoder(rr2.Body).Decode(&result2)
+	if err := json.NewDecoder(rr2.Body).Decode(&result2); err != nil {
+		t.Fatalf("decode result2: %v", err)
+	}
 
 	// Second run should report 0 domains migrated (already done).
 	if result2.DomainsMigrated != 0 {

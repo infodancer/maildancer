@@ -14,8 +14,8 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/infodancer/maildancer/internal/mail-session/deliver"
-	"github.com/infodancer/maildancer/internal/mail-session/session"
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	"github.com/infodancer/maildancer/internal/mail-session/session"
 )
 
 // Server holds the gRPC server and the shared session state.

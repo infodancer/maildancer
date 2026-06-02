@@ -17,10 +17,10 @@ import (
 	gosieve "git.sr.ht/~emersion/go-sieve"
 	"github.com/infodancer/maildancer/auth/domain"
 	_ "github.com/infodancer/maildancer/auth/passwd"
-	mderrors "github.com/infodancer/maildancer/internal/mail-deliver/errors"
 	"github.com/infodancer/maildancer/internal/mail-deliver/config"
-	"github.com/infodancer/maildancer/internal/mail-deliver/rspamd"
+	mderrors "github.com/infodancer/maildancer/internal/mail-deliver/errors"
 	"github.com/infodancer/maildancer/internal/mail-deliver/protocol"
+	"github.com/infodancer/maildancer/internal/mail-deliver/rspamd"
 	"github.com/infodancer/maildancer/msgstore"
 	_ "github.com/infodancer/maildancer/msgstore/maildir"
 )

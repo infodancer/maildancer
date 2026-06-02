@@ -29,9 +29,9 @@ import (
 	"strings"
 	"time"
 
-	mderrors "github.com/infodancer/maildancer/internal/mail-deliver/errors"
 	"github.com/infodancer/maildancer/internal/mail-deliver/config"
 	"github.com/infodancer/maildancer/internal/mail-deliver/deliver"
+	mderrors "github.com/infodancer/maildancer/internal/mail-deliver/errors"
 	"github.com/infodancer/maildancer/internal/mail-deliver/protocol"
 )
 

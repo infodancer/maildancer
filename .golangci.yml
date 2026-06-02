@@ -1,0 +1,117 @@
+version: "2"
+
+# Consolidated from the per-repo configs of the former smtpd/pop3d/imapd/...
+# modules. depguard rules are path-scoped per component so each daemon keeps
+# exactly the import boundaries it enforced as a standalone repo — encoding the
+# privilege-separation architecture as a lint gate.
+
+issues:
+  # Surface every finding — no suppression of "duplicate" issues.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - depguard
+  settings:
+    errcheck:
+      # Close() on connections and files is idiomatic to ignore in cleanup paths.
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (*net.TCPConn).Close
+        - (*os.File).Close
+        - (net.Listener).Close
+        - (*net.TCPListener).Close
+        # Writes to an already-committed response/stream — the error is not actionable.
+        - fmt.Fprint
+        - fmt.Fprintln
+        - fmt.Fprintf
+    depguard:
+      rules:
+        # smtpd: protocol daemon. Auth/domain/delivery all go through
+        # session-manager over gRPC; it must not touch store or auth directly.
+        smtpd-boundary:
+          files:
+            - "**/internal/smtpd/**"
+            - "**/cmd/smtpd/**"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/msgstore"
+              desc: "smtpd must not import msgstore — delivery goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/msgstore/maildir"
+              desc: "smtpd must not import msgstore — delivery goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth"
+              desc: "smtpd must not import auth — authentication goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/domain"
+              desc: "smtpd must not import auth/domain — domain routing goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/passwd"
+              desc: "smtpd must not import auth/passwd — credential access goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/errors"
+              desc: "smtpd must not import auth/errors — use gRPC status codes from session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/oauth"
+              desc: "smtpd must not import auth/oauth — OAuth validation goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "mail-deliver is archived; delivery goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-session/client"
+              desc: "smtpd must not spawn mail-session directly — session-manager handles process lifecycle"
+
+        # imapd: protocol daemon. Same boundary as smtpd.
+        imapd-boundary:
+          files:
+            - "**/internal/imapd/**"
+            - "**/cmd/imapd/**"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/auth"
+              desc: "imapd must not import auth — use session-manager for authentication"
+            - pkg: "github.com/infodancer/maildancer/auth/domain"
+              desc: "imapd must not import auth/domain — use session-manager for domain routing"
+            - pkg: "github.com/infodancer/maildancer/auth/errors"
+              desc: "imapd must not import auth/errors — use session-manager for authentication"
+            - pkg: "github.com/infodancer/maildancer/auth/passwd"
+              desc: "imapd must not import auth/passwd — use session-manager for authentication"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-session/client"
+              desc: "imapd must not import mail-session/client — use session-manager gRPC directly"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "imapd must not import mail-deliver — use session-manager for delivery"
+        imapd-backend-no-maildir:
+          files:
+            - "**/internal/imapd/backend/**"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/msgstore/maildir"
+              desc: "backend must use msgstore.FolderStore interface, not the maildir backend directly"
+            - pkg: "github.com/emersion/go-maildir"
+              desc: "backend must use msgstore.FolderStore interface, not go-maildir directly"
+
+        # pop3d: protocol daemon. Same boundary as smtpd.
+        pop3d-boundary:
+          files:
+            - "**/internal/pop3d/**"
+            - "**/cmd/pop3d/**"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/auth"
+              desc: "authentication goes through session-manager, not the auth library"
+            - pkg: "github.com/infodancer/maildancer/auth/domain"
+              desc: "domain routing goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/errors"
+              desc: "auth errors are not used; session-manager handles authentication"
+            - pkg: "github.com/infodancer/maildancer/auth/passwd"
+              desc: "passwd backend is not used directly; session-manager handles authentication"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-session/client"
+              desc: "no direct subprocess spawning; use session-manager"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "mail-deliver is archived; delivery goes through session-manager or mail-session"
+
+        # The smclient bridge (pop3d/imapd <-> session-manager) speaks raw gRPC
+        # types and must not reach into msgstore.
+        smclient-boundary:
+          files:
+            - "**/smclient*.go"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/msgstore"
+              desc: "smclient must use mail-session proto types, not msgstore"

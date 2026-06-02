@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/infodancer/maildancer/internal/auth/authoidc"
 	"github.com/infodancer/maildancer/auth/passwd"
+	"github.com/infodancer/maildancer/internal/auth/authoidc"
 )
 
 // provisionDomain lays down a complete on-disk domain (config.toml + passwd +

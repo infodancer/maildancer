@@ -6,8 +6,8 @@ import (
 	"io"
 
 	"github.com/emersion/go-sasl"
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
+	"github.com/infodancer/maildancer/msgstore"
 )
 
 // AuthenticatedUser holds the identity of a successfully authenticated user.

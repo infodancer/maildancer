@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
+	"github.com/infodancer/maildancer/msgstore"
 )
 
 // mockMessageStore is a test double for MessageStore.

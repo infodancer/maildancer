@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
+	"github.com/infodancer/maildancer/msgstore"
 )
 
 // mockMessageStore implements msgstore.MessageStore for testing.

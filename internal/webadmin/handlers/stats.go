@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/infodancer/maildancer/msgstore"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
+	"github.com/infodancer/maildancer/msgstore"
 )
 
 // StatsHandler handles mailbox statistics API requests.

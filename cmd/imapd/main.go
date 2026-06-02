@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/infodancer/logging"
 	"github.com/infodancer/maildancer/internal/imapd/backend"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
-	"github.com/infodancer/logging"
 	"github.com/prometheus/client_golang/prometheus"
 )
 

@@ -1,0 +1,461 @@
+// Package config provides configuration management for the SMTP server.
+package config
+
+import (
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// ListenerMode defines the operational mode for a listener.
+type ListenerMode string
+
+const (
+	// ModeSmtp is standard SMTP on port 25.
+	ModeSmtp ListenerMode = "smtp"
+	// ModeSubmission is authenticated submission on port 587.
+	ModeSubmission ListenerMode = "submission"
+	// ModeSmtps is implicit TLS on port 465.
+	ModeSmtps ListenerMode = "smtps"
+	// ModeAlt is an alternative mode for custom configurations.
+	ModeAlt ListenerMode = "alt"
+)
+
+// FileConfig is the top-level wrapper for the shared configuration file.
+// This allows smtpd, pop3d, and msgstore to share a single config file.
+type FileConfig struct {
+	Server         ServerConfig         `toml:"server"`
+	Redis          RedisConfig          `toml:"redis"`
+	SessionManager SessionManagerConfig `toml:"session-manager"`
+	Smtpd          Config               `toml:"smtpd"`
+	SpamCheck      SpamCheckConfig      `toml:"spamcheck"`
+}
+
+// RedisConfig holds shared Redis connection settings.
+// Any mail stack component can read this section to connect to the shared Redis instance.
+type RedisConfig struct {
+	// URL is the Redis connection URL (e.g. "redis://redis:6379/1").
+	// Supports redis:// and rediss:// (TLS) schemes.
+	URL string `toml:"url"`
+
+	// Password is the Redis AUTH password. Also settable via REDIS_PASSWORD env var.
+	Password string `toml:"password"`
+}
+
+// ServerConfig holds shared settings used by all mail services.
+// These are read from the [server] section of the shared config file.
+type ServerConfig struct {
+	Hostname        string         `toml:"hostname"`
+	DomainsPath     string         `toml:"domains_path"`
+	DomainsDataPath string         `toml:"domains_data_path"`
+	Maildir         string         `toml:"maildir"` // alias for domains_data_path (used by webadmin)
+	Delivery        DeliveryConfig `toml:"delivery"`
+	TLS             TLSConfig      `toml:"tls"`
+}
+
+// RejectionMode controls when unknown recipients are rejected.
+type RejectionMode string
+
+const (
+	// RejectionModeRcpt rejects unknown recipients at RCPT TO time (default).
+	RejectionModeRcpt RejectionMode = "rcpt"
+	// RejectionModeData defers rejection until after DATA, hiding address validity.
+	RejectionModeData RejectionMode = "data"
+)
+
+// SessionManagerConfig holds connection settings for the session-manager service.
+// This is a top-level [session-manager] section shared by all daemons.
+type SessionManagerConfig struct {
+	// Socket is the unix domain socket path for session-manager.
+	Socket string `toml:"socket"`
+
+	// Address is the TCP address for network mode (e.g. "session-manager:9443").
+	// Requires CACert, ClientCert, and ClientKey for mTLS.
+	Address string `toml:"address"`
+
+	// CACert is the CA certificate path for verifying the server.
+	CACert string `toml:"ca_cert"`
+
+	// ClientCert is the client certificate path for mTLS authentication.
+	ClientCert string `toml:"client_cert"`
+
+	// ClientKey is the client private key path for mTLS authentication.
+	ClientKey string `toml:"client_key"`
+}
+
+// IsEnabled returns true if a session-manager connection is configured.
+func (c *SessionManagerConfig) IsEnabled() bool {
+	return c.Socket != "" || c.Address != ""
+}
+
+// Config holds the complete SMTP server configuration.
+type Config struct {
+	Hostname           string               `toml:"hostname"`
+	LogLevel           string               `toml:"log_level"`
+	RecipientRejection RejectionMode        `toml:"recipient_rejection"`
+	Listeners          []ListenerConfig     `toml:"listeners"`
+	TLS                TLSConfig            `toml:"tls"`
+	Limits             LimitsConfig         `toml:"limits"`
+	Timeouts           TimeoutsConfig       `toml:"timeouts"`
+	Metrics            MetricsConfig        `toml:"metrics"`
+	SpamCheck          SpamCheckConfig      `toml:"spamcheck"`
+	Spamtrap           SpamtrapConfig       `toml:"spamtrap"`
+	Redis              RedisConfig          `toml:"-"` // populated from [redis] top-level section
+	SessionManager     SessionManagerConfig `toml:"-"` // populated from [session-manager] top-level section
+}
+
+// SpamtrapConfig holds configuration for spamtrap auto-learning.
+type SpamtrapConfig struct {
+	// Enabled indicates whether spamtrap auto-learning is active.
+	Enabled bool `toml:"enabled"`
+
+	// ControllerURL is the rspamd controller endpoint for learn calls.
+	ControllerURL string `toml:"controller_url"`
+
+	// Password is the optional rspamd controller password.
+	Password string `toml:"password"`
+
+	// MaxLearnsPerIPPerHour caps auto-learns per source IP per hour.
+	// Defaults to 10 if not set or zero.
+	MaxLearnsPerIPPerHour int `toml:"max_learns_per_ip_per_hour"`
+}
+
+// GetMaxLearnsPerIPPerHour returns the rate limit, defaulting to 10.
+func (c *SpamtrapConfig) GetMaxLearnsPerIPPerHour() int {
+	if c.MaxLearnsPerIPPerHour <= 0 {
+		return 10
+	}
+	return c.MaxLearnsPerIPPerHour
+}
+
+// ListenerConfig defines settings for a single listener.
+type ListenerConfig struct {
+	Address string       `toml:"address"`
+	Mode    ListenerMode `toml:"mode"`
+}
+
+// TLSConfig holds TLS certificate and version settings.
+type TLSConfig struct {
+	CertFile   string `toml:"cert_file"`
+	KeyFile    string `toml:"key_file"`
+	MinVersion string `toml:"min_version"`
+}
+
+// LimitsConfig defines resource limits for the server.
+type LimitsConfig struct {
+	MaxMessageSize  int `toml:"max_message_size"`
+	MaxRecipients   int `toml:"max_recipients"`
+	MaxSendsPerHour int `toml:"max_sends_per_hour"` // Per-sender rate limit for authenticated submission (0 = disabled)
+}
+
+// TimeoutsConfig defines timeout durations.
+type TimeoutsConfig struct {
+	Connection string `toml:"connection"`
+	Command    string `toml:"command"`
+}
+
+// MetricsConfig holds configuration for Prometheus metrics.
+type MetricsConfig struct {
+	Enabled bool   `toml:"enabled"`
+	Address string `toml:"address"`
+	Path    string `toml:"path"`
+}
+
+// DeliveryConfig holds configuration for message delivery.
+// Retained in the shared [server.delivery] section for other daemons.
+type DeliveryConfig struct {
+	Type     string            `toml:"type"`      // Storage backend type (e.g., "maildir")
+	BasePath string            `toml:"base_path"` // Base path for storage
+	Options  map[string]string `toml:"options"`   // Backend-specific options
+}
+
+// SpamCheckFailMode defines the behavior when spam checkers are unavailable or error.
+type SpamCheckFailMode string
+
+const (
+	// SpamCheckFailOpen accepts the message when checkers are unavailable.
+	SpamCheckFailOpen SpamCheckFailMode = "open"
+	// SpamCheckFailTempFail returns a temporary failure (4xx) when checkers are unavailable.
+	SpamCheckFailTempFail SpamCheckFailMode = "tempfail"
+	// SpamCheckFailReject returns a permanent failure (5xx) when checkers are unavailable.
+	SpamCheckFailReject SpamCheckFailMode = "reject"
+)
+
+// SpamCheckConfig holds configuration for spam filtering.
+type SpamCheckConfig struct {
+	// Enabled indicates whether spam checking is enabled.
+	Enabled bool `toml:"enabled"`
+
+	// Checkers is the list of spam checkers to use.
+	Checkers []SpamCheckerConfig `toml:"checkers"`
+
+	// Mode determines how multiple checker results are aggregated.
+	// "first_reject" - reject if any checker says reject (default)
+	// "all_reject" - reject only if all checkers say reject
+	// "highest_score" - use the result with the highest score
+	Mode string `toml:"mode"`
+
+	// FailMode determines behavior when checkers are unavailable.
+	FailMode SpamCheckFailMode `toml:"fail_mode"`
+
+	// RejectThreshold is the score at or above which messages are rejected (5xx).
+	RejectThreshold float64 `toml:"reject_threshold"`
+
+	// TempFailThreshold is the score at or above which messages get temp failure (4xx).
+	TempFailThreshold float64 `toml:"tempfail_threshold"`
+
+	// AddHeaders indicates whether to add spam headers to messages.
+	AddHeaders bool `toml:"add_headers"`
+}
+
+// SpamCheckerConfig holds configuration for a single spam checker.
+type SpamCheckerConfig struct {
+	// Type is the checker type (currently only "rspamd" is supported).
+	Type string `toml:"type"`
+
+	// Enabled indicates whether this checker is enabled (default true).
+	Enabled *bool `toml:"enabled"`
+
+	// URL is the endpoint for HTTP-based checkers.
+	URL string `toml:"url"`
+
+	// Password is the optional password/secret for the checker.
+	Password string `toml:"password"`
+
+	// Timeout is the request timeout (e.g., "10s").
+	Timeout string `toml:"timeout"`
+
+	// Options contains checker-specific options.
+	Options map[string]string `toml:"options"`
+}
+
+// IsEnabled returns true if spam checking is enabled and has at least one checker.
+func (c *SpamCheckConfig) IsEnabled() bool {
+	if !c.Enabled {
+		return false
+	}
+	for _, checker := range c.Checkers {
+		if checker.IsEnabled() {
+			return true
+		}
+	}
+	return false
+}
+
+// GetFailMode returns the fail mode, defaulting to tempfail if not set.
+func (c *SpamCheckConfig) GetFailMode() SpamCheckFailMode {
+	switch c.FailMode {
+	case SpamCheckFailOpen, SpamCheckFailTempFail, SpamCheckFailReject:
+		return c.FailMode
+	default:
+		return SpamCheckFailTempFail
+	}
+}
+
+// IsEnabled returns true if this checker is enabled.
+func (c *SpamCheckerConfig) IsEnabled() bool {
+	if c.Enabled == nil {
+		return true // default to enabled
+	}
+	return *c.Enabled
+}
+
+// GetTimeout returns the timeout as a time.Duration.
+func (c *SpamCheckerConfig) GetTimeout() time.Duration {
+	if c.Timeout == "" {
+		return 10 * time.Second
+	}
+	d, err := time.ParseDuration(c.Timeout)
+	if err != nil {
+		return 10 * time.Second
+	}
+	return d
+}
+
+// GetRejectionMode returns the configured rejection mode, defaulting to "rcpt".
+func (c *Config) GetRejectionMode() RejectionMode {
+	switch c.RecipientRejection {
+	case RejectionModeRcpt, RejectionModeData:
+		return c.RecipientRejection
+	default:
+		return RejectionModeRcpt
+	}
+}
+
+// Default returns a Config with sensible default values.
+func Default() Config {
+	return Config{
+		Hostname: "localhost",
+		LogLevel: "info",
+		Listeners: []ListenerConfig{
+			{Address: ":25", Mode: ModeSmtp},
+		},
+		TLS: TLSConfig{
+			MinVersion: "1.2",
+		},
+		Limits: LimitsConfig{
+			MaxMessageSize: 26214400, // 25 MB
+			MaxRecipients:  100,
+		},
+		Timeouts: TimeoutsConfig{
+			Connection: "5m",
+			Command:    "1m",
+		},
+		Metrics: MetricsConfig{
+			Enabled: false,
+			Address: ":9100",
+			Path:    "/metrics",
+		},
+	}
+}
+
+// Validate checks that the configuration is valid and returns an error if not.
+func (c *Config) Validate() error {
+	if c.Hostname == "" {
+		return errors.New("hostname is required")
+	}
+
+	if len(c.Listeners) == 0 {
+		return errors.New("at least one listener is required")
+	}
+
+	for i, l := range c.Listeners {
+		if l.Address == "" {
+			return fmt.Errorf("listener %d: address is required", i)
+		}
+		if !isValidMode(l.Mode) {
+			return fmt.Errorf("listener %d: invalid mode %q", i, l.Mode)
+		}
+	}
+
+	if c.Limits.MaxMessageSize <= 0 {
+		return errors.New("max_message_size must be positive")
+	}
+
+	if c.Limits.MaxRecipients <= 0 {
+		return errors.New("max_recipients must be positive")
+	}
+
+	if c.Timeouts.Connection != "" {
+		if _, err := time.ParseDuration(c.Timeouts.Connection); err != nil {
+			return fmt.Errorf("invalid connection timeout: %w", err)
+		}
+	}
+
+	if c.Timeouts.Command != "" {
+		if _, err := time.ParseDuration(c.Timeouts.Command); err != nil {
+			return fmt.Errorf("invalid command timeout: %w", err)
+		}
+	}
+
+	if c.TLS.MinVersion != "" {
+		if _, ok := minTLSVersions[c.TLS.MinVersion]; !ok {
+			return fmt.Errorf("invalid TLS min_version %q (valid: 1.0, 1.1, 1.2, 1.3)", c.TLS.MinVersion)
+		}
+	}
+
+	if c.Metrics.Enabled {
+		if c.Metrics.Address == "" {
+			return errors.New("metrics address is required when metrics are enabled")
+		}
+		if c.Metrics.Path == "" {
+			return errors.New("metrics path is required when metrics are enabled")
+		}
+	}
+
+	// Validate recipient rejection mode
+	switch c.RecipientRejection {
+	case "", RejectionModeRcpt, RejectionModeData:
+		// valid
+	default:
+		return fmt.Errorf("invalid recipient_rejection %q (valid: rcpt, data)", c.RecipientRejection)
+	}
+
+	// Validate spamtrap config
+	if c.Spamtrap.Enabled {
+		if c.Spamtrap.ControllerURL == "" {
+			return errors.New("spamtrap.controller_url is required when spamtrap is enabled")
+		}
+	}
+
+	// Validate spamcheck config
+	if c.SpamCheck.Enabled {
+		for i, checker := range c.SpamCheck.Checkers {
+			if checker.Type == "" {
+				return fmt.Errorf("spamcheck.checkers[%d].type is required", i)
+			}
+			if checker.Timeout != "" {
+				if _, err := time.ParseDuration(checker.Timeout); err != nil {
+					return fmt.Errorf("invalid spamcheck.checkers[%d].timeout: %w", i, err)
+				}
+			}
+			// Validate checker-specific requirements
+			switch checker.Type {
+			case "rspamd":
+				if checker.URL == "" {
+					return fmt.Errorf("spamcheck.checkers[%d].url is required for rspamd", i)
+				}
+			}
+		}
+		switch c.SpamCheck.FailMode {
+		case "", SpamCheckFailOpen, SpamCheckFailTempFail, SpamCheckFailReject:
+			// valid
+		default:
+			return fmt.Errorf("invalid spamcheck.fail_mode %q (valid: open, tempfail, reject)", c.SpamCheck.FailMode)
+		}
+	}
+
+	return nil
+}
+
+// MinTLSVersion returns the crypto/tls constant for the configured minimum TLS version.
+// Returns tls.VersionTLS12 if not configured or invalid.
+func (c *TLSConfig) MinTLSVersion() uint16 {
+	if v, ok := minTLSVersions[c.MinVersion]; ok {
+		return v
+	}
+	return tls.VersionTLS12
+}
+
+// ConnectionTimeout returns the connection timeout as a time.Duration.
+// Returns 5 minutes if not configured or invalid.
+func (c *TimeoutsConfig) ConnectionTimeout() time.Duration {
+	if c.Connection == "" {
+		return 5 * time.Minute
+	}
+	d, err := time.ParseDuration(c.Connection)
+	if err != nil {
+		return 5 * time.Minute
+	}
+	return d
+}
+
+// CommandTimeout returns the command timeout as a time.Duration.
+// Returns 1 minute if not configured or invalid.
+func (c *TimeoutsConfig) CommandTimeout() time.Duration {
+	if c.Command == "" {
+		return 1 * time.Minute
+	}
+	d, err := time.ParseDuration(c.Command)
+	if err != nil {
+		return 1 * time.Minute
+	}
+	return d
+}
+
+var minTLSVersions = map[string]uint16{
+	"1.0": tls.VersionTLS10,
+	"1.1": tls.VersionTLS11,
+	"1.2": tls.VersionTLS12,
+	"1.3": tls.VersionTLS13,
+}
+
+func isValidMode(m ListenerMode) bool {
+	switch m {
+	case ModeSmtp, ModeSubmission, ModeSmtps, ModeAlt:
+		return true
+	default:
+		return false
+	}
+}

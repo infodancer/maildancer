@@ -1,0 +1,60 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - depguard
+  settings:
+    errcheck:
+      # Close() on connections and files is idiomatic to ignore in cleanup paths.
+      exclude-functions:
+        - (io.Closer).Close
+        - (net.Conn).Close
+        - (*net.TCPConn).Close
+        - (*os.File).Close
+        - (net.Listener).Close
+        - (*net.TCPListener).Close
+
+    depguard:
+      rules:
+        # smtpd is a protocol daemon. It must not import store, auth, or
+        # domain libraries — those are session-manager's responsibility.
+        # smtpd talks to session-manager via gRPC for auth, domain
+        # validation, and delivery.
+        no-store:
+          files:
+            - "$all"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/msgstore"
+              desc: "smtpd must not import msgstore — delivery goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/msgstore/maildir"
+              desc: "smtpd must not import msgstore — delivery goes through session-manager"
+
+        no-auth:
+          files:
+            - "$all"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/auth"
+              desc: "smtpd must not import auth — authentication goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/domain"
+              desc: "smtpd must not import auth/domain — domain routing goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/passwd"
+              desc: "smtpd must not import auth/passwd — credential access goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/errors"
+              desc: "smtpd must not import auth/errors — use gRPC status codes from session-manager"
+            - pkg: "github.com/infodancer/maildancer/auth/oauth"
+              desc: "smtpd must not import auth/oauth — OAuth validation goes through session-manager"
+
+        no-archived:
+          files:
+            - "$all"
+          deny:
+            - pkg: "github.com/infodancer/maildancer/internal/mail-deliver"
+              desc: "mail-deliver is archived; delivery goes through session-manager"
+            - pkg: "github.com/infodancer/maildancer/internal/mail-session/client"
+              desc: "smtpd must not spawn mail-session directly — session-manager handles process lifecycle"

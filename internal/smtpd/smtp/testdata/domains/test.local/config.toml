@@ -1,0 +1,8 @@
+[auth]
+type = "passwd"
+credential_backend = "passwd"
+key_backend = "keys"
+
+[msgstore]
+type = "maildir"
+base_path = "users"

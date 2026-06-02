@@ -1,0 +1,114 @@
+# Mail Server Configuration
+# Shared by smtpd, pop3d, msgstore
+
+# Shared configuration used by all mail services
+[server]
+hostname = "mail.example.com"
+maildir = "/var/mail"
+
+[server.tls]
+cert_file = "/etc/ssl/certs/mail.pem"
+key_file = "/etc/ssl/private/mail.key"
+min_version = "1.2"
+
+# Shared Redis Configuration
+# Used by all mail stack components for coordination (rate limiting,
+# delivery throttling, IMAP notifications). Password also settable
+# via REDIS_PASSWORD env var.
+# [redis]
+# url = "redis://redis:6379/1"
+# password = ""
+
+# SMTP Server Configuration
+[smtpd]
+log_level = "info"
+
+[smtpd.limits]
+max_message_size = 26214400  # 25 MB
+max_recipients = 100
+
+[smtpd.timeouts]
+connection = "5m"
+command = "1m"
+
+[[smtpd.listeners]]
+address = ":25"
+mode = "smtp"
+
+[[smtpd.listeners]]
+address = ":587"
+mode = "submission"
+
+[[smtpd.listeners]]
+address = ":465"
+mode = "smtps"
+
+[smtpd.metrics]
+enabled = false
+address = ":9100"
+path = "/metrics"
+# Health endpoints available at /health and /healthz
+
+# Spam Check Configuration
+# Supports multiple spam checkers running in sequence
+# [spamcheck]
+# enabled = true
+# mode = "first_reject"          # "first_reject" | "all_reject" | "highest_score"
+#                                # first_reject = reject if any checker says reject
+#                                # all_reject = reject only if all checkers say reject
+#                                # highest_score = use result with highest score
+# fail_mode = "tempfail"         # "open" | "tempfail" | "reject"
+#                                # open = accept message if all checkers fail
+#                                # tempfail = 4xx error if all checkers fail
+#                                # reject = 5xx error if all checkers fail
+# reject_threshold = 15.0        # Score at or above which to reject (5xx)
+# tempfail_threshold = 0.0       # Score at or above which to defer (4xx), 0 = disabled
+# add_headers = false            # Add X-Spam-* headers to messages (default: false)
+#
+# [[spamcheck.checkers]]
+# type = "rspamd"
+# url = "http://localhost:11333"
+# password = ""                  # Optional controller password
+# timeout = "10s"
+#
+
+# Authentication Configuration
+# Supports username/password (PLAIN) and OAuth 2.0 bearer tokens (OAUTHBEARER)
+# [smtpd.auth]
+# enabled = true
+# agent_type = "passwd"                    # Auth agent type (e.g., "passwd")
+# credential_backend = "/etc/mail/passwd"  # Path to credential store
+# key_backend = "/etc/mail/keys"           # Path to encryption key store
+#
+# # OAuth 2.0 OAUTHBEARER Configuration (RFC 7628)
+# # Enables OAuth bearer token authentication for SMTP clients
+# [smtpd.auth.oauth]
+# enabled = true
+# jwks_url = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+# issuer = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience = "your-client-id"              # Your app's client ID or API identifier
+# username_claim = "email"                 # JWT claim for username: "email", "preferred_username", "upn", "sub"
+# jwks_refresh_interval = "1h"             # How often to refresh JWKS
+# allowed_domains = []                     # Restrict to specific email domains (empty = all)
+#
+# # Example: Google OAuth configuration
+# # [smtpd.auth.oauth]
+# # enabled = true
+# # jwks_url = "https://www.googleapis.com/oauth2/v3/certs"
+# # issuer = "https://accounts.google.com"
+# # audience = "your-client-id.apps.googleusercontent.com"
+# # username_claim = "email"
+#
+# # Example: Microsoft 365 / Azure AD configuration
+# # [smtpd.auth.oauth]
+# # enabled = true
+# # jwks_url = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+# # issuer = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# # audience = "your-client-id"
+# # username_claim = "preferred_username"
+# # allowed_domains = ["yourdomain.com"]
+
+# Future sections:
+# [pop3d]
+# [msgstore]
+# [imap]

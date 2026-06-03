@@ -3,6 +3,7 @@ package smtp
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -112,45 +113,80 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 func (s *Server) Run(ctx context.Context) error {
 	errChan := make(chan error, len(s.entries))
 
-	// Start all servers
-	for _, entry := range s.entries {
+	// Own the listeners (rather than entry.server.ListenAndServe, which creates
+	// them internally) so shutdown can stop accepting BEFORE draining. go-smtp's
+	// Serve calls s.wg.Add per accepted connection while Shutdown calls s.wg.Wait
+	// in a goroutine; if a connection is accepted as Shutdown begins, those race
+	// on the WaitGroup counter (a go-smtp v0.24.0 bug). Closing the listener and
+	// waiting for Serve to return first guarantees no concurrent wg.Add.
+	listeners := make([]net.Listener, len(s.entries))
+	for i, entry := range s.entries {
+		var ln net.Listener
+		var err error
+		if entry.mode == config.ModeSmtps {
+			ln, err = tls.Listen("tcp", entry.server.Addr, entry.server.TLSConfig)
+		} else {
+			ln, err = net.Listen("tcp", entry.server.Addr)
+		}
+		if err != nil {
+			for _, l := range listeners {
+				if l != nil {
+					_ = l.Close()
+				}
+			}
+			return fmt.Errorf("listen %s: %w", entry.server.Addr, err)
+		}
+		listeners[i] = ln
+	}
+
+	// shuttingDown gates suppression of the expected "use of closed network
+	// connection" error that Serve returns once we close the listeners.
+	shuttingDown := make(chan struct{})
+
+	for i, entry := range s.entries {
 		s.wg.Add(1)
-		go func(entry serverEntry) {
+		go func(entry serverEntry, ln net.Listener) {
 			defer s.wg.Done()
-
-			var err error
-			if entry.mode == config.ModeSmtps {
-				s.logger.Info("starting SMTPS listener", slog.String("address", entry.server.Addr))
-				err = entry.server.ListenAndServeTLS()
-			} else {
-				s.logger.Info("starting listener", slog.String("address", entry.server.Addr))
-				err = entry.server.ListenAndServe()
+			s.logger.Info("starting listener",
+				slog.String("address", entry.server.Addr),
+				slog.String("mode", string(entry.mode)))
+			if err := entry.server.Serve(ln); err != nil {
+				select {
+				case <-shuttingDown:
+					// Expected: we closed the listener to begin shutdown.
+				default:
+					errChan <- fmt.Errorf("server %s: %w", entry.server.Addr, err)
+				}
 			}
-
-			if err != nil {
-				errChan <- fmt.Errorf("server %s: %w", entry.server.Addr, err)
-			}
-		}(entry)
+		}(entry, listeners[i])
 	}
 
 	// Wait for context cancellation
 	<-ctx.Done()
-
 	s.logger.Info("shutting down servers")
+	close(shuttingDown)
 
-	// Gracefully close all servers
+	// Stop accepting, then wait for every Serve loop to return. After this no
+	// go-smtp wg.Add can run, so the subsequent Shutdown (wg.Wait) is race-free.
+	for _, ln := range listeners {
+		_ = ln.Close()
+	}
+	s.wg.Wait()
+
+	// Gracefully drain in-flight connections.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
 	for _, entry := range s.entries {
-		if err := entry.server.Shutdown(shutdownCtx); err != nil {
+		// Shutdown re-closes the (already closed) listener, so a net.ErrClosed
+		// here is expected, not a failure.
+		if err := entry.server.Shutdown(shutdownCtx); err != nil &&
+			!errors.Is(err, net.ErrClosed) && !errors.Is(err, gosmtp.ErrServerClosed) {
 			s.logger.Error("error shutting down server",
 				slog.String("address", entry.server.Addr),
 				slog.String("error", err.Error()))
 		}
 	}
 
-	s.wg.Wait()
 	s.logger.Info("all servers stopped")
 
 	// Check for any startup errors

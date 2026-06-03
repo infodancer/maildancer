@@ -71,6 +71,29 @@ go through `session-manager` over gRPC. Violations fail `task lint`. If you need
 a daemon to reach storage or auth, route it through session-manager; do not
 relax the depguard rule.
 
+## Address & delivery contracts
+
+Violating these reintroduces bugs the design deliberately avoids.
+
+- **Address normalization happens in exactly one place: `auth/domain.AuthRouter`.**
+  After domain auth it sets `User.Mailbox` to `base@domain` (fully-qualified,
+  subaddress stripped) and returns the extension separately in
+  `AuthResult.Extension`. The daemons (`smtpd`, `pop3d`, `imapd`) pass
+  `User.Mailbox` (or the raw envelope `localpart@domain`) **straight through** to
+  `msgstore` — they must **not** add localpart extraction or domain-stripping
+  logic. `msgstore` strips the domain internally (or applies `path_template`).
+  Enforced by `TestAuthRouterMailbox_AddressContract` in `auth/domain`.
+- **Privilege separation:** `session-manager` spawns `mail-session` with
+  `SysProcAttr.Credential{Uid, Gid}`; the agent never calls `setuid`/`setgid`
+  itself — it starts already running as the recipient user.
+- **mail-session sessions are not thread-safe.** Its gRPC server mutex-serializes
+  access to `session.Session`; RPCs are otherwise stateless (folder in every
+  request). `DeliveryService` (in `mail-session`) is the delivery path;
+  `mail-deliver` is archived.
+- **Forwarding is 1-hop.** A delivery that resolves a forward re-delivers exactly
+  once; a second forward in that chain is an error, not followed — this prevents
+  mail loops.
+
 ## Next-gen protocols (scmp / sdmp)
 
 `scmp` and `sdmp` are **separate external repos**, deliberately not part of this

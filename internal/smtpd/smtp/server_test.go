@@ -179,9 +179,15 @@ func TestServerMultipleListeners(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	go func() { _ = srv.Run(ctx) }()
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(ctx) }()
+	// Cancel and wait for Run to fully shut down (Run does wg.Wait internally)
+	// before the test returns, so its listener goroutines don't leak into and
+	// race with subsequent tests.
+	defer func() {
+		cancel()
+		<-done
+	}()
 
 	time.Sleep(100 * time.Millisecond)
 

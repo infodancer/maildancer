@@ -115,3 +115,6 @@ linters:
           deny:
             - pkg: "github.com/infodancer/maildancer/msgstore"
               desc: "smclient must use mail-session proto types, not msgstore"
+
+run:
+  allow-parallel-runners: true

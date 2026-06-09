@@ -43,10 +43,11 @@ type MetricsConfig struct {
 
 // OutboundConfig holds system-default outbound delivery transport settings.
 type OutboundConfig struct {
-	Strategy      string `toml:"strategy"`       // "direct" | "smarthost"; default "direct"
-	Smarthost     string `toml:"smarthost"`      // host:port
-	SmarthostUser string `toml:"smarthost_user"` // SMTP AUTH username
-	PasswordFile  string `toml:"password_file"`  // path to password file
+	Strategy          string `toml:"strategy"`            // "direct" | "smarthost"; default "direct"
+	Smarthost         string `toml:"smarthost"`           // host:port
+	SmarthostUser     string `toml:"smarthost_user"`      // SMTP AUTH username (inline)
+	SmarthostUserFile string `toml:"smarthost_user_file"` // file holding the SMTP AUTH username; overrides SmarthostUser. For secret usernames (e.g. a Postmark server token) that must not live in config.toml.
+	PasswordFile      string `toml:"password_file"`       // path to password file
 }
 
 // QueueManagerConfig holds all queue-manager configuration from the TOML file.

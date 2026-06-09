@@ -1,14 +1,15 @@
 name: Publish images
 
 # Builds and publishes the mail-component container images from this monorepo.
-# Each entry in the matrix maps a cmd/<component> to its image name on GHCR.
+# Each entry in the matrix maps a cmd/<component> to its image on GHCR.
 # Start with queue-manager; add components (smtpd, pop3d, imapd, webadmin,
 # session-manager, ...) as their Dockerfiles land.
 #
-# Images keep their historical names (ghcr.io/infodancer/<component>) so the
-# homelab compose files need no change. NOTE: the first push to an existing
-# package (created by the now-archived per-component repo) needs that package's
-# "Manage Actions access" to grant this repo write -- otherwise the push 403s.
+# Images publish under this repo's own namespace, ghcr.io/infodancer/maildancer/
+# <component>. The flat ghcr.io/infodancer/<component> names belong to the
+# pre-consolidation per-component repos (now archived); their packages are owned
+# by those repos, so pushing to them 403s. Owning fresh packages here avoids that
+# and groups the monorepo's images. Homelab compose points at the new names.
 
 on:
   push:
@@ -46,7 +47,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/infodancer/${{ matrix.component }}
+          images: ghcr.io/infodancer/maildancer/${{ matrix.component }}
           tags: |
             type=ref,event=branch
             type=semver,pattern={{version}}

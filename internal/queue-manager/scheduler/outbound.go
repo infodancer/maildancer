@@ -28,11 +28,12 @@ func warnInsecurePerms(path string) {
 
 // OutboundConfig holds per-sender-domain delivery transport settings.
 type OutboundConfig struct {
-	Strategy      string `toml:"strategy"`       // "direct" | "smarthost"; default "direct"
-	Smarthost     string `toml:"smarthost"`      // host:port
-	SmarthostUser string `toml:"smarthost_user"` // SMTP AUTH username
-	PasswordFile  string `toml:"password_file"`  // relative to domain dir or absolute
-	password      string // resolved password; not from TOML
+	Strategy          string `toml:"strategy"`            // "direct" | "smarthost"; default "direct"
+	Smarthost         string `toml:"smarthost"`           // host:port
+	SmarthostUser     string `toml:"smarthost_user"`      // SMTP AUTH username (inline)
+	SmarthostUserFile string `toml:"smarthost_user_file"` // relative to domain dir or absolute; holds the SMTP AUTH username, overriding SmarthostUser
+	PasswordFile      string `toml:"password_file"`       // relative to domain dir or absolute
+	password          string // resolved password; not from TOML
 }
 
 // domainFileConfig is a minimal struct for parsing [outbound] from domain config files.
@@ -82,6 +83,9 @@ func loadOutboundConfig(basePath, senderDomain string) (OutboundConfig, error) {
 	if domCfg.SmarthostUser != "" {
 		merged.SmarthostUser = domCfg.SmarthostUser
 	}
+	if domCfg.SmarthostUserFile != "" {
+		merged.SmarthostUserFile = domCfg.SmarthostUserFile
+	}
 	if domCfg.PasswordFile != "" {
 		merged.PasswordFile = domCfg.PasswordFile
 	}
@@ -121,6 +125,27 @@ func readPasswordFile(basePath, senderDomain string, cfg OutboundConfig) (string
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("reading password file %s: %w", path, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// readSmarthostUserFile reads and trims the smarthost SMTP AUTH username from a
+// file. If SmarthostUserFile is relative, it is resolved from
+// {basePath}/{senderDomain}/. Returns empty string with no error if
+// SmarthostUserFile is empty. Symmetric with readPasswordFile: the username can
+// be a secret (e.g. a Postmark server token) that must not live in config.toml.
+func readSmarthostUserFile(basePath, senderDomain string, cfg OutboundConfig) (string, error) {
+	if cfg.SmarthostUserFile == "" {
+		return "", nil
+	}
+	path := cfg.SmarthostUserFile
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(basePath, senderDomain, path)
+	}
+	warnInsecurePerms(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading smarthost user file %s: %w", path, err)
 	}
 	return strings.TrimSpace(string(data)), nil
 }

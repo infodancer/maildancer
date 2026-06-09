@@ -536,6 +536,17 @@ func (s *Scheduler) resolveOutbound(bodyPath string) OutboundConfig {
 		}
 	}
 
+	// A smarthost_user_file, when set, supplies (and overrides) the SMTP AUTH
+	// username — for secret usernames that must not live in config.toml.
+	if cfg.SmarthostUserFile != "" {
+		user, err := readSmarthostUserFile(s.cfg.DomainConfigPath, domain, cfg)
+		if err != nil {
+			slog.Warn("could not read smarthost user file", "domain", domain, "error", err)
+		} else {
+			cfg.SmarthostUser = user
+		}
+	}
+
 	s.outboundCache[domain] = &cfg
 	return cfg
 }
@@ -546,10 +557,11 @@ func (s *Scheduler) globalFallbackOutbound() OutboundConfig {
 		return OutboundConfig{Strategy: "direct"}
 	}
 	cfg := OutboundConfig{
-		Strategy:      s.cfg.Outbound.Strategy,
-		Smarthost:     s.cfg.Outbound.Smarthost,
-		SmarthostUser: s.cfg.Outbound.SmarthostUser,
-		PasswordFile:  s.cfg.Outbound.PasswordFile,
+		Strategy:          s.cfg.Outbound.Strategy,
+		Smarthost:         s.cfg.Outbound.Smarthost,
+		SmarthostUser:     s.cfg.Outbound.SmarthostUser,
+		SmarthostUserFile: s.cfg.Outbound.SmarthostUserFile,
+		PasswordFile:      s.cfg.Outbound.PasswordFile,
 	}
 	if cfg.Strategy == "" {
 		cfg.Strategy = "smarthost"
@@ -568,6 +580,23 @@ func (s *Scheduler) globalFallbackOutbound() OutboundConfig {
 			slog.Warn("could not read global outbound password file", "path", path, "error", err)
 		} else {
 			cfg.password = strings.TrimSpace(string(data))
+		}
+	}
+
+	// Read the global smarthost user file, if set, with the same
+	// DomainConfigPath-relative resolution as the password file. It overrides
+	// any inline smarthost_user.
+	if cfg.SmarthostUserFile != "" {
+		path := cfg.SmarthostUserFile
+		if !filepath.IsAbs(path) && s.cfg.DomainConfigPath != "" {
+			path = filepath.Join(s.cfg.DomainConfigPath, path)
+		}
+		warnInsecurePerms(path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			slog.Warn("could not read global outbound smarthost user file", "path", path, "error", err)
+		} else {
+			cfg.SmarthostUser = strings.TrimSpace(string(data))
 		}
 	}
 	return cfg

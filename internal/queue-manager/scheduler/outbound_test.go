@@ -250,3 +250,115 @@ func TestReadPasswordFile_EmptyPasswordFile(t *testing.T) {
 		t.Errorf("password = %q, want empty", got)
 	}
 }
+
+// --- smarthost_user_file (symmetric with password_file) ---
+
+func TestLoadOutboundConfig_SmarthostUserFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`
+[outbound]
+strategy = "smarthost"
+smarthost = "smtp.postmarkapp.com:587"
+smarthost_user_file = "postmark-token"
+password_file = "postmark-token"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadOutboundConfig(dir, "example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SmarthostUserFile != "postmark-token" {
+		t.Errorf("SmarthostUserFile = %q, want postmark-token", cfg.SmarthostUserFile)
+	}
+	if cfg.PasswordFile != "postmark-token" {
+		t.Errorf("PasswordFile = %q, want postmark-token", cfg.PasswordFile)
+	}
+}
+
+func TestLoadOutboundConfig_SmarthostUserFileDomainOverride(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`
+[outbound]
+strategy = "smarthost"
+smarthost = "default-relay:587"
+smarthost_user_file = "default-token"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	domDir := filepath.Join(dir, "custom.com")
+	if err := os.MkdirAll(domDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(domDir, "config.toml"), []byte(`
+[outbound]
+smarthost_user_file = "custom-token"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := loadOutboundConfig(dir, "custom.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SmarthostUserFile != "custom-token" {
+		t.Errorf("SmarthostUserFile = %q, want custom-token (domain override)", cfg.SmarthostUserFile)
+	}
+}
+
+func TestReadSmarthostUserFile_RelativePath(t *testing.T) {
+	dir := t.TempDir()
+	domDir := filepath.Join(dir, "example.com")
+	if err := os.MkdirAll(domDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(domDir, "postmark-token"), []byte("  abc-123-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := OutboundConfig{SmarthostUserFile: "postmark-token"}
+	got, err := readSmarthostUserFile(dir, "example.com", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "abc-123-token" {
+		t.Errorf("smarthost user = %q, want abc-123-token", got)
+	}
+}
+
+func TestReadSmarthostUserFile_AbsolutePath(t *testing.T) {
+	dir := t.TempDir()
+	userFile := filepath.Join(dir, "absolute-token")
+	if err := os.WriteFile(userFile, []byte("abs-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := OutboundConfig{SmarthostUserFile: userFile}
+	got, err := readSmarthostUserFile("/some/other/base", "example.com", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "abs-token" {
+		t.Errorf("smarthost user = %q, want abs-token", got)
+	}
+}
+
+func TestReadSmarthostUserFile_Empty(t *testing.T) {
+	cfg := OutboundConfig{}
+	got, err := readSmarthostUserFile("/tmp", "example.com", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Errorf("smarthost user = %q, want empty", got)
+	}
+}
+
+func TestReadSmarthostUserFile_MissingFile(t *testing.T) {
+	cfg := OutboundConfig{SmarthostUserFile: "nonexistent"}
+	_, err := readSmarthostUserFile("/tmp", "example.com", cfg)
+	if err == nil {
+		t.Error("expected error for missing smarthost user file")
+	}
+}

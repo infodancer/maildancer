@@ -1591,3 +1591,151 @@ password_file = "system-pass"
 		t.Errorf("expected OUTBOUND_PASSWORD=sys-pw in record; got:\n%s", args)
 	}
 }
+
+// TestProcessDomainDir_SmarthostUserFromFile verifies that smarthost_user_file
+// is read and used as the SMTP AUTH username, and that it overrides any inline
+// smarthost_user. This lets the secret Postmark server token be supplied via a
+// file (not committed to config.toml), symmetric with password_file.
+func TestProcessDomainDir_SmarthostUserFromFile(t *testing.T) {
+	fakeBin := buildFakeMailRemote(t)
+	dir := t.TempDir()
+	msgid := "userfile777"
+
+	bodyDir := filepath.Join(dir, "msg", "com", "tokendomain")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(envDir, "erin@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// System default with an inline smarthost_user that should be overridden by
+	// smarthost_user_file; both the token and password come from files relative
+	// to the sender domain dir.
+	domainBase := t.TempDir()
+	if err := os.WriteFile(filepath.Join(domainBase, "config.toml"), []byte(`
+[outbound]
+strategy = "smarthost"
+smarthost = "smtp.postmarkapp.com:587"
+smarthost_user = "ignored-inline-user"
+smarthost_user_file = "pm-token"
+password_file = "pm-token"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	senderDir := filepath.Join(domainBase, "tokendomain.com")
+	if err := os.MkdirAll(senderDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(senderDir, "pm-token"), []byte("server-token-xyz\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	recordFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
+
+	s := mustNew(t, Config{
+		QueueDir:         dir,
+		Binary:           fakeBin,
+		Interval:         time.Minute,
+		DomainConfigPath: domainBase,
+	})
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	data, err := os.ReadFile(recordFile)
+	if err != nil {
+		t.Fatalf("reading record file: %v", err)
+	}
+	args := string(data)
+
+	if !strings.Contains(args, "OUTBOUND_USER=server-token-xyz") {
+		t.Errorf("expected OUTBOUND_USER=server-token-xyz (from file); got:\n%s", args)
+	}
+	if strings.Contains(args, "OUTBOUND_USER=ignored-inline-user") {
+		t.Errorf("inline smarthost_user should have been overridden by smarthost_user_file; got:\n%s", args)
+	}
+	if !strings.Contains(args, "OUTBOUND_PASSWORD=server-token-xyz") {
+		t.Errorf("expected OUTBOUND_PASSWORD=server-token-xyz; got:\n%s", args)
+	}
+}
+
+// TestProcessDomainDir_GlobalSmarthostUserFromFile verifies the same resolution
+// via the in-process global fallback config (Config.Outbound), where the token
+// file path resolves relative to DomainConfigPath.
+func TestProcessDomainDir_GlobalSmarthostUserFromFile(t *testing.T) {
+	fakeBin := buildFakeMailRemote(t)
+	dir := t.TempDir()
+	msgid := "globaluserfile88"
+
+	bodyDir := filepath.Join(dir, "msg", "com", "nocfg")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir := filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(envDir, "frank@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	// No per-domain or system config.toml: fall back to Config.Outbound. The
+	// token file resolves relative to DomainConfigPath.
+	domainBase := t.TempDir()
+	if err := os.WriteFile(filepath.Join(domainBase, "pm-token"), []byte("global-token\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	recordFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
+
+	s := mustNew(t, Config{
+		QueueDir:         dir,
+		Binary:           fakeBin,
+		Interval:         time.Minute,
+		DomainConfigPath: domainBase,
+		Outbound: config.OutboundConfig{
+			Strategy:          "smarthost",
+			Smarthost:         "smtp.postmarkapp.com:587",
+			SmarthostUserFile: "pm-token",
+			PasswordFile:      "pm-token",
+		},
+	})
+	if err := s.processDomainDir(envDir); err != nil {
+		t.Fatalf("processDomainDir: %v", err)
+	}
+
+	data, err := os.ReadFile(recordFile)
+	if err != nil {
+		t.Fatalf("reading record file: %v", err)
+	}
+	args := string(data)
+
+	if !strings.Contains(args, "OUTBOUND_USER=global-token") {
+		t.Errorf("expected OUTBOUND_USER=global-token (from file via global fallback); got:\n%s", args)
+	}
+}

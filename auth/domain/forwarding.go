@@ -12,14 +12,15 @@ import (
 )
 
 // forwardChain holds the three-level forwarding lookup hierarchy.
-// Resolution order: user-level → domain-level → system default.
+// Resolution order: user-level -> domain-level -> system default.
 //
 //   - User-level:     {domainPath}/user_forwards/{localpart}  (plain list, read on demand)
-//   - Domain-level:   {domainPath}/forwards                   (localpart:targets)
-//   - System default: {basePath}/forwards                     (localpart:targets)
+//   - Domain-level:   per-domain config.toml [forwards] table
+//   - System default: {basePath}/config.toml [forwards] table
 //
-// User-level files are read on every lookup so changes take effect without restart.
-// Domain and default maps are loaded at domain init time.
+// User-level files are read on every lookup so changes take effect without
+// restart. Domain and default maps are loaded from the [forwards] tables at
+// domain init time.
 type forwardChain struct {
 	userForwardsDir string
 	domainForwards  *forwards.ForwardMap

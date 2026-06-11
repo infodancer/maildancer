@@ -76,6 +76,15 @@ type Envelope struct {
 	// nil indicates no spam check was performed (e.g., authenticated submission).
 	// This is envelope metadata — the message body is never modified.
 	SpamResult *SpamResult
+
+	// Forwarded indicates this message was already forwarded once before
+	// reaching the current delivery agent.  MailDeliveryAgent uses this to
+	// enforce the 1-hop forwarding contract: when true, forward-rule
+	// resolution is skipped and the message is delivered locally.
+	//
+	// Set by deliver.go stage 4 (from DeliverRequest.Forwarded) and by
+	// MailDeliveryAgent when recursing into a locally-served forward target.
+	Forwarded bool
 }
 
 // SpamResult carries the outcome of a spam check as envelope metadata.

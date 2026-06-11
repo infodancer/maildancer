@@ -1739,3 +1739,86 @@ func TestProcessDomainDir_GlobalSmarthostUserFromFile(t *testing.T) {
 		t.Errorf("expected OUTBOUND_USER=global-token (from file via global fallback); got:\n%s", args)
 	}
 }
+
+// --- invoke: empty stdout / unparseable stdout on exit 0 ---
+
+// buildFakeMailRemoteEmptyStdout compiles a fake mail-remote that exits 0
+// with no output on stdout.
+func buildFakeMailRemoteEmptyStdout(t *testing.T) string {
+	t.Helper()
+	src := `package main
+
+func main() {}
+`
+	dir := t.TempDir()
+	srcFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(srcFile, []byte(src), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binPath := filepath.Join(dir, "fake-mail-remote-empty")
+	cmd := exec.Command("go", "build", "-o", binPath, srcFile)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("build fake mail-remote-empty: %v", err)
+	}
+	return binPath
+}
+
+// buildFakeMailRemoteBadJSON compiles a fake mail-remote that exits 0 but
+// writes non-JSON to stdout.
+func buildFakeMailRemoteBadJSON(t *testing.T) string {
+	t.Helper()
+	src := `package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	fmt.Fprintln(os.Stdout, "this is not json")
+}
+`
+	dir := t.TempDir()
+	srcFile := filepath.Join(dir, "main.go")
+	if err := os.WriteFile(srcFile, []byte(src), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binPath := filepath.Join(dir, "fake-mail-remote-badjson")
+	cmd := exec.Command("go", "build", "-o", binPath, srcFile)
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("build fake mail-remote-badjson: %v", err)
+	}
+	return binPath
+}
+
+// TestInvoke_EmptyStdoutOnExit0 verifies that invoke returns an empty slice
+// and does not panic when mail-remote exits 0 with no stdout output.
+// The error-level log is not directly assertable here, but the function
+// must not crash or hang.
+func TestInvoke_EmptyStdoutOnExit0(t *testing.T) {
+	fakeBin := buildFakeMailRemoteEmptyStdout(t)
+	dir := t.TempDir()
+
+	s := mustNew(t, Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
+	results := s.invoke("body.txt", []string{"env1.txt"}, false, OutboundConfig{Strategy: "direct"})
+
+	if len(results) != 0 {
+		t.Errorf("expected empty results, got %d", len(results))
+	}
+}
+
+// TestInvoke_BadJSONOnExit0 verifies that invoke returns an empty slice
+// and does not panic when mail-remote exits 0 with non-JSON stdout.
+func TestInvoke_BadJSONOnExit0(t *testing.T) {
+	fakeBin := buildFakeMailRemoteBadJSON(t)
+	dir := t.TempDir()
+
+	s := mustNew(t, Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
+	results := s.invoke("body.txt", []string{"env1.txt"}, false, OutboundConfig{Strategy: "direct"})
+
+	if len(results) != 0 {
+		t.Errorf("expected empty results on parse failure, got %d", len(results))
+	}
+}

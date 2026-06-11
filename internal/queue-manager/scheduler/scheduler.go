@@ -643,8 +643,20 @@ func (s *Scheduler) invoke(bodyPath string, envPaths []string, final bool, outbo
 	var results []deliveryResult
 	if stdout.Len() > 0 {
 		if jsonErr := json.Unmarshal(stdout.Bytes(), &results); jsonErr != nil {
-			slog.Warn("could not parse mail-remote results", "error", jsonErr)
+			// A successful exit is expected to carry a JSON result array.
+			// Parse failure here means we cannot account for delivery outcomes
+			// (bounces, metrics). Log at error so this is visible in ops.
+			slog.Error("could not parse mail-remote results",
+				"error", jsonErr, "body", bodyPath, "envelopes", len(envPaths),
+				"stdout_bytes", stdout.Len())
 		}
+	} else if err == nil {
+		// mail-remote exited 0 but produced no output. A non-zero exit is
+		// expected to carry no results (crash/signal), but exit 0 must always
+		// write a result array -- even if empty -- so the scheduler can
+		// distinguish "nothing to report" from a silent stdout failure.
+		slog.Error("mail-remote exited 0 with empty stdout",
+			"body", bodyPath, "envelopes", len(envPaths))
 	}
 
 	for _, r := range results {

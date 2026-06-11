@@ -56,6 +56,11 @@ type Config struct {
 // envelope field and the Message-ID header.
 func Write(cfg Config, from string, recipients []string, body io.Reader) (string, error) {
 	fromDomain := extractDomain(from)
+
+	if !validAddressComponent(fromDomain) {
+		return "", fmt.Errorf("queue: invalid sender domain %q", fromDomain)
+	}
+
 	msgid, msgidHex, err := newMsgID(fromDomain)
 	if err != nil {
 		return "", fmt.Errorf("queue: generate msgid: %w", err)
@@ -93,8 +98,12 @@ func Write(cfg Config, from string, recipients []string, body io.Reader) (string
 
 	// Envelopes: one per recipient.
 	for n, rcpt := range recipients {
-		verpSender := verpAddress(from, rcpt, cfg.Hostname)
 		rcptLocal, rcptDomain := splitAddress(rcpt)
+		if !validAddressComponent(rcptLocal) || !validAddressComponent(rcptDomain) {
+			return "", fmt.Errorf("queue: invalid recipient %q", rcpt)
+		}
+
+		verpSender := verpAddress(from, rcpt, cfg.Hostname)
 		rcptTLD, rcptSLD := splitDomainLabels(rcptDomain)
 		envDir := filepath.Join(cfg.Dir, "env", rcptTLD, rcptSLD)
 		if err := os.MkdirAll(envDir, 0700); err != nil {
@@ -121,6 +130,15 @@ func Write(cfg Config, from string, recipients []string, body io.Reader) (string
 	}
 
 	return msgid, nil
+}
+
+// validAddressComponent rejects address parts that would escape the queue
+// directory when used as a path component. Matches the predicate enforced by
+// the delivery agent in internal/mail-session/deliver.
+func validAddressComponent(s string) bool {
+	return s != "" &&
+		!strings.ContainsAny(s, "/\\") &&
+		!strings.Contains(s, "..")
 }
 
 // newMsgID generates a msgid in RFC 5322 format: {hex}@{hostname}.

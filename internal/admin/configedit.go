@@ -2,6 +2,7 @@ package admin
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +18,7 @@ const (
 	kindInt
 	kindEnum
 	kindPath
+	kindIP
 )
 
 // configField maps an admin-visible key to its location in the per-domain
@@ -45,6 +47,8 @@ var domainConfigFields = map[string]configField{
 	"outbound.smarthost_user":   {section: "outbound", key: "smarthost_user", kind: kindString},
 	"outbound.password_file":    {section: "outbound", key: "password_file", kind: kindPath},
 	"limits.max_sends_per_hour": {section: "limits", key: "max_sends_per_hour", kind: kindInt},
+	"dns.hostname":              {section: "dns", key: "hostname", kind: kindString},
+	"dns.public_ip":             {section: "dns", key: "public_ip", kind: kindIP},
 	"max_message_size":          {section: "", key: "max_message_size", kind: kindInt},
 	"recipient_rejection":       {section: "", key: "recipient_rejection", kind: kindEnum, enum: []string{"rcpt", "data"}},
 }
@@ -147,6 +151,11 @@ func encodeConfigValue(field configField, value string) (string, error) {
 	case kindPath:
 		if !validRelativeOrAbsPath(value) {
 			return "", fmt.Errorf("path %q must not traverse upward", value)
+		}
+		return QuoteString(value), nil
+	case kindIP:
+		if net.ParseIP(value) == nil {
+			return "", fmt.Errorf("expected an IP address, got %q", value)
 		}
 		return QuoteString(value), nil
 	default:

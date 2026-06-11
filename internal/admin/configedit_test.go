@@ -81,13 +81,13 @@ func TestSetDomainConfig_Validation(t *testing.T) {
 	cases := []struct {
 		key, value string
 	}{
-		{"forwards", "x"},                    // not in whitelist
-		{"gid", "1234"},                      // not in whitelist
+		{"forwards", "x"},                       // not in whitelist
+		{"gid", "1234"},                         // not in whitelist
 		{"outbound.strategy", "carrier-pigeon"}, // bad enum
-		{"recipient_rejection", "never"},     // bad enum
-		{"max_message_size", "-5"},           // negative int
-		{"limits.max_sends_per_hour", "lots"}, // non-int
-		{"msgstore.base_path", "../../etc"},  // traversal
+		{"recipient_rejection", "never"},        // bad enum
+		{"max_message_size", "-5"},              // negative int
+		{"limits.max_sends_per_hour", "lots"},   // non-int
+		{"msgstore.base_path", "../../etc"},     // traversal
 	}
 	for _, c := range cases {
 		if err := p.SetDomainConfig("example.com", c.key, c.value); err == nil {

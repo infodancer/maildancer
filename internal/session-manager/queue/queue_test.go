@@ -163,6 +163,96 @@ func TestBodyWriteFailLeavesNoEnvelope(t *testing.T) {
 	})
 }
 
+func TestWriteValidatesAddresses(t *testing.T) {
+	cases := []struct {
+		name       string
+		from       string
+		recipients []string
+		wantErr    bool
+	}{
+		// Traversal in recipient localpart.
+		{
+			name:       "rcpt localpart path traversal",
+			from:       "sender@example.com",
+			recipients: []string{"../../etc/passwd@example.com"},
+			wantErr:    true,
+		},
+		// Traversal in recipient domain.
+		{
+			name:       "rcpt domain path traversal",
+			from:       "sender@example.com",
+			recipients: []string{"alice@evil/../.."},
+			wantErr:    true,
+		},
+		// Slash in sender domain.
+		{
+			name:       "sender domain slash",
+			from:       "nobody@../escape",
+			recipients: []string{"alice@example.com"},
+			wantErr:    true,
+		},
+		// Backslash in recipient localpart.
+		{
+			name:       "rcpt localpart backslash",
+			from:       "sender@example.com",
+			recipients: []string{"evil\\path@example.com"},
+			wantErr:    true,
+		},
+		// Normal address: no regression.
+		{
+			name:       "valid address",
+			from:       "alice@example.com",
+			recipients: []string{"bob@gmail.com"},
+			wantErr:    false,
+		},
+		// Single-label domain (tld="unknown"): still valid.
+		{
+			name:       "single-label recipient domain",
+			from:       "alice@example.com",
+			recipients: []string{"bob@localhost"},
+			wantErr:    false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			parentDir := filepath.Dir(cfg.Dir)
+
+			body := strings.NewReader("Subject: test\r\n\r\nbody\r\n")
+			_, err := Write(cfg, tc.from, tc.recipients, body)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for from=%q recipients=%v, got nil", tc.from, tc.recipients)
+				}
+				// For traversal cases, confirm no file escaped the queue dir.
+				err := filepath.Walk(parentDir, func(path string, info os.FileInfo, walkErr error) error {
+					if walkErr != nil || info.IsDir() {
+						return nil
+					}
+					// Any file directly in parentDir (not inside cfg.Dir) is an escape.
+					rel, relErr := filepath.Rel(cfg.Dir, path)
+					if relErr != nil {
+						return nil
+					}
+					if strings.HasPrefix(rel, "..") {
+						t.Errorf("file escaped queue dir: %s", path)
+					}
+					return nil
+				})
+				if err != nil {
+					t.Fatalf("walk error: %v", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestVERPFormat(t *testing.T) {
 	got := verpAddress("alice@example.com", "bob@gmail.com", "mail.example.com")
 	want := "bounces+bob=gmail.com@mail.example.com"

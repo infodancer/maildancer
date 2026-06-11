@@ -1,0 +1,269 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/tabwriter"
+
+	authdomain "github.com/infodancer/maildancer/auth/domain"
+	"github.com/infodancer/maildancer/internal/admin"
+)
+
+// runDomainSubcommand handles the `domain` subcommand and its actions:
+//
+//	userctl domain create <domain>
+//	userctl domain del    <domain> [--force]
+//	userctl domain list
+//	userctl domain show   <domain>
+//	userctl domain set    <domain> <key> [<value>]
+//	userctl domain key    show|create|del <domain>
+//
+// stdin supplies the password for `domain key create --password-stdin`.
+func runDomainSubcommand(args []string, paths admin.Paths, stdin io.Reader) error {
+	if len(args) < 1 {
+		domainUsage()
+		return fmt.Errorf("domain: missing action")
+	}
+
+	action := args[0]
+	rest := args[1:]
+
+	switch action {
+	case "create":
+		if len(rest) != 1 {
+			domainUsage()
+			return fmt.Errorf("domain create: expected <domain>")
+		}
+		return cmdDomainCreate(paths, strings.ToLower(strings.TrimSpace(rest[0])))
+
+	case "del":
+		force := false
+		var names []string
+		for _, a := range rest {
+			if a == "--force" {
+				force = true
+			} else {
+				names = append(names, a)
+			}
+		}
+		if len(names) != 1 {
+			domainUsage()
+			return fmt.Errorf("domain del: expected <domain> [--force]")
+		}
+		return cmdDomainDel(paths, names[0], force)
+
+	case "list":
+		if len(rest) != 0 {
+			domainUsage()
+			return fmt.Errorf("domain list: takes no arguments")
+		}
+		return cmdDomainList(paths)
+
+	case "show":
+		if len(rest) != 1 {
+			domainUsage()
+			return fmt.Errorf("domain show: expected <domain>")
+		}
+		return cmdDomainShow(paths, rest[0])
+
+	case "set":
+		// Two args = unset (empty value removes the key); three = set.
+		switch len(rest) {
+		case 2:
+			return cmdDomainSet(paths, rest[0], rest[1], "")
+		case 3:
+			return cmdDomainSet(paths, rest[0], rest[1], rest[2])
+		default:
+			domainUsage()
+			return fmt.Errorf("domain set: expected <domain> <key> [<value>] (omit value to unset)")
+		}
+
+	case "key":
+		return runDomainKeyAction(rest, paths, stdin)
+
+	default:
+		domainUsage()
+		return fmt.Errorf("domain: unknown action %q", action)
+	}
+}
+
+func cmdDomainCreate(paths admin.Paths, name string) error {
+	gid, err := paths.CreateDomain(name)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Created domain %s (gid %d)\n", name, gid)
+	fmt.Printf("  config: %s\n", filepath.Join(paths.Config, name))
+	fmt.Printf("  data:   %s\n", filepath.Join(paths.Data, name))
+	return nil
+}
+
+func cmdDomainDel(paths admin.Paths, name string, force bool) error {
+	if err := paths.DeleteDomain(name, force); err != nil {
+		return err
+	}
+	fmt.Printf("Deleted domain %s (configuration removed; mail data under %s is retained)\n",
+		name, filepath.Join(paths.Data, name))
+	return nil
+}
+
+func cmdDomainList(paths admin.Paths) error {
+	domains, err := paths.ListDomains()
+	if err != nil {
+		return err
+	}
+	if len(domains) == 0 {
+		fmt.Println("no domains")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(w, "DOMAIN\tAUTH\tSTORE\tGID\tUSERS"); err != nil {
+		return err
+	}
+	for _, d := range domains {
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\n", d.Name, d.AuthType, d.StoreType, d.GID, d.UserCount); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
+func cmdDomainShow(paths admin.Paths, name string) error {
+	info, err := paths.GetDomain(name)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Domain:    %s\n", info.Name)
+	fmt.Printf("Auth:      %s\n", info.AuthType)
+	fmt.Printf("Store:     %s\n", info.StoreType)
+	fmt.Printf("GID:       %d\n", info.GID)
+	fmt.Printf("Users:     %d\n", info.UserCount)
+
+	// Per-domain config.toml details beyond the basics.
+	configPath := filepath.Join(paths.Config, name, "config.toml")
+	if cfg, err := authdomain.LoadDomainConfig(configPath); err == nil {
+		if cfg.DKIM.Selector != "" {
+			fmt.Printf("DKIM:      selector=%s key=%s\n", cfg.DKIM.Selector, cfg.DKIM.PrivateKeyPath)
+		}
+		if cfg.Outbound.Strategy != "" {
+			line := "Outbound:  " + cfg.Outbound.Strategy
+			if cfg.Outbound.Smarthost != "" {
+				line += " via " + cfg.Outbound.Smarthost
+			}
+			fmt.Println(line)
+		}
+		if cfg.Limits.MaxSendsPerHour != 0 {
+			fmt.Printf("Limits:    max_sends_per_hour=%d\n", cfg.Limits.MaxSendsPerHour)
+		}
+		if cfg.MaxMessageSize != 0 {
+			fmt.Printf("MaxSize:   %d bytes\n", cfg.MaxMessageSize)
+		}
+		if cfg.RecipientRejection != "" {
+			fmt.Printf("RcptRej:   %s\n", cfg.RecipientRejection)
+		}
+		if len(cfg.Forwards) > 0 {
+			fmt.Printf("Forwards:  %d configured (userctl forward list %s)\n", len(cfg.Forwards), name)
+		}
+	}
+
+	if status, err := paths.DomainKeyStatus(name); err == nil && status.Exists {
+		fmt.Printf("DomainKey: x25519 %s (private key: %v)\n", status.Fingerprint, status.HasPrivate)
+	}
+	return nil
+}
+
+func cmdDomainSet(paths admin.Paths, name, key, value string) error {
+	if err := paths.SetDomainConfig(name, key, value); err != nil {
+		return err
+	}
+	if value == "" {
+		fmt.Printf("Unset %s for %s\n", key, name)
+	} else {
+		fmt.Printf("Set %s = %s for %s\n", key, value, name)
+	}
+	return nil
+}
+
+// runDomainKeyAction handles `domain key show|create|del <domain>`.
+func runDomainKeyAction(args []string, paths admin.Paths, stdin io.Reader) error {
+	if len(args) < 2 {
+		domainUsage()
+		return fmt.Errorf("domain key: expected show|create|del <domain>")
+	}
+	action := args[0]
+	passwordStdin := false
+	var names []string
+	for _, a := range args[1:] {
+		if a == "--password-stdin" {
+			passwordStdin = true
+		} else {
+			names = append(names, a)
+		}
+	}
+	if len(names) != 1 {
+		domainUsage()
+		return fmt.Errorf("domain key %s: expected <domain>", action)
+	}
+	name := names[0]
+
+	switch action {
+	case "show":
+		status, err := paths.DomainKeyStatus(name)
+		if err != nil {
+			return err
+		}
+		if !status.Exists {
+			fmt.Printf("no domain key for %s\n", name)
+			return nil
+		}
+		fmt.Printf("Algorithm:   x25519\n")
+		fmt.Printf("Fingerprint: %s\n", status.Fingerprint)
+		fmt.Printf("Private key: %v\n", status.HasPrivate)
+		return nil
+
+	case "create":
+		password, err := readNewPassword(stdin, passwordStdin)
+		if err != nil {
+			return err
+		}
+		fingerprint, err := paths.CreateDomainKeys(name, password)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Generated domain key for %s\nFingerprint: %s\n", name, fingerprint)
+		return nil
+
+	case "del":
+		if err := paths.DeleteDomainKeys(name); err != nil {
+			return err
+		}
+		fmt.Printf("Deleted domain key for %s\n", name)
+		return nil
+
+	default:
+		domainUsage()
+		return fmt.Errorf("domain key: unknown action %q", action)
+	}
+}
+
+func domainUsage() {
+	fmt.Fprintf(os.Stderr, `Usage:
+  userctl domain create <domain>                    create domain (allocates gid)
+  userctl domain del    <domain> [--force]          delete domain config (--force if users exist;
+                                                    mail data is retained)
+  userctl domain list                               list domains
+  userctl domain show   <domain>                    show domain configuration
+  userctl domain set    <domain> <key> [<value>]    set a config key (omit value to unset)
+  userctl domain key    show   <domain>             show domain encryption key
+  userctl domain key    create <domain> [--password-stdin]
+  userctl domain key    del    <domain>
+
+Config keys for domain set:
+  %s
+`, strings.Join(admin.DomainConfigKeys(), "\n  "))
+}

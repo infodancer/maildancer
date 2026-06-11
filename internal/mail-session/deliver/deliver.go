@@ -124,9 +124,17 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 	if !req.Forwarded && dom.AuthAgent != nil {
 		if targets, ok := dom.AuthAgent.ResolveForward(ctx, localpart); ok {
 			if len(targets) > 1 {
+				// A multi-target forward is a configuration error: forwarding is
+				// strictly 1:1. Temp-fail (not perm-fail) so the sending MTA holds
+				// and retries while the admin fixes the misconfiguration; the
+				// sending MTA's own retry window is the eventual permanent backstop.
+				// We deliberately do NOT build stateful temp->perm escalation here.
+				slog.Error("forwarding misconfiguration: multiple forward targets configured (1:1 required)",
+					slog.String("recipient", req.Recipient),
+					slog.Int("target_count", len(targets)))
 				return DeliverResponse{
 					Result:    ResultRejected,
-					Temporary: false,
+					Temporary: true,
 					Reason:    fmt.Sprintf("forwarding misconfiguration: only one forward destination allowed, %d configured", len(targets)),
 				}, nil
 			}

@@ -5,6 +5,7 @@ package forwards
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 )
@@ -63,8 +64,14 @@ func Load(path string) (*ForwardMap, error) {
 		}
 
 		if key == "*" {
+			if len(targets) > 1 {
+				slog.Warn("forwards: multiple targets configured for a single localpart; forwarding is 1:1 -- this entry will be rejected (temp-fail) at delivery until corrected", slog.String("localpart", "*"), slog.Int("target_count", len(targets)))
+			}
 			m.catchall = targets
 		} else {
+			if len(targets) > 1 {
+				slog.Warn("forwards: multiple targets configured for a single localpart; forwarding is 1:1 -- this entry will be rejected (temp-fail) at delivery until corrected", slog.String("localpart", key), slog.Int("target_count", len(targets)))
+			}
 			m.exact[key] = targets
 		}
 	}
@@ -120,8 +127,14 @@ func FromMap(m map[string]string) *ForwardMap {
 			continue
 		}
 		if k == "*" {
+			if len(targets) > 1 {
+				slog.Warn("forwards: multiple targets configured for a single localpart; forwarding is 1:1 -- this entry will be rejected (temp-fail) at delivery until corrected", slog.String("localpart", "*"), slog.Int("target_count", len(targets)))
+			}
 			fm.catchall = targets
 		} else {
+			if len(targets) > 1 {
+				slog.Warn("forwards: multiple targets configured for a single localpart; forwarding is 1:1 -- this entry will be rejected (temp-fail) at delivery until corrected", slog.String("localpart", strings.ToLower(k)), slog.Int("target_count", len(targets)))
+			}
 			fm.exact[strings.ToLower(k)] = targets
 		}
 	}

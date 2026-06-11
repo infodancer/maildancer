@@ -329,3 +329,52 @@ func TestSetPassword_PreservesLegacyEntry(t *testing.T) {
 		t.Errorf("comment line not preserved:\n%s", data)
 	}
 }
+
+func TestSetUID(t *testing.T) {
+	passwdPath := filepath.Join(t.TempDir(), "passwd")
+	hash, err := HashPassword("pw12345678")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	// One legacy three-field entry, one four-field entry with uid 0.
+	content := "# users\neve:" + hash + ":eve.jones\nfrank:" + hash + ":frank:0\n"
+	if err := os.WriteFile(passwdPath, []byte(content), 0o640); err != nil {
+		t.Fatalf("write passwd: %v", err)
+	}
+
+	if err := SetUID(passwdPath, "eve", 10070); err != nil {
+		t.Fatalf("SetUID legacy entry: %v", err)
+	}
+	if err := SetUID(passwdPath, "frank", 10071); err != nil {
+		t.Fatalf("SetUID zero-uid entry: %v", err)
+	}
+
+	users, err := ListUsers(passwdPath)
+	if err != nil {
+		t.Fatalf("ListUsers: %v", err)
+	}
+	byName := map[string]UserInfo{}
+	for _, u := range users {
+		byName[u.Username] = u
+	}
+	if byName["eve"].Uid != 10070 || byName["eve"].Mailbox != "eve.jones" {
+		t.Errorf("eve = %+v, want uid 10070 mailbox eve.jones", byName["eve"])
+	}
+	if byName["frank"].Uid != 10071 {
+		t.Errorf("frank = %+v, want uid 10071", byName["frank"])
+	}
+
+	// Hash is untouched: password still authenticates.
+	agent, err := NewAgent(passwdPath, "")
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	defer func() { _ = agent.Close() }()
+	if _, err := agent.Authenticate(context.Background(), "eve", "pw12345678"); err != nil {
+		t.Errorf("Authenticate after SetUID: %v", err)
+	}
+
+	if err := SetUID(passwdPath, "nosuch", 1); err == nil {
+		t.Error("expected error for missing user, got nil")
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
@@ -329,9 +330,9 @@ func TestIsValidUsername(t *testing.T) {
 }
 
 func TestHashPassword(t *testing.T) {
-	hash, err := hashPassword("testpassword")
+	hash, err := passwd.HashPassword("testpassword")
 	if err != nil {
-		t.Fatalf("hashPassword() error: %v", err)
+		t.Fatalf("HashPassword() error: %v", err)
 	}
 	if !strings.HasPrefix(hash, "$argon2id$v=19$") {
 		t.Errorf("expected argon2id prefix, got %q", hash[:20])

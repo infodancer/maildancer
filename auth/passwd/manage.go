@@ -65,6 +65,128 @@ func AddUser(passwdPath, username, password string) error {
 	return err
 }
 
+// AddUserWithUID appends a new user entry with an explicit uid to the passwd
+// file at passwdPath. Returns an error if the username already exists.
+func AddUserWithUID(passwdPath, username, password string, uid uint32) error {
+	users, err := parsePasswd(passwdPath)
+	if err != nil {
+		return err
+	}
+
+	for _, u := range users {
+		if u.Username == username {
+			return fmt.Errorf("user %q already exists", username)
+		}
+	}
+
+	hash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.OpenFile(passwdPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o640)
+	if err != nil {
+		return fmt.Errorf("open passwd file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	_, err = fmt.Fprintf(f, "%s:%s:%s:%d\n", username, hash, username, uid)
+	return err
+}
+
+// SetPassword replaces the password hash for the named user, preserving the
+// mailbox and uid fields (including legacy three-field entries, which stay
+// three-field). Returns an error if the user does not exist.
+func SetPassword(passwdPath, username, password string) error {
+	f, err := os.Open(passwdPath)
+	if err != nil {
+		return fmt.Errorf("open passwd file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	hash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+
+	var lines []string
+	found := false
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			lines = append(lines, line)
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 4)
+		if len(parts) < 2 || parts[0] != username {
+			lines = append(lines, line)
+			continue
+		}
+		found = true
+		mailbox := parts[0]
+		if len(parts) >= 3 {
+			mailbox = parts[2]
+		}
+		if len(parts) >= 4 {
+			lines = append(lines, fmt.Sprintf("%s:%s:%s:%s", username, hash, mailbox, parts[3]))
+		} else {
+			lines = append(lines, fmt.Sprintf("%s:%s:%s", username, hash, mailbox))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("user %q not found", username)
+	}
+
+	return writePasswd(passwdPath, lines)
+}
+
+// SetUID assigns a uid to the named user, preserving the hash and mailbox
+// fields and upgrading legacy three-field entries to four fields.
+// Returns an error if the user does not exist.
+func SetUID(passwdPath, username string, uid uint32) error {
+	f, err := os.Open(passwdPath)
+	if err != nil {
+		return fmt.Errorf("open passwd file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var lines []string
+	found := false
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			lines = append(lines, line)
+			continue
+		}
+		parts := strings.SplitN(trimmed, ":", 4)
+		if len(parts) < 2 || parts[0] != username {
+			lines = append(lines, line)
+			continue
+		}
+		found = true
+		mailbox := parts[0]
+		if len(parts) >= 3 {
+			mailbox = parts[2]
+		}
+		lines = append(lines, fmt.Sprintf("%s:%s:%s:%d", username, parts[1], mailbox, uid))
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("user %q not found", username)
+	}
+
+	return writePasswd(passwdPath, lines)
+}
+
 // DeleteUser removes the named user from the passwd file.
 // Returns an error if the user does not exist.
 func DeleteUser(passwdPath, username string) error {

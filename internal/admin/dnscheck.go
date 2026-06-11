@@ -74,23 +74,23 @@ func (p Paths) CheckDomainDNS(ctx context.Context, r Resolver, domainName string
 
 	var spf DNSCheck
 	if cfg.Outbound.Strategy == "smarthost" {
-		spf = checkSPFSmarthost(ctx, r, domainName, cfg.Outbound.Smarthost)
+		spf = CheckSPFSmarthost(ctx, r, domainName, cfg.Outbound.Smarthost)
 	} else {
-		spf = checkSPFDirect(ctx, r, domainName, target.IP)
+		spf = CheckSPFDirect(ctx, r, domainName, target.IP)
 	}
 
 	return []DNSCheck{
-		checkDNSA(ctx, r, domainName, target.IP),
-		checkDNSMX(ctx, r, domainName, target),
-		checkDNSPTR(ctx, r, target),
+		CheckDNSA(ctx, r, domainName, target.IP),
+		CheckDNSMX(ctx, r, domainName, target),
+		CheckDNSPTR(ctx, r, target),
 		spf,
-		p.checkDNSDKIM(ctx, r, domainName),
-		checkDNSDMARC(ctx, r, domainName),
+		p.CheckDNSDKIM(ctx, r, domainName),
+		CheckDNSDMARC(ctx, r, domainName),
 	}, nil
 }
 
-// checkDNSA verifies the domain's A/AAAA record resolves to the expected IP.
-func checkDNSA(ctx context.Context, r Resolver, domainName, expectedIP string) DNSCheck {
+// CheckDNSA verifies the domain's A/AAAA record resolves to the expected IP.
+func CheckDNSA(ctx context.Context, r Resolver, domainName, expectedIP string) DNSCheck {
 	result := DNSCheck{Type: "a"}
 	if expectedIP == "" {
 		result.Status = DNSStatusWarning
@@ -121,9 +121,9 @@ func checkDNSA(ctx context.Context, r Resolver, domainName, expectedIP string) D
 	return result
 }
 
-// checkDNSMX verifies the domain's MX points at the mail server, matching
+// CheckDNSMX verifies the domain's MX points at the mail server, matching
 // either by hostname or by the address an MX host resolves to.
-func checkDNSMX(ctx context.Context, r Resolver, domainName string, target DNSTarget) DNSCheck {
+func CheckDNSMX(ctx context.Context, r Resolver, domainName string, target DNSTarget) DNSCheck {
 	result := DNSCheck{
 		Type:     "mx",
 		Expected: fmt.Sprintf("MX for %s -> %s", domainName, target.Hostname),
@@ -170,8 +170,8 @@ func checkDNSMX(ctx context.Context, r Resolver, domainName string, target DNSTa
 	return result
 }
 
-// checkDNSPTR verifies reverse DNS of the server IP matches the hostname.
-func checkDNSPTR(ctx context.Context, r Resolver, target DNSTarget) DNSCheck {
+// CheckDNSPTR verifies reverse DNS of the server IP matches the hostname.
+func CheckDNSPTR(ctx context.Context, r Resolver, target DNSTarget) DNSCheck {
 	result := DNSCheck{Type: "ptr"}
 	if target.IP == "" {
 		result.Status = DNSStatusWarning
@@ -220,10 +220,10 @@ func lookupSPF(ctx context.Context, r Resolver, domainName string) (string, erro
 	return "", nil
 }
 
-// checkSPFDirect verifies the domain's SPF record covers the server's
+// CheckSPFDirect verifies the domain's SPF record covers the server's
 // outbound IP. Mechanism evaluation is heuristic (direct ip4:/ip6: match);
 // include: indirection produces a warning, not a pass.
-func checkSPFDirect(ctx context.Context, r Resolver, domainName, expectedIP string) DNSCheck {
+func CheckSPFDirect(ctx context.Context, r Resolver, domainName, expectedIP string) DNSCheck {
 	result := DNSCheck{Type: "spf"}
 	if expectedIP == "" {
 		result.Status = DNSStatusWarning
@@ -256,11 +256,11 @@ func checkSPFDirect(ctx context.Context, r Resolver, domainName, expectedIP stri
 	return result
 }
 
-// checkSPFSmarthost verifies a smarthost-routed domain has an SPF record.
+// CheckSPFSmarthost verifies a smarthost-routed domain has an SPF record.
 // Whether the record covers the smarthost cannot be evaluated mechanically
 // (the right mechanism is the relay operator's to specify), so an existing
 // record is reported as a warning asking the operator to confirm coverage.
-func checkSPFSmarthost(ctx context.Context, r Resolver, domainName, smarthost string) DNSCheck {
+func CheckSPFSmarthost(ctx context.Context, r Resolver, domainName, smarthost string) DNSCheck {
 	host := smarthost
 	if h, _, err := net.SplitHostPort(smarthost); err == nil {
 		host = h
@@ -284,10 +284,10 @@ func checkSPFSmarthost(ctx context.Context, r Resolver, domainName, smarthost st
 	return result
 }
 
-// checkDNSDKIM compares the published DKIM record for the domain's
+// CheckDNSDKIM compares the published DKIM record for the domain's
 // configured selector against the local key. When no local DKIM key is
 // configured the check is a warning, since there is nothing to compare.
-func (p Paths) checkDNSDKIM(ctx context.Context, r Resolver, domainName string) DNSCheck {
+func (p Paths) CheckDNSDKIM(ctx context.Context, r Resolver, domainName string) DNSCheck {
 	result := DNSCheck{Type: "dkim"}
 
 	rec, err := p.DKIMStatus(domainName)
@@ -352,8 +352,8 @@ func dkimTags(record string) map[string]string {
 	return tags
 }
 
-// checkDNSDMARC checks for a DMARC TXT record at _dmarc.{domain}.
-func checkDNSDMARC(ctx context.Context, r Resolver, domainName string) DNSCheck {
+// CheckDNSDMARC checks for a DMARC TXT record at _dmarc.{domain}.
+func CheckDNSDMARC(ctx context.Context, r Resolver, domainName string) DNSCheck {
 	dmarcDomain := "_dmarc." + domainName
 	result := DNSCheck{
 		Type:     "dmarc",

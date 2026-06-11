@@ -131,7 +131,11 @@ func (a *SessionManagerDeliveryAgent) ValidateRecipient(ctx context.Context, add
 
 // Deliver sends a message to the session-manager for delivery.
 // Parameters map directly to SMTP envelope fields -- no msgstore types involved.
-func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, message io.Reader) error {
+//
+// forwarded marks this delivery as the result of resolving a forward. When
+// true, the mail-session delivery path will not re-resolve forwarding rules
+// for the recipient, which closes the 1-hop gap and prevents mail loops.
+func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, forwarded bool, message io.Reader) error {
 	stream, err := a.delivery.Deliver(ctx)
 	if err != nil {
 		return fmt.Errorf("session-manager delivery: open stream: %w", err)
@@ -142,6 +146,7 @@ func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recip
 		Recipient:      recipient,
 		ClientIp:       clientIP,
 		ClientHostname: clientHostname,
+		Forwarded:      forwarded,
 	}
 	if !receivedTime.IsZero() {
 		meta.ReceivedTime = receivedTime.Format(time.RFC3339)

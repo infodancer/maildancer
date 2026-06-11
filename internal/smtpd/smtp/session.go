@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/mail"
@@ -627,9 +629,21 @@ func (s *Session) Data(r io.Reader) error {
 	if len(s.recipients) > 0 {
 		now := time.Now()
 
-		// Session-manager is the only delivery path.
+		// Session-manager is the only delivery path. The initial delivery is
+		// never itself a forward (forwarded=false); the recipient's forwarding
+		// rules are resolved by the mail-session delivery path, which signals a
+		// configured forward by returning a *RedirectError.
 		deliverErr := s.backend.smDelivery.Deliver(ctx,
-			s.from, s.recipients[0], s.clientIP, s.helo, now, tmp.reader())
+			s.from, s.recipients[0], s.clientIP, s.helo, now, false, tmp.reader())
+
+		var redirectErr *RedirectError
+		redirected := errors.As(deliverErr, &redirectErr)
+		if redirected {
+			// A configured forward. Re-route each target as a fresh recipient
+			// (local Deliver with Forwarded=true, or remote Enqueue). This is
+			// the only delivery path that can reach external forward targets.
+			deliverErr = s.followRedirect(ctx, redirectErr, tmp)
+		}
 
 		if deliverErr != nil {
 			s.logger.Warn("local delivery failed",
@@ -649,13 +663,18 @@ func (s *Session) Data(r io.Reader) error {
 			}
 		}
 
-		// Notify Redis pub/sub so IMAP IDLE clients see new mail.
-		folder := "INBOX"
-		if checkResult != nil && checkResult.Action == spamcheck.ActionFlag {
-			folder = "Junk"
-		}
-		for _, rcpt := range s.recipients {
-			s.backend.notifier.NotifyNewMail(ctx, rcpt, folder)
+		// Notify Redis pub/sub so IMAP IDLE clients see new mail. Skip when the
+		// message was forwarded away: the original recipient has nothing new in
+		// their INBOX. The actual local forward target is already notified inside
+		// followRedirect; an external target has no local mailbox to notify.
+		if !redirected {
+			folder := "INBOX"
+			if checkResult != nil && checkResult.Action == spamcheck.ActionFlag {
+				folder = "Junk"
+			}
+			for _, rcpt := range s.recipients {
+				s.backend.notifier.NotifyNewMail(ctx, rcpt, folder)
+			}
 		}
 
 		if s.backend.collector != nil {
@@ -721,6 +740,82 @@ func (s *Session) Data(r io.Reader) error {
 			slog.String("from", s.from),
 			slog.Any("to", s.remoteRecipients),
 			slog.Int64("size", counter.n))
+	}
+
+	return nil
+}
+
+// followRedirect re-routes a configured forward to each target address. Each
+// target is classified local-vs-remote via the same ValidateRecipient path used
+// at RCPT time: a local target is delivered with Forwarded=true (so the target's
+// own forwarding rules are not re-resolved -- the 1-hop ceiling), and a remote
+// target is enqueued for outbound delivery.
+//
+// Forwarding is strictly 1-hop here: the re-submitted local delivery is marked
+// Forwarded=true, so the mail-session delivery path will not return a second
+// *RedirectError. If a target nevertheless redirects again (a forward whose
+// target is itself a forward source), it is treated as a configuration error and
+// temp-failed -- smtpd follows at most one redirect.
+//
+// Returns nil on success, or an error that the caller maps to a 451.
+func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer) error {
+	if len(redirect.Addresses) == 0 {
+		s.logger.Error("forward resolved to no targets",
+			slog.String("from", s.from),
+			slog.String("to", s.recipients[0]))
+		return errors.New("forward resolved to no targets")
+	}
+
+	for _, target := range redirect.Addresses {
+		vr, err := s.backend.smDelivery.ValidateRecipient(ctx, target)
+		if err != nil {
+			s.logger.Error("forward target validation failed",
+				slog.String("target", target),
+				slog.String("error", err.Error()))
+			return fmt.Errorf("forward target %q validation: %w", target, err)
+		}
+
+		if !vr.DomainIsLocal {
+			// External forward target: enqueue for outbound delivery.
+			msgID, err := s.backend.smDelivery.Enqueue(ctx, s.from, []string{target}, tmp.reader())
+			if err != nil {
+				s.logger.Warn("forward enqueue failed",
+					slog.String("target", target),
+					slog.String("error", err.Error()))
+				return fmt.Errorf("forward enqueue to %q: %w", target, err)
+			}
+			s.logger.Info("forward enqueued for remote delivery",
+				slog.String("from", s.from),
+				slog.String("target", target),
+				slog.String("msg_id", msgID))
+			continue
+		}
+
+		// Local forward target: deliver with Forwarded=true so the target's own
+		// forwarding rules are not re-resolved (1-hop ceiling). A second redirect
+		// here is a configuration error.
+		now := time.Now()
+		err = s.backend.smDelivery.Deliver(ctx,
+			s.from, target, s.clientIP, s.helo, now, true, tmp.reader())
+
+		var nested *RedirectError
+		if errors.As(err, &nested) {
+			s.logger.Error("forward target is itself a forward source; refusing second redirect",
+				slog.String("from", s.from),
+				slog.String("target", target))
+			return fmt.Errorf("forward to %q redirected again (1-hop limit exceeded)", target)
+		}
+		if err != nil {
+			s.logger.Warn("forward delivery failed",
+				slog.String("target", target),
+				slog.String("error", err.Error()))
+			return fmt.Errorf("forward delivery to %q: %w", target, err)
+		}
+
+		s.backend.notifier.NotifyNewMail(ctx, target, "INBOX")
+		s.logger.Info("forward delivered locally",
+			slog.String("from", s.from),
+			slog.String("target", target))
 	}
 
 	return nil

@@ -80,6 +80,22 @@ const (
 	exTempFail    = 75 // EX_TEMPFAIL: temporary failure, retry later
 )
 
+// writeResultsAndCleanup encodes output as JSON to w, then removes the paths
+// in toDelete only if the encode succeeded. Callers must not delete envelopes
+// before calling this -- the write-then-delete ordering ensures that a broken
+// pipe or process crash leaves envelopes on disk for .delivering recovery.
+func writeResultsAndCleanup(w io.Writer, output []recipientResult, toDelete []string) error {
+	if err := json.NewEncoder(w).Encode(output); err != nil {
+		return err
+	}
+	for _, path := range toDelete {
+		if removeErr := os.Remove(path); removeErr != nil {
+			slog.Warn("could not remove envelope after reporting", "path", path, "error", removeErr)
+		}
+	}
+	return nil
+}
+
 func main() {
 	os.Exit(run())
 }
@@ -239,15 +255,14 @@ func run() int {
 
 	tempFail, permFail := false, false
 	var output []recipientResult
+	var toDelete []string
 	for path, err := range results {
 		if err == nil {
 			slog.Info("delivered", "envelope", path)
 			output = append(output, recipientResult{
 				Envelope: path, Status: "delivered", SMTPCode: 250,
 			})
-			if removeErr := os.Remove(path); removeErr != nil {
-				slog.Warn("could not remove delivered envelope", "path", path, "error", removeErr)
-			}
+			toDelete = append(toDelete, path)
 			continue
 		}
 
@@ -258,9 +273,7 @@ func run() int {
 				Envelope: path, Status: "perm_fail",
 				SMTPCode: smtp.SMTPCode(err), Diagnostic: err.Error(),
 			})
-			if removeErr := os.Remove(path); removeErr != nil {
-				slog.Warn("could not remove rejected envelope", "path", path, "error", removeErr)
-			}
+			toDelete = append(toDelete, path)
 		} else {
 			slog.Error("temporary delivery failure", "envelope", path, "error", err)
 			tempFail = true
@@ -276,8 +289,12 @@ func run() int {
 		}
 	}
 
-	if err := json.NewEncoder(os.Stdout).Encode(output); err != nil {
-		slog.Warn("could not write results to stdout", "error", err)
+	// Write results to stdout BEFORE deleting any envelope files. If the
+	// encode fails, leave envelopes on disk so queue-manager can recover via
+	// the .delivering mechanism, and signal failure with a non-zero exit.
+	if err := writeResultsAndCleanup(os.Stdout, output, toDelete); err != nil {
+		slog.Error("could not write results to stdout; leaving envelopes for recovery", "error", err)
+		return exTempFail
 	}
 
 	switch {

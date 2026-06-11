@@ -46,25 +46,6 @@ func (s *stubDeliveryAgent) Deliver(_ context.Context, env msgstore.Envelope, _ 
 	return nil
 }
 
-// stubDomainProvider implements DomainProvider with a fixed map of domains.
-type stubDomainProvider struct {
-	domains map[string]*Domain
-}
-
-func (s *stubDomainProvider) GetDomain(name string) *Domain {
-	return s.domains[name]
-}
-
-func (s *stubDomainProvider) Domains() []string {
-	keys := make([]string, 0, len(s.domains))
-	for k := range s.domains {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
-func (s *stubDomainProvider) Close() error { return nil }
-
 // --- forwardingAuthAgent tests ---
 
 func TestForwardingAuthAgent_UserExists_LocalUser(t *testing.T) {
@@ -168,16 +149,16 @@ func TestForwardingAuthAgent_UserLevel(t *testing.T) {
 	}
 }
 
-// --- forwardingDeliveryAgent tests ---
+// --- MailDeliveryAgent tests ---
 
-func TestForwardingDeliveryAgent_NoForward_DeliversLocally(t *testing.T) {
+// MailDeliveryAgent is now a thin pass-through; forwarding is resolved upstream
+// in mail-session deliver stage 1 (the 1-hop ceiling is covered by
+// TestFollowRedirect_OneHopCeiling in internal/smtpd/smtp). The only behavior
+// left to verify here is that Deliver hands the message straight to the inner
+// agent.
+func TestMailDeliveryAgent_PassesThroughToInner(t *testing.T) {
 	inner := &stubDeliveryAgent{}
-	chain := &forwardChain{
-		domainForwards:  &forwards.ForwardMap{},
-		defaultForwards: &forwards.ForwardMap{},
-	}
-	provider := &stubDomainProvider{domains: map[string]*Domain{}}
-	agent := &MailDeliveryAgent{inner: inner, chain: chain, provider: provider}
+	agent := &MailDeliveryAgent{inner: inner}
 
 	env := msgstore.Envelope{Recipients: []string{"alice@example.com"}}
 	if err := agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test"))); err != nil {
@@ -185,116 +166,6 @@ func TestForwardingDeliveryAgent_NoForward_DeliversLocally(t *testing.T) {
 	}
 	if len(inner.delivered) != 1 {
 		t.Errorf("expected 1 local delivery, got %d", len(inner.delivered))
-	}
-}
-
-func TestForwardingDeliveryAgent_DomainForward_RoutesToTarget(t *testing.T) {
-	dir := t.TempDir()
-	fwdPath := filepath.Join(dir, "forwards")
-	if err := os.WriteFile(fwdPath, []byte("*:matthew@canonical.com\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	fwdMap, err := forwards.Load(fwdPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	canonicalInner := &stubDeliveryAgent{}
-	canonicalDomain := &Domain{
-		Name:          "canonical.com",
-		DeliveryAgent: canonicalInner,
-	}
-	provider := &stubDomainProvider{
-		domains: map[string]*Domain{"canonical.com": canonicalDomain},
-	}
-
-	inner := &stubDeliveryAgent{}
-	chain := &forwardChain{
-		domainForwards:  fwdMap,
-		defaultForwards: &forwards.ForwardMap{},
-	}
-	agent := &MailDeliveryAgent{inner: inner, chain: chain, provider: provider}
-
-	env := msgstore.Envelope{Recipients: []string{"anyone@this.com"}}
-	if err := agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test"))); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Should not deliver locally
-	if len(inner.delivered) != 0 {
-		t.Errorf("expected 0 local deliveries, got %d", len(inner.delivered))
-	}
-	// Should deliver to canonical.com
-	if len(canonicalInner.delivered) != 1 {
-		t.Fatalf("expected 1 forwarded delivery, got %d", len(canonicalInner.delivered))
-	}
-	if canonicalInner.delivered[0].Recipients[0] != "matthew@canonical.com" {
-		t.Errorf("unexpected forward recipient: %v", canonicalInner.delivered[0].Recipients)
-	}
-}
-
-func TestForwardingDeliveryAgent_ExternalTarget_ReturnsError(t *testing.T) {
-	dir := t.TempDir()
-	fwdPath := filepath.Join(dir, "forwards")
-	if err := os.WriteFile(fwdPath, []byte("*:me@gmail.com\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	fwdMap, err := forwards.Load(fwdPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Provider has no domain for gmail.com
-	provider := &stubDomainProvider{domains: map[string]*Domain{}}
-
-	inner := &stubDeliveryAgent{}
-	chain := &forwardChain{
-		domainForwards:  fwdMap,
-		defaultForwards: &forwards.ForwardMap{},
-	}
-	agent := &MailDeliveryAgent{inner: inner, chain: chain, provider: provider}
-
-	env := msgstore.Envelope{Recipients: []string{"anyone@this.com"}}
-	err = agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test")))
-	if err == nil {
-		t.Error("expected error for unroutable external forward target")
-	}
-}
-
-func TestForwardingDeliveryAgent_UserLevelForward(t *testing.T) {
-	dir := t.TempDir()
-	userFwdDir := filepath.Join(dir, "user_forwards")
-	if err := os.MkdirAll(userFwdDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(userFwdDir, "alice"), []byte("alice@other.com\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	targetInner := &stubDeliveryAgent{}
-	provider := &stubDomainProvider{
-		domains: map[string]*Domain{
-			"other.com": {Name: "other.com", DeliveryAgent: targetInner},
-		},
-	}
-
-	inner := &stubDeliveryAgent{}
-	chain := &forwardChain{
-		userForwardsDir: userFwdDir,
-		domainForwards:  &forwards.ForwardMap{},
-		defaultForwards: &forwards.ForwardMap{},
-	}
-	agent := &MailDeliveryAgent{inner: inner, chain: chain, provider: provider}
-
-	env := msgstore.Envelope{Recipients: []string{"alice@this.com"}}
-	if err := agent.Deliver(context.Background(), env, bytes.NewReader([]byte("test"))); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(inner.delivered) != 0 {
-		t.Errorf("expected no local delivery, got %d", len(inner.delivered))
-	}
-	if len(targetInner.delivered) != 1 {
-		t.Errorf("expected 1 forwarded delivery, got %d", len(targetInner.delivered))
 	}
 }
 

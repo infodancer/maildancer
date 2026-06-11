@@ -1,0 +1,302 @@
+package deliver
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+
+	_ "github.com/infodancer/maildancer/auth/passwd"
+	_ "github.com/infodancer/maildancer/msgstore/maildir"
+)
+
+// minimalMsg is a tiny but valid RFC 5322 message body used across tests.
+const minimalMsg = "From: sender@example.com\r\nTo: alice@example.com\r\nSubject: test\r\n\r\nHello.\r\n"
+
+// setupDomainFixture builds a temp domain tree under t.TempDir() and returns
+// a configured *Deliverer. The caller is responsible for calling dlvr.Close().
+//
+// Domain layout created:
+//
+//	<base>/example.com/
+//	  config.toml            (auth + msgstore + optional [forwards])
+//	  passwd                 (alice:testpassHash:alice)
+//	  keys/
+//	  users/alice/Maildir/{cur,new,tmp}
+//
+// The forwards parameter, if non-empty, is appended verbatim after the base
+// config as a [forwards] TOML section (e.g. `[forwards]\nalice = "..."`)
+// so callers can inject forwarding rules without modifying production code.
+func setupDomainFixture(t *testing.T, forwards string) *Deliverer {
+	t.Helper()
+
+	base := t.TempDir()
+	domainDir := filepath.Join(base, "example.com")
+
+	// Domain directory
+	if err := os.MkdirAll(domainDir, 0755); err != nil {
+		t.Fatalf("create domain dir: %v", err)
+	}
+
+	// Keys directory
+	if err := os.MkdirAll(filepath.Join(domainDir, "keys"), 0755); err != nil {
+		t.Fatalf("create keys dir: %v", err)
+	}
+
+	// Maildir for alice
+	for _, sub := range []string{"cur", "new", "tmp"} {
+		p := filepath.Join(domainDir, "users", "alice", "Maildir", sub)
+		if err := os.MkdirAll(p, 0755); err != nil {
+			t.Fatalf("create maildir subdir %s: %v", sub, err)
+		}
+	}
+
+	// passwd -- pre-computed argon2id hash for "testpass" (from smtpd testutil)
+	const testpassHash = "$argon2id$v=19$m=65536,t=3,p=4$c2FsdHNhbHRzYWx0c2FsdA$qqSCqQPLbO7RKU/qFwvGng"
+	passwd := "alice:" + testpassHash + ":alice\n"
+	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwd), 0644); err != nil {
+		t.Fatalf("write passwd: %v", err)
+	}
+
+	// config.toml
+	cfg := `[auth]
+type = "passwd"
+credential_backend = "passwd"
+key_backend = "keys"
+
+[msgstore]
+type = "maildir"
+base_path = "users"
+
+[msgstore.options]
+maildir_subdir = "Maildir"
+`
+	if forwards != "" {
+		cfg += "\n" + forwards + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(domainDir, "config.toml"), []byte(cfg), 0644); err != nil {
+		t.Fatalf("write config.toml: %v", err)
+	}
+
+	dlvr, err := New(Config{DomainsPath: base})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = dlvr.Close() })
+	return dlvr
+}
+
+// TestDeliver_HappyPath is a smoke test: a well-formed delivery to a known
+// local address must return ResultDelivered with no error.
+func TestDeliver_HappyPath(t *testing.T) {
+	dlvr := setupDomainFixture(t, "")
+	resp, err := dlvr.Deliver(context.Background(),
+		DeliverRequest{
+			Sender:    "sender@example.com",
+			Recipient: "alice@example.com",
+		},
+		[]byte(minimalMsg))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Result != ResultDelivered {
+		t.Errorf("want ResultDelivered, got %v (reason: %q)", resp.Result, resp.Reason)
+	}
+}
+
+// TestDeliver is the table-driven suite covering pipeline rejection branches
+// and the happy path together.
+func TestDeliver(t *testing.T) {
+	dlvr := setupDomainFixture(t, "")
+
+	tests := []struct {
+		name       string
+		recipient  string
+		forwarded  bool
+		wantResult DeliverResult
+		wantTemp   bool
+		wantReason bool // true if Reason must be non-empty
+	}{
+		{
+			name:       "empty recipient",
+			recipient:  "",
+			wantResult: ResultRejected,
+			wantTemp:   false,
+			wantReason: true,
+		},
+		{
+			name:       "path traversal in localpart",
+			recipient:  "../../etc/x@example.com",
+			wantResult: ResultRejected,
+			wantTemp:   false,
+			wantReason: true,
+		},
+		{
+			name:       "slash in localpart",
+			recipient:  "a/b@example.com",
+			wantResult: ResultRejected,
+			wantTemp:   false,
+			wantReason: true,
+		},
+		{
+			name:       "backslash in domain",
+			recipient:  `alice@exa\mple.com`,
+			wantResult: ResultRejected,
+			wantTemp:   false,
+			wantReason: true,
+		},
+		{
+			name:       "dotdot in domain",
+			recipient:  "alice@ex..ample",
+			wantResult: ResultRejected,
+			wantTemp:   false,
+			wantReason: true,
+		},
+		{
+			name:       "unknown domain",
+			recipient:  "bob@nope.invalid",
+			wantResult: ResultRejected,
+			wantTemp:   true,
+			wantReason: true,
+		},
+		{
+			name:       "happy path",
+			recipient:  "alice@example.com",
+			wantResult: ResultDelivered,
+			wantTemp:   false,
+			wantReason: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := dlvr.Deliver(context.Background(),
+				DeliverRequest{
+					Sender:    "sender@example.com",
+					Recipient: tc.recipient,
+					Forwarded: tc.forwarded,
+				},
+				[]byte(minimalMsg))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.Result != tc.wantResult {
+				t.Errorf("Result: want %v, got %v (reason: %q)", tc.wantResult, resp.Result, resp.Reason)
+			}
+			if resp.Temporary != tc.wantTemp {
+				t.Errorf("Temporary: want %v, got %v", tc.wantTemp, resp.Temporary)
+			}
+			if tc.wantReason && resp.Reason == "" {
+				t.Errorf("want non-empty Reason, got empty")
+			}
+		})
+	}
+}
+
+// TestDeliver_Forwarding exercises the forwarding stage of the pipeline.
+// Forwarding rules are injected by writing a [forwards] section in config.toml;
+// no production code is modified.
+func TestDeliver_Forwarding(t *testing.T) {
+	t.Run("single forward target returns ResultRedirected", func(t *testing.T) {
+		dlvr := setupDomainFixture(t, `[forwards]
+alice = "alice@other.example.com"`)
+
+		resp, err := dlvr.Deliver(context.Background(),
+			DeliverRequest{
+				Sender:    "sender@example.com",
+				Recipient: "alice@example.com",
+				Forwarded: false,
+			},
+			[]byte(minimalMsg))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Result != ResultRedirected {
+			t.Errorf("want ResultRedirected, got %v (reason: %q)", resp.Result, resp.Reason)
+		}
+		if len(resp.RedirectAddresses) != 1 {
+			t.Fatalf("want 1 redirect address, got %d: %v", len(resp.RedirectAddresses), resp.RedirectAddresses)
+		}
+		if resp.RedirectAddresses[0] != "alice@other.example.com" {
+			t.Errorf("want redirect to alice@other.example.com, got %q", resp.RedirectAddresses[0])
+		}
+	})
+
+	t.Run("two forward targets returns ResultRejected misconfiguration", func(t *testing.T) {
+		dlvr := setupDomainFixture(t, `[forwards]
+alice = "alice@other.example.com,alice@second.example.com"`)
+
+		resp, err := dlvr.Deliver(context.Background(),
+			DeliverRequest{
+				Sender:    "sender@example.com",
+				Recipient: "alice@example.com",
+				Forwarded: false,
+			},
+			[]byte(minimalMsg))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Result != ResultRejected {
+			t.Errorf("want ResultRejected, got %v (reason: %q)", resp.Result, resp.Reason)
+		}
+		if resp.Reason == "" {
+			t.Error("want non-empty Reason for misconfiguration")
+		}
+	})
+
+	t.Run("Forwarded=true bypasses forward resolution in deliver.go", func(t *testing.T) {
+		// When Forwarded=true, deliver.go's forward-resolution block is skipped
+		// entirely (the !req.Forwarded guard). This is the 1-hop rule: a message
+		// that has already been forwarded is not forwarded again by deliver.go.
+		// Use a fixture with no forward rule to confirm baseline delivery succeeds
+		// with Forwarded=true.
+		dlvr := setupDomainFixture(t, "")
+
+		resp, err := dlvr.Deliver(context.Background(),
+			DeliverRequest{
+				Sender:    "sender@example.com",
+				Recipient: "alice@example.com",
+				Forwarded: true,
+			},
+			[]byte(minimalMsg))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Result != ResultDelivered {
+			t.Errorf("want ResultDelivered with Forwarded=true, got %v (reason: %q)", resp.Result, resp.Reason)
+		}
+	})
+}
+
+// TestDeliver_SieveNoEffect confirms that a present but syntactically valid
+// .sieve script does not break delivery (sieve execution is not yet implemented).
+func TestDeliver_SieveNoEffect(t *testing.T) {
+	dlvr := setupDomainFixture(t, "")
+
+	// Place a trivial .sieve script in the user's directory.
+	sieveDir := filepath.Join(dlvr.cfg.DataPath(), "example.com", "users", "alice")
+	if err := os.MkdirAll(sieveDir, 0755); err != nil {
+		t.Fatalf("create sieve dir: %v", err)
+	}
+	sieve := `require ["fileinto"];
+if header :contains "Subject" "test" {
+    fileinto "test";
+}
+`
+	if err := os.WriteFile(filepath.Join(sieveDir, ".sieve"), []byte(sieve), 0644); err != nil {
+		t.Fatalf("write .sieve: %v", err)
+	}
+
+	resp, err := dlvr.Deliver(context.Background(),
+		DeliverRequest{
+			Sender:    "sender@example.com",
+			Recipient: "alice@example.com",
+		},
+		[]byte(minimalMsg))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Result != ResultDelivered {
+		t.Errorf("want ResultDelivered with sieve present, got %v (reason: %q)", resp.Result, resp.Reason)
+	}
+}

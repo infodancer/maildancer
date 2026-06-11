@@ -22,7 +22,7 @@ type DomainConfig struct {
 	Gid uint32 `toml:"gid,omitempty"`
 
 	// MaxMessageSize is the maximum message size in bytes for this domain.
-	// Applies to both delivery (mail-deliver) and rspamd learning (mail-session).
+	// Applies to both delivery and rspamd learning (both in mail-session).
 	// 0 means use the global default (50 MiB).
 	MaxMessageSize int64 `toml:"max_message_size,omitempty"`
 

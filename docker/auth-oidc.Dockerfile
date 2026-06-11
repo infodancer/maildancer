@@ -1,4 +1,4 @@
-# auth-oidc — leaf OIDC identity provider for owned mail domains. Build from the
+# auth-oidc -- leaf OIDC identity provider for owned mail domains. Build from the
 # repo root:
 #   docker build -f docker/auth-oidc.Dockerfile -t maildancer-auth-oidc .
 FROM golang:1.26-alpine AS builder

@@ -13,7 +13,7 @@ maildancer is a single Go module. Code is organized by component:
 ```plaintext
 /msgstore            Shared storage library + interfaces (top-level, importable)
 /auth                Authentication & key management (top-level, importable)
-/cmd/<binary>        Main entrypoints — minimal logic, wire up and call internal/
+/cmd/<binary>        Main entrypoints -- minimal logic, wire up and call internal/
 /internal/<module>   Per-daemon implementation (not importable outside the module)
 /internal/authoidc   OIDC server behind cmd/auth-oidc
 ```
@@ -30,7 +30,7 @@ maildancer is a single Go module. Code is organized by component:
 
 Privilege separation is enforced by depguard rules in `.golangci.yml`. The
 protocol daemons (`smtpd`, `pop3d`, `imapd`) must not import `msgstore`, `auth`,
-or `auth/*` directly — authentication, domain routing, and delivery go through
+or `auth/*` directly -- authentication, domain routing, and delivery go through
 `session-manager` over gRPC. Do not relax these rules to take a shortcut; route
 through session-manager instead.
 
@@ -60,7 +60,7 @@ through session-manager instead.
 ## 5. Logging
 
 - Structured logging via `slog` throughout.
-- Network daemons expose Prometheus metrics with domain-level aggregation only —
+- Network daemons expose Prometheus metrics with domain-level aggregation only --
   no per-user metrics (privacy).
 
 ---

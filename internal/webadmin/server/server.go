@@ -83,7 +83,7 @@ func New(cfg config.WebAdminConfig, deps Deps, logger *slog.Logger) (*Server, er
 	}
 
 	if cfg.Auth.RolesFile == "" {
-		logger.Warn("RBAC disabled: roles_file not configured — all authenticated users have super_admin access")
+		logger.Warn("RBAC disabled: roles_file not configured -- all authenticated users have super_admin access")
 	}
 
 	mux := http.NewServeMux()
@@ -153,7 +153,7 @@ func (s *Server) registerRoutes() {
 		middleware.RateLimit(loginLimiter, s.logger),
 	))
 
-	// Prometheus metrics — requires authentication.
+	// Prometheus metrics -- requires authentication.
 	// Configure Prometheus with basic_auth if scraping this endpoint externally.
 	s.mux.Handle("GET /metrics", middleware.Chain(
 		promhttp.Handler(),
@@ -360,7 +360,7 @@ func (s *Server) registerRoutes() {
 		requireAuth, requireCSRF, requireSuperAdmin,
 	))
 
-	// Migration API (super_admin only — idempotent, safe to re-run)
+	// Migration API (super_admin only -- idempotent, safe to re-run)
 	migrateHandler := handlers.NewMigrateHandler(s.cfg.DomainsPath, s.cfg.EffectiveDataPath(), s.sessions, s.logger, s.auditLog)
 	s.mux.Handle("POST /api/migrate/uids", middleware.Chain(
 		http.HandlerFunc(migrateHandler.HandleMigrateUIDs),

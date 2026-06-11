@@ -57,10 +57,10 @@ type Server struct {
 
 // New builds a Server from cfg, loading/generating keypairs and auth agents for
 // every owned domain. The authoritative set of served domains is the directories
-// present under DomainDataPath (see docs/oidc-federation-design.md) — domain
+// present under DomainDataPath (see docs/oidc-federation-design.md) -- domain
 // availability is independent of client registration, since registration is open
 // (RFC 7591). Any domain referenced only by a static [[client]] entry is loaded
-// too. The store is a SQLite database at {DataDir}/oidc-state.db — co-located with
+// too. The store is a SQLite database at {DataDir}/oidc-state.db -- co-located with
 // per-domain signing keys under DataDir because OIDC state is server-private, not
 // domain-admin editable.
 func New(cfg *Config) (*Server, error) {
@@ -382,7 +382,7 @@ func (s *Server) clientFor(de *domainEntry, clientID string) (*ClientConfig, boo
 			Domain:       rc.Domain,
 			ID:           rc.ClientID,
 			RedirectURIs: rc.RedirectURIs,
-			// Secret intentionally empty — dynamic clients are public (PKCE only).
+			// Secret intentionally empty -- dynamic clients are public (PKCE only).
 		}, true
 	}
 	return nil, false
@@ -421,13 +421,13 @@ func validRedirectURI(client *ClientConfig, uri string) bool {
 // ensureSigningKeys guarantees that the signing_keys table has at least one
 // row for domain. Three cases:
 //
-//  1. Rows already exist — nothing to do; primeKeyCache will load them.
-//  2. No rows, but the legacy {data_dir}/{domain}/signing.key exists —
+//  1. Rows already exist -- nothing to do; primeKeyCache will load them.
+//  2. No rows, but the legacy {data_dir}/{domain}/signing.key exists --
 //     migrate it: move to keys/{domain}-1.key and insert one row with
 //     algorithm=RS256, state=current, created_at = file mtime. The legacy
 //     kid {domain}-1 is preserved so tokens signed before the upgrade still
 //     verify against the migrated key in JWKS.
-//  3. No rows and no legacy file — fresh install: generate a new keypair
+//  3. No rows and no legacy file -- fresh install: generate a new keypair
 //     with the default algorithm and record it as current.
 func (s *Server) ensureSigningKeys(domain string) error {
 	rows, err := s.store.ListSigningKeys(domain)
@@ -496,7 +496,7 @@ func (s *Server) ensureSigningKeys(domain string) error {
 // primeKeyCache loads every signing key for domain from disk into the
 // in-memory keyStore cache so the first request after startup doesn't pay
 // the PEM-parse cost. Any retiring key whose retention has already lapsed
-// is loaded too — the sweep will discard it shortly.
+// is loaded too -- the sweep will discard it shortly.
 func (s *Server) primeKeyCache(domain string) error {
 	rows, err := s.store.ListSigningKeys(domain)
 	if err != nil {
@@ -525,7 +525,7 @@ func (s *Server) loadKeyFromRecord(rec signingKeyRecord) (*loadedKey, error) {
 }
 
 // currentKeyFor queries the Store for the current signing key for domain
-// and returns the loaded JWK. Called on every signing request — this is
+// and returns the loaded JWK. Called on every signing request -- this is
 // option (a) from the design's reload-coordination open question (one
 // indexed query per token issuance, no inotify/SIGHUP coordination needed).
 func (s *Server) currentKeyFor(domain string) (*loadedKey, error) {

@@ -328,7 +328,7 @@ func TestSSOSession(t *testing.T) {
 		t.Fatal("no session cookie after login")
 	}
 
-	// Second authorize with session cookie — should bypass login form.
+	// Second authorize with session cookie -- should bypass login form.
 	_, challenge2 := pkceParams()
 	req := httptest.NewRequest(http.MethodGet, authorizeURL("s2", challenge2), nil)
 	req.Host = testHost
@@ -439,7 +439,7 @@ func TestRegister_Idempotent(t *testing.T) {
 }
 
 // TestRegister_DerivationDifferentiates verifies that varying any single
-// input field — domain, client_name, or redirect_uris — yields a different
+// input field -- domain, client_name, or redirect_uris -- yields a different
 // client_id.
 func TestRegister_DerivationDifferentiates(t *testing.T) {
 	handler := newTestServer(t)

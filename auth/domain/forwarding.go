@@ -57,7 +57,7 @@ func (c *forwardChain) resolve(localpart string) ([]string, bool) {
 // ResolveForward so callers can inspect the forwarding chain without knowing
 // its internal structure.
 //
-// Authenticate always delegates to the inner agent — forward-only addresses
+// Authenticate always delegates to the inner agent -- forward-only addresses
 // have no credentials and cannot log in.
 type mailAuthAgent struct {
 	inner auth.AuthenticationAgent
@@ -120,7 +120,7 @@ func (a *mailAuthAgent) HasEncryption(ctx context.Context, username string) (boo
 // Future capabilities may include: relay routing, alias expansion, per-user
 // filtering, and quota enforcement.
 //
-// smtpd is entirely unaware of this logic — it simply calls Deliver() and the
+// smtpd is entirely unaware of this logic -- it simply calls Deliver() and the
 // MailDeliveryAgent handles all routing decisions.
 //
 // Note: loop detection is not implemented. Avoid circular forwarding rules.
@@ -181,7 +181,7 @@ func (a *MailDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envel
 		fwdEnvelope := envelope
 		fwdEnvelope.Recipients = []string{target}
 		// Mark as forwarded so the target's MailDeliveryAgent does not re-resolve
-		// forwarding rules — this is what closes the 1-hop gap.
+		// forwarding rules -- this is what closes the 1-hop gap.
 		fwdEnvelope.Forwarded = true
 		if err := d.DeliveryAgent.Deliver(ctx, fwdEnvelope, bytes.NewReader(data)); err != nil {
 			errs = append(errs, fmt.Errorf("forward to %q: %w", target, err))

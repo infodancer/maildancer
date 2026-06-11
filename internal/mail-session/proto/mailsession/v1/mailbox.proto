@@ -5,7 +5,7 @@ package mailsession.v1;
 option go_package = "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1";
 
 // MailboxService handles message retrieval and management within a user's mailbox.
-// All folder-scoped RPCs include the folder name in the request — the server is
+// All folder-scoped RPCs include the folder name in the request -- the server is
 // stateless with respect to folder selection.
 service MailboxService {
   // List returns metadata for all messages in a folder.

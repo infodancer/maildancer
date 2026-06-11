@@ -439,7 +439,7 @@ func TestLogin_CancelsIdleTimerOnReuse(t *testing.T) {
 		t.Fatalf("Logout() error: %v", err)
 	}
 
-	// Login again before reap — should cancel the idle timer.
+	// Login again before reap -- should cancel the idle timer.
 	_, err = m.Login(context.Background(), "alice@example.com", "pass")
 	if err != nil {
 		t.Fatalf("second Login() error: %v", err)
@@ -455,7 +455,7 @@ func TestLogin_CancelsIdleTimerOnReuse(t *testing.T) {
 	}
 	m.mu.Unlock()
 
-	// Wait past the original timeout — should NOT be reaped.
+	// Wait past the original timeout -- should NOT be reaped.
 	time.Sleep(100 * time.Millisecond)
 
 	m.mu.Lock()

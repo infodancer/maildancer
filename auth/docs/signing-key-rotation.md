@@ -10,7 +10,7 @@
 
 auth-oidc currently issues one RS256 keypair per domain, stored at `{data_dir}/{domain}/signing.key` and never rotated. The `kid` is hardcoded as `{domain}-1`. JWKS advertises a single public key. There is no provision for retiring an old key, advertising multiple keys during a transition window, or limiting blast radius if a signing key is exposed.
 
-Application-layer encryption of the key file is *not* the right primary defense — the decryption key has to live somewhere reachable by the unattended-startup service, which limits how much that control can buy against any threat FDE + filesystem perms doesn't already cover (see "Out of scope" below for the threat-model reasoning). The lever that actually moves the needle is rotation: bound the lifetime of any single key so that an exposure has a finite blast radius regardless of how it happened.
+Application-layer encryption of the key file is *not* the right primary defense -- the decryption key has to live somewhere reachable by the unattended-startup service, which limits how much that control can buy against any threat FDE + filesystem perms doesn't already cover (see "Out of scope" below for the threat-model reasoning). The lever that actually moves the needle is rotation: bound the lifetime of any single key so that an exposure has a finite blast radius regardless of how it happened.
 
 ## Goals
 
@@ -26,7 +26,7 @@ Application-layer encryption of the key file is *not* the right primary defense 
 - Application-layer encryption of key files at rest. Threats: root compromise and process compromise are unaffected by file encryption (the key is in memory during normal operation). Disk theft is covered by FDE. Backup theft is the residual threat; for deployments where that matters, `systemd-creds` / `LoadCredentialEncrypted` is the right addition and can be added independently of this design. This document does not block on that decision.
 - Forced algorithm migration. The design accommodates per-key algorithm choice and operator-driven algorithm rotation, but does not auto-migrate existing RS256 deployments to anything else. Choice of algorithm for new keys is a server-config decision.
 - Cross-host key sharing for HA replicas. auth-oidc remains a per-host service. If multi-host shared state ever materialises, the `Store` interface and per-domain key tables here are the right seam to add it; that's a future question.
-- HSM / TPM-backed signing. Same reasoning — additive, separate decision.
+- HSM / TPM-backed signing. Same reasoning -- additive, separate decision.
 - Implementing post-quantum signing today. JWA has no finalised identifier for ML-DSA yet and no mainstream OIDC RP library verifies post-quantum signatures. Implementing PQC signing now would produce tokens nothing can verify. The schema and rotation flow are designed to accept it later; see "Future: post-quantum migration".
 
 ## Key states
@@ -58,7 +58,7 @@ Application-layer encryption of the key file is *not* the right primary defense 
 Invariants:
 - Exactly one `current` key per domain at any time.
 - Zero or more `retiring` keys per domain. JWKS publishes `current` + all `retiring`.
-- `expired` is a transient state during sweep — the row and file are both removed.
+- `expired` is a transient state during sweep -- the row and file are both removed.
 
 ## Algorithm choice
 
@@ -69,11 +69,11 @@ The current single-key design is hardcoded to RS256. RS256 is the OIDC baseline 
 Per-key algorithm storage is what makes algorithm rotation work in the same code path as key rotation. Concretely:
 
 - A `current` key has exactly one algorithm.
-- `retiring` keys can have different algorithms from `current` — for example, an RS256 key may be retiring while an ES256 key is current after an algorithm-rotation event.
+- `retiring` keys can have different algorithms from `current` -- for example, an RS256 key may be retiring while an ES256 key is current after an algorithm-rotation event.
 - JWKS publishes all keys regardless of algorithm; RPs select by `kid` and use whatever `alg` the JWK declares.
 - The discovery document's `id_token_signing_alg_values_supported` is the set union of algorithms across all `current` + non-expired `retiring` keys for the requested domain, computed at request time. Once the last RS256 key has been swept, RS256 is no longer advertised.
 
-**Quantum safety.** None of RS256, ES256, EdDSA are quantum-safe — Shor's algorithm breaks RSA and all classical ECC. The NIST-standardised post-quantum signature algorithms (ML-DSA per FIPS 204, SLH-DSA per FIPS 205) cannot be used today because JWA has not finalised identifiers and no mainstream OIDC RP library verifies them. The algorithm-agility design in this document is the lever for that future migration. See "Future: post-quantum migration" below.
+**Quantum safety.** None of RS256, ES256, EdDSA are quantum-safe -- Shor's algorithm breaks RSA and all classical ECC. The NIST-standardised post-quantum signature algorithms (ML-DSA per FIPS 204, SLH-DSA per FIPS 205) cannot be used today because JWA has not finalised identifiers and no mainstream OIDC RP library verifies them. The algorithm-agility design in this document is the lever for that future migration. See "Future: post-quantum migration" below.
 
 ## Retention window
 
@@ -91,7 +91,7 @@ Per the project's storage principle (key material on the filesystem with kernel-
 
 ```
 {data_dir}/{domain}/
-  signing.key            # LEGACY — read on first startup, then migrated away
+  signing.key            # LEGACY -- read on first startup, then migrated away
   keys/
     {kid}.key            # one file per active or retiring key
 ```
@@ -127,8 +127,8 @@ Format: `{domain}-{unix_nanoseconds}` where the timestamp is the key's `created_
 
 Properties:
 - Sortable (so log analysis can compare timestamps without joining to the DB).
-- Globally unique within the domain. Nanosecond resolution eliminates collisions for any realistic rotation cadence — even back-to-back manual rotations during testing won't collide.
-- Opaque to relying parties — they treat `kid` as a string lookup against JWKS.
+- Globally unique within the domain. Nanosecond resolution eliminates collisions for any realistic rotation cadence -- even back-to-back manual rotations during testing won't collide.
+- Opaque to relying parties -- they treat `kid` as a string lookup against JWKS.
 - The legacy `kid` `{domain}-1` is preserved for the pre-rotation key during migration (see below). New rotations always use the timestamp form.
 
 ## Rotation procedure
@@ -160,22 +160,22 @@ Properties:
 
 Step 6 reloads from disk + DB rather than mutating in-memory state directly. This keeps "what's published" and "what's on disk" reconciled by a single code path. The keyStore exposes a `Reload(domain)` method called by the rotation routine and the background scheduler.
 
-Algorithm rotation (e.g. RS256 → ES256) is the same procedure — the new key just happens to use a different algorithm than the retiring one. No special case in code.
+Algorithm rotation (e.g. RS256 → ES256) is the same procedure -- the new key just happens to use a different algorithm than the retiring one. No special case in code.
 
 ## Triggers
 
 **Scheduled.** A background goroutine started by `Server.New` runs daily (interval configurable). For each domain, it checks whether the `current` key's `created_at` is older than `key_rotation_interval` (default 90 days) and rotates if so. Scheduled rotations use `default_signing_algorithm` for the new key.
 
-**Manual.** Folded into the existing `userctl` operator CLI as a `keys` subcommand namespace. `userctl` is already the auth-oidc operator's tool — it runs locally, requires filesystem access to the data directories, and is not intended for client-domain end users. Adding key operations there keeps operator surface in one binary:
+**Manual.** Folded into the existing `userctl` operator CLI as a `keys` subcommand namespace. `userctl` is already the auth-oidc operator's tool -- it runs locally, requires filesystem access to the data directories, and is not intended for client-domain end users. Adding key operations there keeps operator surface in one binary:
 
-- `userctl keys list <domain>` — print all keys for a domain (kid, algorithm, state, created/retired/expires timestamps).
-- `userctl keys rotate <domain>` — force rotation now using `default_signing_algorithm`. Useful for testing, scheduled-maintenance windows, and pre-emptive rotation before an operator vacation.
-- `userctl keys rotate <domain> --algorithm=ES256` — force rotation with an explicit algorithm. This is how operators migrate a domain from one algorithm to another.
-- `userctl keys revoke <domain> <kid>` — emergency. Marks the key as expired immediately, removing it from JWKS on the next reload. Operator accepts that any token signed by `<kid>` is now unverifiable.
+- `userctl keys list <domain>` -- print all keys for a domain (kid, algorithm, state, created/retired/expires timestamps).
+- `userctl keys rotate <domain>` -- force rotation now using `default_signing_algorithm`. Useful for testing, scheduled-maintenance windows, and pre-emptive rotation before an operator vacation.
+- `userctl keys rotate <domain> --algorithm=ES256` -- force rotation with an explicit algorithm. This is how operators migrate a domain from one algorithm to another.
+- `userctl keys revoke <domain> <kid>` -- emergency. Marks the key as expired immediately, removing it from JWKS on the next reload. Operator accepts that any token signed by `<kid>` is now unverifiable.
 
-The CLI talks to the same SQLite database the server uses. It does not require the server to be stopped; rotation operations are atomic and the server reloads on the next request that touches the key (or via a SIGHUP / inotify watch — implementation detail, see "Open questions").
+The CLI talks to the same SQLite database the server uses. It does not require the server to be stopped; rotation operations are atomic and the server reloads on the next request that touches the key (or via a SIGHUP / inotify watch -- implementation detail, see "Open questions").
 
-The `userctl users …` and `userctl keys …` namespaces stay distinct in the help output; key operations do not need to know about user state and vice versa.
+The `userctl users ...` and `userctl keys ...` namespaces stay distinct in the help output; key operations do not need to know about user state and vice versa.
 
 ## Sweep
 
@@ -187,7 +187,7 @@ DELETE FROM signing_keys
   RETURNING domain, kid;
 ```
 
-For each returned row, the sweeper unlinks `{data_dir}/{domain}/keys/{kid}.key`. The file unlink is best-effort and logged; if it fails (e.g. file already missing), the operation continues — the DB row deletion is the authoritative state change.
+For each returned row, the sweeper unlinks `{data_dir}/{domain}/keys/{kid}.key`. The file unlink is best-effort and logged; if it fails (e.g. file already missing), the operation continues -- the DB row deletion is the authoritative state change.
 
 ## Migration from the existing single-key layout
 
@@ -217,7 +217,7 @@ else:
   build in-memory keyStore for domain (one entry per kid, with its algorithm)
 ```
 
-The legacy `kid` `{domain}-1` and its RS256 algorithm are preserved deliberately. Any token signed before the upgrade still has `{domain}-1` in its header; relying parties looking that `kid` up in JWKS will continue to find it, and they will verify it with the RS256 algorithm the JWK declares. The migrated key is the `current` key — it keeps signing new tokens with the same `kid` and algorithm until the first rotation, at which point it transitions to `retiring` and a new timestamp-form `kid` (using the configured `default_signing_algorithm`) becomes `current`.
+The legacy `kid` `{domain}-1` and its RS256 algorithm are preserved deliberately. Any token signed before the upgrade still has `{domain}-1` in its header; relying parties looking that `kid` up in JWKS will continue to find it, and they will verify it with the RS256 algorithm the JWK declares. The migrated key is the `current` key -- it keeps signing new tokens with the same `kid` and algorithm until the first rotation, at which point it transitions to `retiring` and a new timestamp-form `kid` (using the configured `default_signing_algorithm`) becomes `current`.
 
 This produces a single, silent, lossless upgrade path. No release-notes warning needed. If the operator wants the domain on ES256 immediately, they run `userctl keys rotate <domain>` after upgrade and the new `current` key is ES256.
 
@@ -267,9 +267,9 @@ Durations are parsed via `time.ParseDuration`. Missing values fall back to defau
 
 The algorithm-per-key model is what makes the eventual post-quantum migration tractable. The expected sequence:
 
-1. **Wait for the ecosystem.** JWA finalises an identifier for ML-DSA (most likely `ML-DSA-65` per current drafts). Mainstream OIDC RP libraries — at minimum `go-oidc`, `jose-jwt`, `python-jose`, `node-jose` — add verification support. Browsers' WebAuthn-style ecosystems may move first; auth-oidc waits until OIDC RP libraries catch up because issuing tokens nothing can verify is worse than not issuing them.
+1. **Wait for the ecosystem.** JWA finalises an identifier for ML-DSA (most likely `ML-DSA-65` per current drafts). Mainstream OIDC RP libraries -- at minimum `go-oidc`, `jose-jwt`, `python-jose`, `node-jose` -- add verification support. Browsers' WebAuthn-style ecosystems may move first; auth-oidc waits until OIDC RP libraries catch up because issuing tokens nothing can verify is worse than not issuing them.
 2. **Add `MLDSA65` to the supported algorithm set in auth-oidc.** This requires a Go library that can generate ML-DSA keys and sign/verify ML-DSA JWTs. The standard library's `crypto/mldsa` (when it lands) is the preferred dependency; a third-party `go-mldsa` is the fallback. JWK encoding follows the finalised JOSE PQC draft.
-3. **Hybrid period (optional).** Some deployments may want to dual-sign with both a classical and a PQC key during transition — issue two JWTs or extend the JWT to carry two signatures (per current PQC JOSE drafts). This design does *not* commit to hybrid signing; the choice can be made when the time comes. If it's needed, the `current` slot would gain a "co-current" sibling rather than mutate the state enum.
+3. **Hybrid period (optional).** Some deployments may want to dual-sign with both a classical and a PQC key during transition -- issue two JWTs or extend the JWT to carry two signatures (per current PQC JOSE drafts). This design does *not* commit to hybrid signing; the choice can be made when the time comes. If it's needed, the `current` slot would gain a "co-current" sibling rather than mutate the state enum.
 4. **Operator-driven rotation per domain.** `userctl keys rotate <domain> --algorithm=ML-DSA-65` introduces the PQC key as `current`. The classical key becomes `retiring` for the standard retention window. JWKS publishes both; RPs that understand ML-DSA use the new key, RPs that don't fall back to the retiring classical key until it expires.
 5. **Bandwidth cost.** ML-DSA-65 signatures are ~3.3KB and public keys are ~1.95KB. JWT size grows accordingly. Operators with bandwidth-sensitive deployments will want to know this; document it when the time comes.
 6. **Retire classical algorithms.** Once all RPs in a deployment's relevant ecosystem can verify PQC tokens, scheduled rotation can be allowed to retire the last classical keys naturally. The discovery endpoint will stop advertising classical algorithms after the last retiring key expires.
@@ -280,13 +280,13 @@ Nothing in this future plan requires the v1 design to change. The schema accepts
 
 Stated explicitly so future contributors don't add these without a new design pass:
 
-- **No per-key audit log table.** Rotations are logged via the existing `slog` channel; the `signing_keys` table records the authoritative state but not history. If history becomes valuable, add a `signing_key_events` table — don't load the live state table with event records.
+- **No per-key audit log table.** Rotations are logged via the existing `slog` channel; the `signing_keys` table records the authoritative state but not history. If history becomes valuable, add a `signing_key_events` table -- don't load the live state table with event records.
 - **No automatic rotation on detected compromise.** Compromise is an operator decision; the CLI exposes it as an explicit `revoke` action.
 - **No notification to relying parties on rotation.** OIDC relying parties are expected to refresh JWKS on `kid` miss; this design relies on that contract.
 - **No backwards-compatibility code path for "single-key mode".** After the migration runs once, the new layout is the only layout. The legacy `signing.key` file is removed by the migration step.
 
 ## Open questions
 
-1. **Server reload coordination.** When `userctl keys rotate` runs against the DB, how does the running server pick up the new state? Three options: (a) the server polls the DB on every signing request (simple, slight overhead), (b) the server watches the DB file with inotify and reloads on change (more code, no overhead), (c) operator sends SIGHUP after running `userctl keys rotate` (explicit, requires documentation discipline). Recommendation: (a) for v1 — the overhead is one indexed query per token issuance and the simplicity is worth it. Revisit if profiling shows it matters.
-2. **Key-rotation observability.** Should rotation events be exposed as a Prometheus counter (`auth_oidc_key_rotations_total{domain}`)? Probably yes — cheap, useful for "is rotation actually happening on my deployments". Default to yes; defer to implementation if there's a reason not to.
+1. **Server reload coordination.** When `userctl keys rotate` runs against the DB, how does the running server pick up the new state? Three options: (a) the server polls the DB on every signing request (simple, slight overhead), (b) the server watches the DB file with inotify and reloads on change (more code, no overhead), (c) operator sends SIGHUP after running `userctl keys rotate` (explicit, requires documentation discipline). Recommendation: (a) for v1 -- the overhead is one indexed query per token issuance and the simplicity is worth it. Revisit if profiling shows it matters.
+2. **Key-rotation observability.** Should rotation events be exposed as a Prometheus counter (`auth_oidc_key_rotations_total{domain}`)? Probably yes -- cheap, useful for "is rotation actually happening on my deployments". Default to yes; defer to implementation if there's a reason not to.
 3. **Test strategy for the 90-day timer.** The scheduled rotator's age check is trivial to unit-test by injecting a clock; the rotation procedure itself wants integration tests that span the file + DB layers, similar to the existing `store_contract_test.go` pattern.

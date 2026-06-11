@@ -23,7 +23,7 @@ func Allocate(domainsPath string) (uint32, error) {
 	}
 	defer func() { _ = f.Close() }()
 
-	// Exclusive lock — blocks until granted.
+	// Exclusive lock -- blocks until granted.
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		return 0, fmt.Errorf("lock uid counter: %w", err)
 	}

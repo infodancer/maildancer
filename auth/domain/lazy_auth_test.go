@@ -12,7 +12,7 @@ import (
 
 func TestLazyAuthAgent_DomainLoadsWithoutPasswdAccess(t *testing.T) {
 	// Verify that GetDomain() succeeds even when the passwd file is
-	// unreadable. The auth agent is lazy — it only opens the passwd file
+	// unreadable. The auth agent is lazy -- it only opens the passwd file
 	// when Authenticate() or UserExists() is called.
 	tmpDir := t.TempDir()
 
@@ -49,7 +49,7 @@ func TestLazyAuthAgent_DomainLoadsWithoutPasswdAccess(t *testing.T) {
 	provider := NewFilesystemDomainProvider(tmpDir, nil).WithDefaults(defaults)
 	defer provider.Close() //nolint:errcheck
 
-	// GetDomain should succeed — lazy auth doesn't open passwd yet.
+	// GetDomain should succeed -- lazy auth doesn't open passwd yet.
 	d := provider.GetDomain("example.com")
 	if d == nil {
 		t.Fatal("expected domain to load despite unreadable passwd")

@@ -16,14 +16,14 @@ import (
 
 // FilesystemDomainProvider loads domain configs from a directory structure.
 // Each domain has its own subdirectory. A per-domain config.toml is optional
-// when defaults are set via WithDefaults — any subdirectory is then a valid
+// when defaults are set via WithDefaults -- any subdirectory is then a valid
 // domain, with config.toml values overriding the defaults when present.
 //
 // Additional config files at the basePath level:
 //
-//   - config.toml  — system-wide defaults (forwards, auth type, etc.)
-//   - domains.toml — per-domain behavior overrides managed by the system postmaster
-//   - postmaster   — authoritative domain GIDs, postmaster UIDs, and data paths
+//   - config.toml  -- system-wide defaults (forwards, auth type, etc.)
+//   - domains.toml -- per-domain behavior overrides managed by the system postmaster
+//   - postmaster   -- authoritative domain GIDs, postmaster UIDs, and data paths
 //
 // Directory structure:
 //
@@ -198,7 +198,7 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		return nil, fmt.Errorf("merge config: %w", err)
 	}
 
-	// Postmaster GID is authoritative — applied after all config merges so that
+	// Postmaster GID is authoritative -- applied after all config merges so that
 	// neither system defaults nor domain-admin config.toml can override it.
 	if p.postmaster != nil {
 		if entry, ok := p.postmaster[name]; ok && entry.GID != 0 {
@@ -206,7 +206,7 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		}
 	}
 
-	// Create lazy auth agent — defers OpenAuthAgent() until the first
+	// Create lazy auth agent -- defers OpenAuthAgent() until the first
 	// auth-related call (Authenticate, UserExists, etc.). This allows
 	// privilege-dropped processes (e.g., mail-session oneshot delivery)
 	// to use GetDomain() for forwarding/spam/sieve without needing read
@@ -257,11 +257,11 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 	// disable the global catchall by setting forwards = {}.
 	var domainFwd, defaultFwd *forwards.ForwardMap
 	if perDomainMap != nil && perDomainMap["forwards"] != nil {
-		// Domain explicitly declared [forwards] — use it, suppress system default.
+		// Domain explicitly declared [forwards] -- use it, suppress system default.
 		domainFwd = forwards.FromMap(cfg.Forwards)
 		defaultFwd = forwards.FromMap(nil)
 	} else {
-		// Domain did not declare [forwards] — fall through to system default.
+		// Domain did not declare [forwards] -- fall through to system default.
 		domainFwd = forwards.FromMap(nil)
 		if p.baseDefaults != nil {
 			defaultFwd = forwards.FromMap(p.baseDefaults.Forwards)

@@ -40,7 +40,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // MailboxService handles message retrieval and management within a user's mailbox.
-// All folder-scoped RPCs include the folder name in the request — the server is
+// All folder-scoped RPCs include the folder name in the request -- the server is
 // stateless with respect to folder selection.
 type MailboxServiceClient interface {
 	// List returns metadata for all messages in a folder.
@@ -240,7 +240,7 @@ func (c *mailboxServiceClient) Commit(ctx context.Context, in *CommitRequest, op
 // for forward compatibility.
 //
 // MailboxService handles message retrieval and management within a user's mailbox.
-// All folder-scoped RPCs include the folder name in the request — the server is
+// All folder-scoped RPCs include the folder name in the request -- the server is
 // stateless with respect to folder selection.
 type MailboxServiceServer interface {
 	// List returns metadata for all messages in a folder.

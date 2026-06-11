@@ -54,7 +54,7 @@ const (
 
 // Supported signing algorithms. JWA identifiers per RFC 7518 / RFC 8037.
 // Add new strings here (e.g. "ML-DSA-65" when JWA finalises a PQC identifier)
-// — schema treats algorithm as TEXT, so no migration is required.
+// -- schema treats algorithm as TEXT, so no migration is required.
 const (
 	AlgRS256 = "RS256"
 	AlgES256 = "ES256"
@@ -79,7 +79,7 @@ type signingKeyRecord struct {
 
 // Store is the persistence contract for OIDC authorization codes, SSO sessions,
 // and dynamically registered clients. Implementations must keep ConsumeCode
-// atomic — a single caller succeeds even under concurrent attempts.
+// atomic -- a single caller succeeds even under concurrent attempts.
 //
 // StoreCode, StoreSession, and RegisterClient return no error; backends should
 // log failures rather than propagate them, since the user-visible outcome of a
@@ -137,7 +137,7 @@ type Store interface {
 }
 
 // ephemeralStore is an in-memory store for auth codes, SSO sessions, and
-// registered clients. State is lost on process restart — use only in tests or
+// registered clients. State is lost on process restart -- use only in tests or
 // for deployments that explicitly do not require durability.
 type ephemeralStore struct {
 	mu          sync.Mutex

@@ -576,7 +576,7 @@ func updatePasswordInPasswd(path, username, newHash string) error {
 				// Preserve existing uid field.
 				lines = append(lines, fmt.Sprintf("%s:%s:%s:%s", username, newHash, mailbox, parts[3]))
 			} else {
-				// Legacy entry without uid — write without uid (no allocation here).
+				// Legacy entry without uid -- write without uid (no allocation here).
 				lines = append(lines, fmt.Sprintf("%s:%s:%s", username, newHash, mailbox))
 			}
 		} else {

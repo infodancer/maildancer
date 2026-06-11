@@ -158,7 +158,7 @@ func TestTriggerLearn_MissingMessage_DoesNotPanic(t *testing.T) {
 		logger:      slog.Default(),
 	}
 
-	// Non-existent UID — should log warning, not panic.
+	// Non-existent UID -- should log warning, not panic.
 	s.triggerLearn(context.Background(), "INBOX", 99999, true)
 
 	records := rspamd.getRecords()

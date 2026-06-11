@@ -451,7 +451,7 @@ func (m *Manager) generateTokenLocked(entry *sessionEntry) string {
 // running. Must be called with m.mu held.
 func (m *Manager) isAliveLocked(entry *sessionEntry) bool {
 	if entry.cmd == nil {
-		// No subprocess (test stub or in-process mock) — assume alive.
+		// No subprocess (test stub or in-process mock) -- assume alive.
 		return true
 	}
 	if entry.cmd.Process == nil {
@@ -484,7 +484,7 @@ func (m *Manager) monitorProcess(entry *sessionEntry) {
 	if entry.cmd == nil {
 		return
 	}
-	// cmd.Wait() blocks until the process exits. Ignore the error — the
+	// cmd.Wait() blocks until the process exits. Ignore the error -- the
 	// process may exit cleanly (idle timeout) or be killed by reapSession.
 	_ = entry.cmd.Wait()
 

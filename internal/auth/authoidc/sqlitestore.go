@@ -21,7 +21,7 @@ import (
 // ConsumeCode is atomic via DELETE ... RETURNING (SQLite 3.35+), so a single
 // statement reads and removes the row.
 //
-// The driver is modernc.org/sqlite — pure Go, no CGO, matching the choice
+// The driver is modernc.org/sqlite -- pure Go, no CGO, matching the choice
 // already made in infodancer/webauth so the deployment story (static binaries)
 // stays consistent across the auth stack.
 type sqliteStore struct {
@@ -106,7 +106,7 @@ func initSchema(db *sql.DB) error {
 			PRIMARY KEY (domain, client_id)
 		) STRICT`,
 		// Signing keys: see docs/signing-key-rotation.md. The PEM material
-		// lives on the filesystem at {data_dir}/{domain}/keys/{kid}.key —
+		// lives on the filesystem at {data_dir}/{domain}/keys/{kid}.key --
 		// this table is the authoritative metadata for which kid is current,
 		// which are retiring, and when retiring rows should be swept.
 		`CREATE TABLE IF NOT EXISTS signing_keys (
@@ -123,7 +123,7 @@ func initSchema(db *sql.DB) error {
 			ON signing_keys(domain, state)`,
 		`CREATE INDEX IF NOT EXISTS idx_signing_keys_expires_at
 			ON signing_keys(expires_at) WHERE expires_at IS NOT NULL`,
-		// Enforces "exactly one current key per domain" — the partial unique
+		// Enforces "exactly one current key per domain" -- the partial unique
 		// index makes a second 'current' INSERT for the same domain fail at
 		// the schema level rather than requiring application-level checking.
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_signing_keys_one_current
@@ -220,7 +220,7 @@ func (s *sqliteStore) DeleteSession(id string) {
 }
 
 // RegisterClient persists a dynamically registered OIDC client. redirect_uris
-// is stored as a JSON array — it's a list, not a set of things to query
+// is stored as a JSON array -- it's a list, not a set of things to query
 // against, so a serialised column is simpler than a join table.
 func (s *sqliteStore) RegisterClient(c *registeredClient) {
 	uris, err := json.Marshal(c.RedirectURIs)
@@ -384,7 +384,7 @@ func (s *sqliteStore) RotateSigningKey(domain string, newKey signingKeyRecord, r
 }
 
 // RevokeSigningKey marks a key as expired immediately (expires_at = 1, a Unix
-// time of "1 second past the epoch" — any positive value <= now triggers the
+// time of "1 second past the epoch" -- any positive value <= now triggers the
 // sweep). The state moves to retiring so the sweep query finds it.
 func (s *sqliteStore) RevokeSigningKey(domain, kid string) error {
 	res, err := s.db.Exec(

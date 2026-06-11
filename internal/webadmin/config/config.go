@@ -54,7 +54,7 @@ type WebAdminConfig struct {
 	Prometheus PrometheusConfig `toml:"prometheus"`
 
 	// FilePath is the path to the config file this struct was loaded from.
-	// Not a TOML field — set programmatically by Load(). Used by handlers
+	// Not a TOML field -- set programmatically by Load(). Used by handlers
 	// that need to write back to the shared config file (e.g. rspamd settings).
 	FilePath string `toml:"-"`
 }

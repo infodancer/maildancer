@@ -1,4 +1,4 @@
-# queue-manager — outbound mail queue driver. Bundles the mail-remote agent it
+# queue-manager -- outbound mail queue driver. Bundles the mail-remote agent it
 # invokes per delivery. Build from the repo root:
 #   docker build -f docker/queue-manager.Dockerfile -t maildancer-queue-manager .
 FROM golang:1.26-alpine AS builder

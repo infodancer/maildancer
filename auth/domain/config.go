@@ -9,7 +9,7 @@ import (
 
 // DomainConfig is the per-domain configuration structure.
 // All fields use omitempty so that TOML-level deep merge correctly skips
-// zero values — only explicitly set fields override lower-priority layers.
+// zero values -- only explicitly set fields override lower-priority layers.
 type DomainConfig struct {
 	Auth     DomainAuthConfig     `toml:"auth,omitempty"`
 	MsgStore DomainMsgStoreConfig `toml:"msgstore,omitempty"`
@@ -22,7 +22,7 @@ type DomainConfig struct {
 	Gid uint32 `toml:"gid,omitempty"`
 
 	// MaxMessageSize is the maximum message size in bytes for this domain.
-	// Applies to both delivery (mail-deliver) and rspamd learning (mail-session).
+	// Applies to both delivery and rspamd learning (both in mail-session).
 	// 0 means use the global default (50 MiB).
 	MaxMessageSize int64 `toml:"max_message_size,omitempty"`
 
@@ -107,7 +107,7 @@ type LimitsConfig struct {
 type DomainsConfig map[string]DomainConfig
 
 // LoadDomainsConfig reads and parses a domains.toml file.
-// A missing file is not an error — returns an empty DomainsConfig.
+// A missing file is not an error -- returns an empty DomainsConfig.
 func LoadDomainsConfig(path string) (DomainsConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

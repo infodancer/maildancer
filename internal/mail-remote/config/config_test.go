@@ -60,7 +60,7 @@ max_transactions_per_conn = 10
 	if cfg.RemoteMX.MaxTransactionsPerConn != 10 {
 		t.Errorf("remote-mx.max_transactions_per_conn = %d, want 10", cfg.RemoteMX.MaxTransactionsPerConn)
 	}
-	// Smarthost fields should be empty — not read from TOML.
+	// Smarthost fields should be empty -- not read from TOML.
 	if cfg.Smarthost != "" {
 		t.Errorf("smarthost should be empty (not read from TOML), got %q", cfg.Smarthost)
 	}

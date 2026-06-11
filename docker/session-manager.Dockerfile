@@ -1,4 +1,4 @@
-# session-manager — authenticates and proxies per-user mail sessions. Bundles
+# session-manager -- authenticates and proxies per-user mail sessions. Bundles
 # the mail-session agent it spawns (uid/gid set per user at spawn time).
 # Build from the repo root:
 #   docker build -f docker/session-manager.Dockerfile -t maildancer-session-manager .

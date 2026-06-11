@@ -52,7 +52,7 @@ func (c *Client) Close() error {
 // ── msgstore.MessageStore implementation ─────────────────────────────────────
 
 // List returns message metadata for the given mailbox.
-// The mailbox parameter is ignored — the server's mailbox was set at startup.
+// The mailbox parameter is ignored -- the server's mailbox was set at startup.
 func (c *Client) List(ctx context.Context, _ string) ([]msgstore.MessageInfo, error) {
 	return c.ListInFolder(ctx, "", "INBOX")
 }
@@ -306,7 +306,7 @@ func (c *Client) UIDNext(ctx context.Context, _ string, folder string) (uint32, 
 }
 
 // MoveMessage atomically moves a message between folders.
-// The mailbox parameter is ignored — the server's mailbox was set at startup.
+// The mailbox parameter is ignored -- the server's mailbox was set at startup.
 func (c *Client) MoveMessage(ctx context.Context, _ string, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	resp, err := c.mailbox.Move(ctx, &pb.MoveRequest{
 		Uid:        uid,

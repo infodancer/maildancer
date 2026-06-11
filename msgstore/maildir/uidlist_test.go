@@ -222,7 +222,7 @@ func TestUIDNeverReusedAfterDeletion(t *testing.T) {
 	// Remove "b" (uid 2).
 	ul.reconcile([]string{"a", "c"})
 
-	// Add a new key — must get uid 4, NOT uid 2.
+	// Add a new key -- must get uid 4, NOT uid 2.
 	ul.reconcile([]string{"a", "c", "d"})
 	if uid := ul.keyToUID["d"]; uid != 4 {
 		t.Errorf("new key got uid %d, want 4 (uid 2 was deleted and must not be reused)", uid)
@@ -391,7 +391,7 @@ func TestParseEntryInvalid(t *testing.T) {
 		"",
 		"42",
 		"abc key",
-		"42 ", // empty key after space — tricky, but we strip to empty
+		"42 ", // empty key after space -- tricky, but we strip to empty
 	}
 	for _, tc := range cases {
 		_, err := parseEntry(tc)

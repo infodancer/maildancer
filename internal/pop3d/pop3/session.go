@@ -11,7 +11,7 @@ import (
 )
 
 // AuthenticatedUser holds the identity of a successfully authenticated user.
-// This replaces auth.AuthSession — pop3d no longer depends on the auth library
+// This replaces auth.AuthSession -- pop3d no longer depends on the auth library
 // directly; authentication is delegated to the session-manager.
 type AuthenticatedUser struct {
 	Username string
@@ -267,7 +267,7 @@ func (s *Session) Cleanup() {
 // present that folder as the inbox. If the store supports FolderStore and the
 // folder exists, all POP3 operations are transparently redirected to it.
 // If the folder does not exist or the store does not support folders, the session
-// falls back to the normal inbox — consistent with delivery behavior.
+// falls back to the normal inbox -- consistent with delivery behavior.
 func (s *Session) InitializeMailbox(ctx context.Context, store msgstore.MessageStore, folder string) error {
 	if s.authenticatedUser == nil {
 		return ErrMailboxNotInitialized

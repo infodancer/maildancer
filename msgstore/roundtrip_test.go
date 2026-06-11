@@ -265,7 +265,7 @@ func TestRoundTrip_Delete_HidesMessage(t *testing.T) {
 }
 
 // TestRoundTrip_Expunge_RemovesPermanently verifies that Expunge persists
-// the deletion — a new store instance opened after Expunge cannot see or
+// the deletion -- a new store instance opened after Expunge cannot see or
 // retrieve the message.
 func TestRoundTrip_Expunge_RemovesPermanently(t *testing.T) {
 	cfg := productionConfig(t.TempDir())
@@ -291,7 +291,7 @@ func TestRoundTrip_Expunge_RemovesPermanently(t *testing.T) {
 		t.Fatalf("Expunge: %v", err)
 	}
 
-	// New store instance — simulates pop3d session reconnect after expunge.
+	// New store instance -- simulates pop3d session reconnect after expunge.
 	store2, err := msgstore.Open(cfg)
 	if err != nil {
 		t.Fatalf("Open store2: %v", err)
@@ -313,7 +313,7 @@ func TestRoundTrip_Expunge_RemovesPermanently(t *testing.T) {
 
 // TestRoundTrip_DeleteWithoutExpunge_PersistsAcrossSessions verifies that
 // a soft-deleted message (Delete without Expunge) is still visible to a
-// new store instance — deletion is session-local until Expunge.
+// new store instance -- deletion is session-local until Expunge.
 func TestRoundTrip_DeleteWithoutExpunge_PersistsAcrossSessions(t *testing.T) {
 	cfg := productionConfig(t.TempDir())
 
@@ -331,7 +331,7 @@ func TestRoundTrip_DeleteWithoutExpunge_PersistsAcrossSessions(t *testing.T) {
 	}
 	uid := msgs[0].UID
 
-	// Soft delete — no Expunge.
+	// Soft delete -- no Expunge.
 	if err := store1.Delete(ctx, "henry@test.local", uid); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestRoundTrip_MultipleRecipients(t *testing.T) {
 
 // TestRoundTrip_DomainIsolation verifies that delivering to alice@domain-a.com
 // does not affect alice@domain-b.com when using {localpart} template.
-// With {localpart}, both resolve to the same "alice" path — this test uses
+// With {localpart}, both resolve to the same "alice" path -- this test uses
 // distinct local parts to confirm isolation.
 func TestRoundTrip_DomainIsolation(t *testing.T) {
 	cfg := productionConfig(t.TempDir())

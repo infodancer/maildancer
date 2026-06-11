@@ -92,7 +92,7 @@ Response (201):
 
 The `registration_endpoint` URL is advertised in the discovery document so clients can find it automatically. Redirect URIs are validated against registered domains at registration time; the URI host must equal or be a subdomain of a registered mail domain.
 
-Dynamic clients are always public (no client secret; PKCE required). On server restart the in-memory registry is cleared — services should register on startup if not already registered.
+Dynamic clients are always public (no client secret; PKCE required). On server restart the in-memory registry is cleared -- services should register on startup if not already registered.
 
 ## Endpoints
 

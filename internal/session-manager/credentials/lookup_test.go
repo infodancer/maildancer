@@ -80,7 +80,7 @@ func TestLookup_Defaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No config.toml — defaults should be used (gid=0, type=maildir, base=users).
+	// No config.toml -- defaults should be used (gid=0, type=maildir, base=users).
 	passwdContent := "bob:$argon2id$v=19$m=65536,t=3,p=4$salt$hash:bob@example.com:2001\n"
 	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwdContent), 0600); err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestLookup_PostmasterDataPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// No config.toml — defaults apply, but postmaster provides data path.
+	// No config.toml -- defaults apply, but postmaster provides data path.
 	passwdContent := "dave:$argon2id$v=19$m=65536,t=3,p=4$salt$hash:dave@example.com:4001\n"
 	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwdContent), 0600); err != nil {
 		t.Fatal(err)

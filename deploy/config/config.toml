@@ -1,4 +1,4 @@
-# maildancer shared config — read by smtpd, pop3d, imapd, session-manager,
+# maildancer shared config -- read by smtpd, pop3d, imapd, session-manager,
 # queue-manager (each consumes its own sections). Mounted at
 # /etc/infodancer/config.toml. This is a local-dev starting point; review
 # against each daemon's *.toml.example and config structs before production.
@@ -10,7 +10,7 @@ domains_path = "/var/mail/domains"
 domains_data_path = "/var/mail/domains"
 maildir = "/var/mail/domains"
 
-# TLS for the implicit-TLS ports (465/995/993) and for STARTTLS — required for
+# TLS for the implicit-TLS ports (465/995/993) and for STARTTLS -- required for
 # authenticated submission. Generate dev certs with deploy/gen-dev-certs.sh,
 # uncomment this block, and the certs mount is already wired in docker-compose.yml.
 # Inbound plaintext delivery works without it.
@@ -19,7 +19,7 @@ maildir = "/var/mail/domains"
 # key_file = "/etc/ssl/mail/mail.key"
 # min_version = "1.2"
 
-# Shared Redis — greylisting (smtpd) and IMAP notifications (imapd).
+# Shared Redis -- greylisting (smtpd) and IMAP notifications (imapd).
 [redis]
 url = "redis://redis:6379/1"
 
@@ -37,7 +37,7 @@ credential_backend = "passwd"   # passwd filename within each domain dir
 key_backend = "keys"            # key store dir within each domain dir
 
 # Outbound queue injection. Required for relaying mail submitted by authenticated
-# users — session-manager only registers its OutboundService when dir is set.
+# users -- session-manager only registers its OutboundService when dir is set.
 # Shares the mailqueue volume with queue-manager, which drains it.
 [session-manager.queue]
 dir = "/var/spool/mail-queue"

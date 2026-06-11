@@ -77,7 +77,7 @@ func Load(path string) (*ForwardMap, error) {
 
 // LoadTargets reads a per-user forwards file.
 // The file contains one forwarding target address per line with no localpart
-// key — the filename itself is the key (the localpart).
+// key -- the filename itself is the key (the localpart).
 // Returns nil, nil if the file does not exist.
 func LoadTargets(path string) ([]string, error) {
 	f, err := os.Open(path)

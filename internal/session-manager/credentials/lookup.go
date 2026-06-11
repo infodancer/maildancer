@@ -28,7 +28,7 @@ type Info struct {
 //   - BasePath: postmaster file DataPath > domainsDataPath/domain > domainDir/users
 //
 // domainsDataPath, if non-empty, is used to resolve relative MsgStore.BasePath
-// values — matching the behaviour of FilesystemDomainProvider.WithDataPath.
+// values -- matching the behaviour of FilesystemDomainProvider.WithDataPath.
 // The postmaster file (if present) takes priority over domainsDataPath.
 // Credential backend paths are always resolved relative to domainsPath.
 func Lookup(domainsPath, domainsDataPath, localpart, domainName string) (*Info, error) {
@@ -36,7 +36,7 @@ func Lookup(domainsPath, domainsDataPath, localpart, domainName string) (*Info, 
 
 	cfg, err := domain.LoadDomainConfig(filepath.Join(domainDir, "config.toml"))
 	if err != nil {
-		// Treat missing config as empty — domain may use defaults.
+		// Treat missing config as empty -- domain may use defaults.
 		cfg = &domain.DomainConfig{}
 	}
 

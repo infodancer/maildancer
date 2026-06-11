@@ -74,7 +74,7 @@ type Envelope struct {
 
 	// SpamResult contains the spam check result from the upstream checker.
 	// nil indicates no spam check was performed (e.g., authenticated submission).
-	// This is envelope metadata — the message body is never modified.
+	// This is envelope metadata -- the message body is never modified.
 	SpamResult *SpamResult
 
 	// Forwarded indicates this message was already forwarded once before

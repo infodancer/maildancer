@@ -19,14 +19,14 @@ import (
 )
 
 // loadedKey is one signing key with parsed JWK material. The keyStore caches
-// these so PEM files are not re-read on every signing request — the DB
+// these so PEM files are not re-read on every signing request -- the DB
 // (signing_keys table) is the authoritative state, the cache is just the
 // material to satisfy that state.
 type loadedKey struct {
 	kid       string
 	algorithm string
-	privJWK   jwk.Key // private — used to sign
-	pubJWK    jwk.Key // public — served via JWKS and used for /userinfo verification
+	privJWK   jwk.Key // private -- used to sign
+	pubJWK    jwk.Key // public -- served via JWKS and used for /userinfo verification
 }
 
 // keyStore is a content-addressable cache of loaded JWK material keyed by
@@ -156,9 +156,9 @@ func encodePrivateKeyPEM(priv crypto.PrivateKey, algorithm string) ([]byte, erro
 }
 
 // decodePrivateKeyPEM parses a private key from PEM. Three accepted forms:
-//   - "PRIVATE KEY"     — PKCS#8, the format we write for new keys
-//   - "RSA PRIVATE KEY" — PKCS#1, the legacy format the old single-key layout used
-//   - "EC PRIVATE KEY"  — SEC1, retained for completeness even though we never write it
+//   - "PRIVATE KEY"     -- PKCS#8, the format we write for new keys
+//   - "RSA PRIVATE KEY" -- PKCS#1, the legacy format the old single-key layout used
+//   - "EC PRIVATE KEY"  -- SEC1, retained for completeness even though we never write it
 //
 // Returns the parsed key plus the JWA algorithm string it represents.
 func decodePrivateKeyPEM(data []byte) (crypto.PrivateKey, string, error) {

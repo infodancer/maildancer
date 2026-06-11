@@ -14,7 +14,7 @@ func LoadDKIMKey(domainsPath, domainName string) (selector string, key crypto.Si
 	domainDir := filepath.Join(domainsPath, domainName)
 	cfg, err := domain.LoadDomainConfig(filepath.Join(domainDir, "config.toml"))
 	if err != nil {
-		// Missing config is not an error — domain may not have DKIM.
+		// Missing config is not an error -- domain may not have DKIM.
 		return "", nil, nil
 	}
 

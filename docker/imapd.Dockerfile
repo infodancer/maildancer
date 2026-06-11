@@ -1,4 +1,4 @@
-# imapd — IMAP server. Build from the repo root:
+# imapd -- IMAP server. Build from the repo root:
 #   docker build -f docker/imapd.Dockerfile -t maildancer-imapd .
 FROM golang:1.26-alpine AS builder
 WORKDIR /build

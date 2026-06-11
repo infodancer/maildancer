@@ -31,7 +31,7 @@ type Stack struct {
 }
 
 // NewStack creates a Stack from the given configuration, wiring up all components.
-// Session-manager is required — pop3d delegates all authentication and mailbox
+// Session-manager is required -- pop3d delegates all authentication and mailbox
 // operations to it.
 func NewStack(cfg StackConfig) (*Stack, error) {
 	logger := cfg.Logger

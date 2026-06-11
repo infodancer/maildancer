@@ -34,7 +34,7 @@ var DialMX = func(addr, hostname string) (*gosmtp.Client, error) {
 
 	tlsConn, err := negotiateSTARTTLS(conn, hostname, &tls.Config{ServerName: host})
 	if err == nil {
-		// TLS succeeded — create client on the encrypted connection.
+		// TLS succeeded -- create client on the encrypted connection.
 		c := gosmtp.NewClient(tlsConn)
 		if err := c.Hello(hostname); err != nil {
 			_ = c.Close()

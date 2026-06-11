@@ -37,7 +37,7 @@ func NewNotifier(url, password string, logger *slog.Logger) (*Notifier, error) {
 }
 
 // NewNotifierFromClient creates a Notifier from an existing Redis client.
-// The caller retains ownership of the client — Close on the Notifier is a no-op
+// The caller retains ownership of the client -- Close on the Notifier is a no-op
 // for the underlying connection.
 func NewNotifierFromClient(client *redis.Client, logger *slog.Logger) *Notifier {
 	return &Notifier{
@@ -55,7 +55,7 @@ func (n *Notifier) Close() error {
 }
 
 // NotifyNewMail publishes a new-mail notification for the given recipient and folder.
-// Errors are logged but never returned — delivery must not fail due to notifications.
+// Errors are logged but never returned -- delivery must not fail due to notifications.
 func (n *Notifier) NotifyNewMail(ctx context.Context, recipient, folder string) {
 	if n == nil {
 		return

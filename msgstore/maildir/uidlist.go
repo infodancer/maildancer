@@ -284,7 +284,7 @@ func unlockUIDList(f *os.File) {
 func loadOrBootstrapUIDList(dirPath string, curKeys []string) (*uidList, error) {
 	ul, err := readUIDList(dirPath)
 	if err != nil {
-		// Corrupt file — log warning and bootstrap.
+		// Corrupt file -- log warning and bootstrap.
 		_ = os.Remove(filepath.Join(dirPath, uidlistFile))
 		ul = nil
 	}

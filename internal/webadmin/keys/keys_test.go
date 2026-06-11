@@ -148,7 +148,7 @@ func TestPublicKeyFingerprint(t *testing.T) {
 
 	fp := keys.PublicKeyFingerprint(pub)
 
-	// Expect "xx:xx:xx:xx:xx:xx:xx:xx" — 8 hex pairs joined by colons.
+	// Expect "xx:xx:xx:xx:xx:xx:xx:xx" -- 8 hex pairs joined by colons.
 	re := regexp.MustCompile(`^[0-9a-f]{2}(:[0-9a-f]{2}){7}$`)
 	if !re.MatchString(fp) {
 		t.Errorf("fingerprint %q does not match expected format", fp)

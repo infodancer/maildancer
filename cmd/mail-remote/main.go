@@ -16,7 +16,7 @@
 // Use --smarthost and --smarthost-user flags instead, with MAIL_REMOTE_PASSWORD
 // env var for the password.
 //
-// Flags (manual overrides — take precedence over stdin config):
+// Flags (manual overrides -- take precedence over stdin config):
 //
 //	--config path         Path to shared TOML config file (reads [mail-remote] section).
 //	--smarthost host:port Relay via SMTP smarthost (overrides stdin config).

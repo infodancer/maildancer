@@ -1,4 +1,4 @@
-# smtpd — SMTP server. Build from the repo root:
+# smtpd -- SMTP server. Build from the repo root:
 #   docker build -f docker/smtpd.Dockerfile -t maildancer-smtpd .
 FROM golang:1.26-alpine AS builder
 WORKDIR /build

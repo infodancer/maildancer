@@ -14,7 +14,7 @@ import (
 //
 // Operations are safe to run while the server is up: rotations and
 // revocations are atomic SQL transactions, and the server picks up the
-// new state on its next request (per the design doc's option (a) —
+// new state on its next request (per the design doc's option (a) --
 // the server queries the DB on every signing request, so no SIGHUP or
 // inotify coordination is needed).
 //

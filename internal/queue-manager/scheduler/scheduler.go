@@ -202,7 +202,7 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 		bodyPath, err := s.resolveBody(entries[0].path, msgid)
 		if err != nil {
 			slog.Warn("could not resolve body", "msgid", msgid, "error", err)
-			// If we can't find the body, delete expired envelopes anyway —
+			// If we can't find the body, delete expired envelopes anyway --
 			// they can never be delivered.
 			for _, e := range entries {
 				if e.expired {
@@ -275,7 +275,7 @@ func (s *Scheduler) processDomainDir(domainPath string) error {
 			s.generateDSNsForPermFail(bodyPath, results, envByPath, fqdn)
 		}
 
-		// Unclaim surviving envelopes (temp failures — mail-remote touched
+		// Unclaim surviving envelopes (temp failures -- mail-remote touched
 		// their mtime but left them on disk).
 		for _, p := range activePaths {
 			if _, err := os.Stat(p); err != nil {
@@ -349,7 +349,7 @@ func (s *Scheduler) generateDSNsForPermFail(bodyPath string, results []deliveryR
 // generateAndDeliverDSN creates an RFC 3464 DSN bounce message for a failed
 // delivery and delivers it to the original sender's local mailbox via
 // session-manager. If delivery of the DSN itself fails, it is logged and
-// discarded — DSNs are never re-queued (generating a bounce for a bounce
+// discarded -- DSNs are never re-queued (generating a bounce for a bounce
 // is an infinite loop).
 func (s *Scheduler) generateAndDeliverDSN(bodyPath string, env queueEnvelope, result deliveryResult, domain string, expired bool) {
 	if s.dsnGen == nil {
@@ -514,7 +514,7 @@ func (s *Scheduler) resolveOutbound(bodyPath string) OutboundConfig {
 		return fb
 	}
 
-	// No domain config found — fall back to global [outbound] config.
+	// No domain config found -- fall back to global [outbound] config.
 	if cfg == (OutboundConfig{}) {
 		fb := s.globalFallbackOutbound()
 		s.outboundCache[domain] = &fb
@@ -537,7 +537,7 @@ func (s *Scheduler) resolveOutbound(bodyPath string) OutboundConfig {
 	}
 
 	// A smarthost_user_file, when set, supplies (and overrides) the SMTP AUTH
-	// username — for secret usernames that must not live in config.toml.
+	// username -- for secret usernames that must not live in config.toml.
 	if cfg.SmarthostUserFile != "" {
 		user, err := readSmarthostUserFile(s.cfg.DomainConfigPath, domain, cfg)
 		if err != nil {

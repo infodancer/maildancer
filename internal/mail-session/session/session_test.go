@@ -534,7 +534,7 @@ func TestMoveMessage_FolderToFolder(t *testing.T) {
 	if store.copiedCount != 1 {
 		t.Errorf("copiedCount = %d, want 1", store.copiedCount)
 	}
-	// DeleteInFolder must have been called — check that UID 10 was deleted.
+	// DeleteInFolder must have been called -- check that UID 10 was deleted.
 	found := false
 	for _, uid := range store.deleted {
 		if uid == 10 {

@@ -161,7 +161,7 @@ type mover interface {
 // capability automatically when the session satisfies SessionMove.
 //
 // If the underlying store satisfies the mover interface (grpcStore via
-// mail-session), the MOVE is handled atomically — including rspamd Junk-folder
+// mail-session), the MOVE is handled atomically -- including rspamd Junk-folder
 // learning. Otherwise we fall back to Copy + mark-\Deleted + Expunge, with
 // direct rspamd learning when a spamLearner is configured.
 func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string) error {

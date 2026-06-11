@@ -95,7 +95,7 @@ type WebHandler struct {
 }
 
 // NewWebHandler creates a new web UI handler.
-// roles may be nil (RBAC disabled — all authenticated users treated as super_admin).
+// roles may be nil (RBAC disabled -- all authenticated users treated as super_admin).
 func NewWebHandler(domainsPath string, sessions *session.Store, logger *slog.Logger, roles *rbac.RoleStore) *WebHandler {
 	return &WebHandler{
 		domainsPath: domainsPath,
@@ -293,7 +293,7 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Read domain config — set defaults, override from config.toml if present.
+	// Read domain config -- set defaults, override from config.toml if present.
 	authType := "passwd"
 	storeType := "maildir"
 	credentialBackend := "passwd"

@@ -1,4 +1,4 @@
-# webadmin — web administration UI. Build from the repo root:
+# webadmin -- web administration UI. Build from the repo root:
 #   docker build -f docker/webadmin.Dockerfile -t maildancer-webadmin .
 FROM golang:1.26-alpine AS builder
 WORKDIR /build

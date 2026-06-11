@@ -11,7 +11,7 @@ import (
 const oidcIssuerRel = "http://openid.net/specs/connect/1.0/issuer"
 
 // defaultWebfingerIssuerTemplate is used when ServerConfig.WebfingerIssuerTemplate
-// is empty — the standard homelab topology where auth-oidc lives at
+// is empty -- the standard homelab topology where auth-oidc lives at
 // auth.<domain> and the apex answers webfinger.
 const defaultWebfingerIssuerTemplate = "https://auth.{domain}"
 
@@ -35,7 +35,7 @@ type webfingerJRD struct {
 //
 // The set of domains we serve is the set of registered OIDC client domains
 // (the same source domainForHost uses). We do not maintain a separate
-// "webfinger domains" list — the registration is the authoritative source.
+// "webfinger domains" list -- the registration is the authoritative source.
 //
 // The issuer URL we advertise is built from WebfingerIssuerTemplate with
 // "{domain}" substituted. Default template "https://auth.{domain}" matches

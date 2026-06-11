@@ -63,7 +63,7 @@ func Default() Config {
 
 // Load reads a TOML config file and returns the merged Config.
 // Reads [server].hostname and [mail-remote] for transport tuning.
-// Smarthost settings are not read from TOML — they come from
+// Smarthost settings are not read from TOML -- they come from
 // queue-manager via stdin JSON or from CLI flags.
 func Load(path string) (Config, error) {
 	cfg := Default()

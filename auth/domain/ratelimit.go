@@ -176,7 +176,7 @@ func (rl *authRateLimiter) recordSuccess(ip, username string) {
 	if ip != "" && username != "" {
 		delete(rl.ipUser, ip+"\x00"+username)
 	}
-	// Don't clear per-IP or per-user buckets on success — a successful
+	// Don't clear per-IP or per-user buckets on success -- a successful
 	// login for one account shouldn't reset limits for other accounts
 	// being attacked from the same IP.
 }

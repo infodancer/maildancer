@@ -79,7 +79,7 @@ func ParsePostmasterFile(path string) (map[string]*PostmasterEntry, error) {
 
 // LookupDomainPostmaster returns the PostmasterEntry for the given domain from
 // {domainsPath}/postmaster. Returns nil if the file does not exist or the
-// domain has no entry — the caller should fall back to other config sources.
+// domain has no entry -- the caller should fall back to other config sources.
 func LookupDomainPostmaster(domainsPath, domainName string) *PostmasterEntry {
 	entries, err := ParsePostmasterFile(filepath.Join(domainsPath, "postmaster"))
 	if err != nil {

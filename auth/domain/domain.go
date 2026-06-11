@@ -12,7 +12,7 @@ import (
 )
 
 // MailAuthAgent extends AuthenticationAgent with mail-specific capabilities.
-// It is the required auth type for a Domain — all domains use a MailAuthAgent
+// It is the required auth type for a Domain -- all domains use a MailAuthAgent
 // so that mail-layer features (forwarding, aliases, etc.) are always available.
 type MailAuthAgent interface {
 	auth.AuthenticationAgent

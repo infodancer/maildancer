@@ -33,7 +33,7 @@ type OutboundServiceClient interface {
 	// Enqueue accepts an outbound message and writes it to the mail queue.
 	// Client-streaming: the first chunk carries envelope metadata (sender,
 	// recipients), subsequent chunks carry the raw message body.
-	// No session token required — access controlled by socket perms / mTLS
+	// No session token required -- access controlled by socket perms / mTLS
 	// (same model as DeliveryService).
 	Enqueue(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[EnqueueRequest, EnqueueResponse], error)
 }
@@ -70,7 +70,7 @@ type OutboundServiceServer interface {
 	// Enqueue accepts an outbound message and writes it to the mail queue.
 	// Client-streaming: the first chunk carries envelope metadata (sender,
 	// recipients), subsequent chunks carry the raw message body.
-	// No session token required — access controlled by socket perms / mTLS
+	// No session token required -- access controlled by socket perms / mTLS
 	// (same model as DeliveryService).
 	Enqueue(grpc.ClientStreamingServer[EnqueueRequest, EnqueueResponse]) error
 	mustEmbedUnimplementedOutboundServiceServer()

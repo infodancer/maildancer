@@ -11,7 +11,10 @@
 // instance and a userctl invocation cannot corrupt a passwd file by racing.
 package admin
 
-import "errors"
+import (
+	"errors"
+	"path/filepath"
+)
 
 // Paths locates the volume roots of a deployment (see
 // infodancer docs/deployment-filesystem.md).
@@ -22,6 +25,11 @@ import "errors"
 type Paths struct {
 	Config string
 	Data   string
+}
+
+// DomainDir returns the config-volume directory for a domain.
+func (p Paths) DomainDir(domain string) string {
+	return filepath.Join(p.Config, domain)
 }
 
 // Sentinel errors. Callers map these to HTTP status codes or CLI messages.

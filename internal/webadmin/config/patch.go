@@ -1,6 +1,10 @@
 package config
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/infodancer/maildancer/internal/admin"
+)
 
 // PatchRspamdChecker edits content (a shared TOML config file) in-place,
 // updating the url and password fields in the [[spamcheck.checkers]] block
@@ -127,97 +131,14 @@ func PatchRspamdChecker(content []byte, url, password string) []byte {
 
 // QuoteString returns s as a TOML double-quoted string value.
 // Use when building rawValue arguments for PatchSectionValue.
-func QuoteString(s string) string { return tomlQuote(s) }
+// Delegates to internal/admin, which owns the generic TOML patcher.
+func QuoteString(s string) string { return admin.QuoteString(s) }
 
-// PatchSectionValue edits content in-place, setting key = rawValue in [section].
-// rawValue should be the TOML-formatted value (e.g. `"\"string\""` for strings,
-// `"true"` for booleans, `"26214400"` for integers).
-// All other content -- comments, whitespace, unrelated sections -- is preserved.
-// If the section doesn't exist, it is appended. If rawValue is empty, the key
-// line is removed.
+// PatchSectionValue edits content in-place, setting key = rawValue in
+// [section] (or at the top level when section is empty). Delegates to
+// internal/admin, which owns the generic TOML patcher shared with userctl.
 func PatchSectionValue(content []byte, section, key, rawValue string) []byte {
-	lines := strings.Split(string(content), "\n")
-
-	sectionHeader := "[" + section + "]"
-
-	// Find the section.
-	sectionStart := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == sectionHeader {
-			sectionStart = i
-			break
-		}
-	}
-
-	if sectionStart < 0 {
-		// Section not found -- append it (only if rawValue is non-empty).
-		if rawValue == "" {
-			return content
-		}
-		joined := strings.TrimRight(strings.Join(lines, "\n"), "\n")
-		var sb strings.Builder
-		sb.WriteString(joined)
-		sb.WriteString("\n\n")
-		sb.WriteString(sectionHeader)
-		sb.WriteString("\n")
-		sb.WriteString(key)
-		sb.WriteString(" = ")
-		sb.WriteString(rawValue)
-		sb.WriteString("\n")
-		return []byte(sb.String())
-	}
-
-	// Determine where the section ends (next section/array-of-tables header).
-	sectionEnd := len(lines)
-	for i := sectionStart + 1; i < len(lines); i++ {
-		if isSectionHeader(strings.TrimSpace(lines[i])) {
-			sectionEnd = i
-			break
-		}
-	}
-
-	// Look for the key within the section.
-	keyLine := -1
-	for i := sectionStart + 1; i < sectionEnd; i++ {
-		if matchesKey(lines[i], key) {
-			keyLine = i
-			break
-		}
-	}
-
-	patched := make([]string, len(lines))
-	copy(patched, lines)
-
-	deleteLines := make(map[int]bool)
-	var inserts []string
-	insertAfter := sectionStart
-
-	if keyLine >= 0 {
-		if rawValue == "" {
-			// Remove the key line.
-			deleteLines[keyLine] = true
-		} else {
-			// Update in place.
-			patched[keyLine] = key + " = " + rawValue
-		}
-	} else if rawValue != "" {
-		// Insert after the section header.
-		inserts = append(inserts, key+" = "+rawValue)
-	}
-
-	result := make([]string, 0, len(patched)+len(inserts))
-	for i, line := range patched {
-		if deleteLines[i] {
-			continue
-		}
-		result = append(result, line)
-		if i == insertAfter && len(inserts) > 0 {
-			result = append(result, inserts...)
-			inserts = nil
-		}
-	}
-
-	return []byte(strings.Join(result, "\n"))
+	return admin.PatchSectionValue(content, section, key, rawValue)
 }
 
 // isSectionHeader reports whether the trimmed line is a TOML section or

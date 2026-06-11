@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
-	"github.com/infodancer/maildancer/internal/webadmin/keys"
+	"github.com/infodancer/maildancer/internal/admin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/rbac"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )

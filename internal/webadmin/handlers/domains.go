@@ -13,10 +13,10 @@ import (
 
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
 	"github.com/infodancer/maildancer/internal/webadmin/config"
-	"github.com/infodancer/maildancer/internal/webadmin/keys"
+	"github.com/infodancer/maildancer/internal/admin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/rbac"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
-	"github.com/infodancer/maildancer/internal/webadmin/uidalloc"
+	"github.com/infodancer/maildancer/internal/admin/uidalloc"
 )
 
 // domainNameRe validates domain names: lowercase alphanumeric, hyphens, dots.

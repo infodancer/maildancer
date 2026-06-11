@@ -17,9 +17,9 @@ import (
 	"golang.org/x/crypto/argon2"
 
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
-	"github.com/infodancer/maildancer/internal/webadmin/keys"
+	"github.com/infodancer/maildancer/internal/admin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
-	"github.com/infodancer/maildancer/internal/webadmin/uidalloc"
+	"github.com/infodancer/maildancer/internal/admin/uidalloc"
 )
 
 // passwdMu serializes passwd file access per domain path to prevent concurrent corruption.

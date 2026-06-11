@@ -11,7 +11,7 @@ import (
 
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
-	"github.com/infodancer/maildancer/internal/webadmin/uidalloc"
+	"github.com/infodancer/maildancer/internal/admin/uidalloc"
 )
 
 // MigrateHandler handles migration API requests.

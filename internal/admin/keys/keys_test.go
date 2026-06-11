@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/infodancer/maildancer/internal/webadmin/keys"
+	"github.com/infodancer/maildancer/internal/admin/keys"
 )
 
 const (

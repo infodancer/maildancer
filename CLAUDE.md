@@ -7,7 +7,7 @@ Guidance for Claude Code when working in the **maildancer** monorepo.
 maildancer is the consolidated mail server suite and local-filesystem auth for
 infodancer — a single Go module (`github.com/infodancer/maildancer`) holding the
 former `smtpd`, `pop3d`, `imapd`, `session-manager`, `mail-session`,
-`mail-deliver`, `mail-remote`, `queue-manager`, `msgstore`, `auth`, and
+`mail-remote`, `queue-manager`, `msgstore`, `auth`, and
 `webadmin` repositories. Full history of each was preserved on import
 (`git log --follow` and `git blame` work through the moves).
 
@@ -37,7 +37,7 @@ msgstore/            Shared storage library + interfaces (DeliveryAgent,
 auth/                Authentication & key management (AuthRouter, KeyProvider,
                      domain, passwd, forwards). Top-level, importable.
 cmd/<binary>/        Entrypoints: smtpd pop3d imapd session-manager
-                     mail-session mail-deliver mail-remote queue-manager
+                     mail-session mail-remote queue-manager
                      auth-oidc userctl webadmin
 internal/<module>/   Daemon implementations (not importable outside the module)
 internal/authoidc/   OIDC server implementation behind cmd/auth-oidc
@@ -88,8 +88,7 @@ Violating these reintroduces bugs the design deliberately avoids.
   itself — it starts already running as the recipient user.
 - **mail-session sessions are not thread-safe.** Its gRPC server mutex-serializes
   access to `session.Session`; RPCs are otherwise stateless (folder in every
-  request). `DeliveryService` (in `mail-session`) is the delivery path;
-  `mail-deliver` is archived.
+  request). `DeliveryService` (in `mail-session`) is the delivery path.
 - **Forwarding is 1-hop.** A delivery that resolves a forward re-delivers exactly
   once; a second forward in that chain is an error, not followed — this prevents
   mail loops.

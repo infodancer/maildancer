@@ -117,3 +117,55 @@ func TestRunDomainSubcommand_Errors(t *testing.T) {
 		}
 	}
 }
+
+func TestRunDomainSubcommand_DKIM(t *testing.T) {
+	p := testPaths(t)
+	if err := runDomainSubcommand([]string{"create", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatalf("domain create: %v", err)
+	}
+
+	// show before create reports not configured (an error).
+	if err := runDomainSubcommand([]string{"dkim", "show", "example.com"}, p, strings.NewReader("")); err == nil {
+		t.Error("dkim show before create succeeded, want error")
+	}
+
+	if err := runDomainSubcommand([]string{"dkim", "create", "example.com", "--selector", "sel1"}, p, strings.NewReader("")); err != nil {
+		t.Fatalf("dkim create: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.Config, "example.com", "dkim", "sel1.key")); err != nil {
+		t.Errorf("expected key file: %v", err)
+	}
+
+	// Re-create without --force is refused; with --force succeeds.
+	if err := runDomainSubcommand([]string{"dkim", "create", "example.com", "--selector", "sel1"}, p, strings.NewReader("")); err == nil {
+		t.Error("dkim create over existing key succeeded, want error")
+	}
+	if err := runDomainSubcommand([]string{"dkim", "create", "example.com", "--selector", "sel1", "--force"}, p, strings.NewReader("")); err != nil {
+		t.Errorf("dkim create --force: %v", err)
+	}
+
+	if err := runDomainSubcommand([]string{"dkim", "show", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Errorf("dkim show: %v", err)
+	}
+
+	// Default selector (no --selector flag) works too.
+	if err := runDomainSubcommand([]string{"dkim", "create", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Errorf("dkim create with default selector: %v", err)
+	}
+}
+
+func TestRunDomainSubcommand_DKIMUsageErrors(t *testing.T) {
+	p := testPaths(t)
+	for _, args := range [][]string{
+		{"dkim"},
+		{"dkim", "create"},
+		{"dkim", "show"},
+		{"dkim", "frobnicate", "example.com"},
+		{"dkim", "create", "example.com", "--selector"},
+		{"dkim", "create", "a.com", "b.com"},
+	} {
+		if err := runDomainSubcommand(args, p, strings.NewReader("")); err == nil {
+			t.Errorf("runDomainSubcommand(%v) succeeded, want error", args)
+		}
+	}
+}

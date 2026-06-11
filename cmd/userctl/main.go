@@ -7,6 +7,12 @@
 //	userctl [--domains <path>] [--verbose] list   <domain>        list users and mailboxes
 //	userctl [--domains <path>] [--verbose] verify <user@domain>   verify user password
 //
+// Forward subcommands (domain config.toml [forwards] table, strictly 1:1):
+//
+//	userctl [--domains <path>] forward list <domain>
+//	userctl [--domains <path>] forward set  <localpart@domain> <target>
+//	userctl [--domains <path>] forward del  <localpart@domain>
+//
 // Signing-key subcommands (auth-oidc operator surface, see
 // docs/signing-key-rotation.md):
 //
@@ -88,6 +94,19 @@ func main() {
 	// domains path and a target arg.
 	if subcmd == "keys" {
 		exitOnErr(runKeysSubcommand(args[1:], *dataDirFlag))
+		return
+	}
+
+	// forward has sub-actions (list/set/del) and variable arg counts, so it is
+	// dispatched separately like keys, after resolving the domains path.
+	if subcmd == "forward" {
+		domainsPath, err := resolveDomainsPath(*domainsFlag)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		slog.Debug("resolved domains path", "path", domainsPath)
+		exitOnErr(runForwardSubcommand(args[1:], domainsPath))
 		return
 	}
 
@@ -309,6 +328,11 @@ func usage() {
     userctl [--domains <path>]  del    <user@domain>   remove user
     userctl [--domains <path>]  list   <domain>        list users and mailboxes
     userctl [--domains <path>]  verify <user@domain>   verify user password
+
+  Forwards (domain config.toml [forwards], 1:1 only):
+    userctl [--domains <path>]  forward list <domain>
+    userctl [--domains <path>]  forward set  <localpart@domain> <target>
+    userctl [--domains <path>]  forward del  <localpart@domain>
 
   Signing keys (auth-oidc operator):
     userctl [--data-dir <path>] keys list   <domain>

@@ -78,7 +78,7 @@ func (h *MailStatsHandler) HandleGetMailStats(w http.ResponseWriter, r *http.Req
 	resp.ActiveConnections.POP3 = round(h.prom.Scalar(ctx, "pop3d_connections_active"))
 	resp.ActiveConnections.IMAP = round(h.prom.Scalar(ctx, "imapd_connections_active"))
 
-	// Incoming messages over last 24h — total and per domain.
+	// Incoming messages over last 24h -- total and per domain.
 	resp.Incoming24h.Total = round(h.prom.Scalar(ctx, `sum(increase(smtpd_messages_received_total[24h]))`))
 
 	byDomain := h.prom.LabelValues(ctx,

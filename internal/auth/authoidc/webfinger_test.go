@@ -16,7 +16,7 @@ func TestWebfinger_KnownDomain_ReturnsIssuerLink(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet,
 		"/.well-known/webfinger?resource=acct:alice@test.example"+
 			"&rel=http://openid.net/specs/connect/1.0/issuer", nil)
-	req.Host = "test.example" // apex — domainForHost matches directly
+	req.Host = "test.example" // apex -- domainForHost matches directly
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
@@ -49,7 +49,7 @@ func TestWebfinger_KnownDomain_ReturnsIssuerLink(t *testing.T) {
 }
 
 // TestWebfinger_ResolvesViaSubdomainStripping verifies that a request to
-// auth.<domain>/.well-known/webfinger also resolves correctly — domainForHost
+// auth.<domain>/.well-known/webfinger also resolves correctly -- domainForHost
 // strips the "auth." label and finds the registered domain.
 func TestWebfinger_ResolvesViaSubdomainStripping(t *testing.T) {
 	handler := newTestServer(t)

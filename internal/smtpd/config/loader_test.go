@@ -422,7 +422,7 @@ cert_file = "/etc/ssl/smtp-cert.pem"
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	// Server values should win — smtpd does not override global settings
+	// Server values should win -- smtpd does not override global settings
 	if cfg.Hostname != "shared.example.com" {
 		t.Errorf("hostname = %q, want 'shared.example.com' ([server] should win)", cfg.Hostname)
 	}

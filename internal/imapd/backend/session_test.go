@@ -551,12 +551,12 @@ func TestRunIdleKeepalive_FiresAndStops(t *testing.T) {
 		t.Errorf("expected at least 2 keepalive RPCs, got %d", calls)
 	}
 	if calls > 10 {
-		t.Errorf("unexpectedly many keepalive RPCs (got %d) — interval not honored?", calls)
+		t.Errorf("unexpectedly many keepalive RPCs (got %d) -- interval not honored?", calls)
 	}
 }
 
 // TestRunIdleKeepalive_NoCallsAfterDone verifies that once done is closed,
-// no further RPCs are issued — i.e. the goroutine stops promptly and doesn't
+// no further RPCs are issued -- i.e. the goroutine stops promptly and doesn't
 // race a final tick.
 func TestRunIdleKeepalive_NoCallsAfterDone(t *testing.T) {
 	store := newMockStore()

@@ -30,7 +30,7 @@ func newMockConnection() *mockConnection {
 }
 
 // Test helper to create a session for testing.
-// A non-nil sentinel TLS config is used so that insecureAuth stays false —
+// A non-nil sentinel TLS config is used so that insecureAuth stays false --
 // the tests verify that missing TLS *activity* rejects auth, not that TLS
 // is unconfigured.
 func newTestSession(mode config.ListenerMode, isTLS bool) *Session {
@@ -426,7 +426,7 @@ func TestCommandRegistry(t *testing.T) {
 	// Clear the registry first
 	commandRegistry = make(map[string]Command)
 
-	// Register test commands — nil smClient is fine for registry tests
+	// Register test commands -- nil smClient is fine for registry tests
 	RegisterAuthCommands(nil)
 
 	tests := []struct {

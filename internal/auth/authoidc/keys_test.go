@@ -118,7 +118,7 @@ func TestLoadKeyFile_AlgorithmMismatch(t *testing.T) {
 	if _, err := generateAndWriteKey(dataDir, domain, kid, AlgES256); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
-	// Try to load it as if the DB said it was RS256 — must fail.
+	// Try to load it as if the DB said it was RS256 -- must fail.
 	if _, err := loadKeyFile(dataDir, domain, kid, AlgRS256); err == nil {
 		t.Error("expected mismatch error, got nil")
 	}
@@ -183,7 +183,7 @@ func TestServer_MigrateLegacySigningKey(t *testing.T) {
 
 	// Open a Store + run ensureSigningKeys directly. Avoids the larger
 	// Server fixture which would also need domain configs and a passwd
-	// file — neither is relevant to the migration check.
+	// file -- neither is relevant to the migration check.
 	store, err := newSQLiteStore(filepath.Join(tmp, "state.db"), nil)
 	if err != nil {
 		t.Fatalf("newSQLiteStore: %v", err)
@@ -266,7 +266,7 @@ func TestServer_RotateAndSweep(t *testing.T) {
 	}
 	initialKID := initial[0].KID
 
-	// Rotate explicitly to RS256 — confirms algorithm-migration path.
+	// Rotate explicitly to RS256 -- confirms algorithm-migration path.
 	newKID, err := s.rotateKey(domain, AlgRS256)
 	if err != nil {
 		t.Fatalf("rotateKey: %v", err)

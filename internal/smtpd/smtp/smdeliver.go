@@ -24,7 +24,7 @@ import (
 // oneshot mail-session subprocess, handling credential lookup and process
 // isolation.
 //
-// This agent has no dependency on msgstore — it speaks the mail-session proto
+// This agent has no dependency on msgstore -- it speaks the mail-session proto
 // directly. SMTP envelope fields are passed individually, not as a store type.
 type SessionManagerDeliveryAgent struct {
 	conn     *grpc.ClientConn
@@ -130,7 +130,7 @@ func (a *SessionManagerDeliveryAgent) ValidateRecipient(ctx context.Context, add
 }
 
 // Deliver sends a message to the session-manager for delivery.
-// Parameters map directly to SMTP envelope fields — no msgstore types involved.
+// Parameters map directly to SMTP envelope fields -- no msgstore types involved.
 func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, message io.Reader) error {
 	stream, err := a.delivery.Deliver(ctx)
 	if err != nil {

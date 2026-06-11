@@ -4,8 +4,8 @@ import "strings"
 
 // PatchRspamdChecker edits content (a shared TOML config file) in-place,
 // updating the url and password fields in the [[spamcheck.checkers]] block
-// where type = "rspamd". All other content — comments, whitespace, and
-// unrelated sections — is preserved exactly.
+// where type = "rspamd". All other content -- comments, whitespace, and
+// unrelated sections -- is preserved exactly.
 //
 // If no rspamd checker block exists, one is appended at the end of the file.
 // If password is empty, the password key is omitted (or removed if present).
@@ -53,7 +53,7 @@ func PatchRspamdChecker(content []byte, url, password string) []byte {
 	}
 
 	if rspamdIdx < 0 {
-		// No rspamd block — append one at the end.
+		// No rspamd block -- append one at the end.
 		joined := strings.TrimRight(strings.Join(lines, "\n"), "\n")
 		var sb strings.Builder
 		sb.WriteString(joined)
@@ -132,7 +132,7 @@ func QuoteString(s string) string { return tomlQuote(s) }
 // PatchSectionValue edits content in-place, setting key = rawValue in [section].
 // rawValue should be the TOML-formatted value (e.g. `"\"string\""` for strings,
 // `"true"` for booleans, `"26214400"` for integers).
-// All other content — comments, whitespace, unrelated sections — is preserved.
+// All other content -- comments, whitespace, unrelated sections -- is preserved.
 // If the section doesn't exist, it is appended. If rawValue is empty, the key
 // line is removed.
 func PatchSectionValue(content []byte, section, key, rawValue string) []byte {
@@ -150,7 +150,7 @@ func PatchSectionValue(content []byte, section, key, rawValue string) []byte {
 	}
 
 	if sectionStart < 0 {
-		// Section not found — append it (only if rawValue is non-empty).
+		// Section not found -- append it (only if rawValue is non-empty).
 		if rawValue == "" {
 			return content
 		}

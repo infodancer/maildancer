@@ -87,7 +87,7 @@ func Register(reg prometheus.Registerer) error {
 			if !errors.As(err, &are) {
 				return err
 			}
-			// Collector already registered (e.g., in tests) — this is fine.
+			// Collector already registered (e.g., in tests) -- this is fine.
 		}
 	}
 

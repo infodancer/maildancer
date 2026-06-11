@@ -143,7 +143,7 @@ func TestMergeConfigLayers(t *testing.T) {
 func TestToTOMLMap_OmitsZeroValues(t *testing.T) {
 	cfg := DomainConfig{
 		Auth: DomainAuthConfig{Type: "passwd"},
-		// All other fields are zero — should not appear in map.
+		// All other fields are zero -- should not appear in map.
 	}
 	m, err := toTOMLMap(cfg)
 	if err != nil {

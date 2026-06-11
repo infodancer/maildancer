@@ -134,7 +134,7 @@ func keysRevoke(km *authoidc.KeyManager, domain, kid string) error {
 	if err := km.Revoke(domain, kid); err != nil {
 		return err
 	}
-	fmt.Printf("Revoked %s/%s — will be swept on next pass\n", domain, kid)
+	fmt.Printf("Revoked %s/%s -- will be swept on next pass\n", domain, kid)
 	return nil
 }
 

@@ -73,7 +73,7 @@ func (c *pop3Pipe) readGreeting() string {
 }
 
 // TestRunSingleConn_SessionEndsAfterQuit verifies that RunSingleConn returns
-// after the client sends QUIT — the server does not hang indefinitely.
+// after the client sends QUIT -- the server does not hang indefinitely.
 func TestRunSingleConn_SessionEndsAfterQuit(t *testing.T) {
 	t.Parallel()
 

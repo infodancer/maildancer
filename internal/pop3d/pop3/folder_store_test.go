@@ -135,7 +135,7 @@ func TestInitializeMailbox_NoFolder(t *testing.T) {
 		t.Fatalf("InitializeMailbox: %v", err)
 	}
 
-	// No folder specified — should use inbox (1 message)
+	// No folder specified -- should use inbox (1 message)
 	if got := sess.MessageCount(); got != 1 {
 		t.Errorf("MessageCount() = %d, want 1 (inbox)", got)
 	}
@@ -155,7 +155,7 @@ func TestInitializeMailbox_FolderExists(t *testing.T) {
 		t.Fatalf("InitializeMailbox: %v", err)
 	}
 
-	// Folder exists — should see folder messages, not inbox
+	// Folder exists -- should see folder messages, not inbox
 	if got := sess.MessageCount(); got != 2 {
 		t.Errorf("MessageCount() = %d, want 2 (folder)", got)
 	}
@@ -167,7 +167,7 @@ func TestInitializeMailbox_FolderMissing(t *testing.T) {
 	})
 	sess := newAuthenticatedSession()
 
-	// Request a folder that does not exist — should fall back to inbox
+	// Request a folder that does not exist -- should fall back to inbox
 	if err := sess.InitializeMailbox(context.Background(), store, "nosuchfolder"); err != nil {
 		t.Fatalf("InitializeMailbox: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestInitializeMailbox_StoreNotFolderStore(t *testing.T) {
 	store := newMockMessageStore()
 	sess := newAuthenticatedSession()
 
-	// Extension requested but store doesn't implement FolderStore — inbox fallback
+	// Extension requested but store doesn't implement FolderStore -- inbox fallback
 	if err := sess.InitializeMailbox(context.Background(), store, "work"); err != nil {
 		t.Fatalf("InitializeMailbox: %v", err)
 	}

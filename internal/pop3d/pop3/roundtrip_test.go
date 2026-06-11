@@ -1,7 +1,7 @@
 // Package pop3_test contains round-trip integration tests for the POP3 server.
 //
-// These tests wire the full stack — mock session-manager gRPC server and POP3
-// protocol handler — and exercise the protocol over a real TLS connection.
+// These tests wire the full stack -- mock session-manager gRPC server and POP3
+// protocol handler -- and exercise the protocol over a real TLS connection.
 package pop3_test
 
 import (

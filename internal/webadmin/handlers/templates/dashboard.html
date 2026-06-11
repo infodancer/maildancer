@@ -3,10 +3,10 @@
 
 {{/* --- Mail server stats (fetched client-side from /api/mailstats) --- */}}
 <section id="mail-stats">
-  <div id="stats-loading" style="color:var(--pico-muted-color);margin-bottom:1.5rem">Loading mail server stats…</div>
+  <div id="stats-loading" style="color:var(--pico-muted-color);margin-bottom:1.5rem">Loading mail server stats...</div>
 
   <div id="stats-unavailable" style="display:none;color:var(--pico-muted-color);margin-bottom:1.5rem">
-    Mail server stats unavailable — Prometheus not configured.
+    Mail server stats unavailable -- Prometheus not configured.
   </div>
 
   <div id="stats-content" style="display:none">
@@ -14,15 +14,15 @@
     {{/* Active connection stat cards */}}
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem">
       <article style="margin:0;padding:1rem;text-align:center">
-        <div style="font-size:2rem;font-weight:bold" id="stat-smtp">—</div>
+        <div style="font-size:2rem;font-weight:bold" id="stat-smtp">--</div>
         <div style="font-size:0.875rem;color:var(--pico-muted-color)">SMTP active</div>
       </article>
       <article style="margin:0;padding:1rem;text-align:center">
-        <div style="font-size:2rem;font-weight:bold" id="stat-pop3">—</div>
+        <div style="font-size:2rem;font-weight:bold" id="stat-pop3">--</div>
         <div style="font-size:0.875rem;color:var(--pico-muted-color)">POP3 active</div>
       </article>
       <article style="margin:0;padding:1rem;text-align:center">
-        <div style="font-size:2rem;font-weight:bold" id="stat-imap">—</div>
+        <div style="font-size:2rem;font-weight:bold" id="stat-imap">--</div>
         <div style="font-size:0.875rem;color:var(--pico-muted-color)">IMAP active</div>
       </article>
     </div>
@@ -49,8 +49,8 @@
         <h4 style="margin:0 0 0.5rem">Accept vs reject (24h)</h4>
         <table style="margin:0">
           <tbody>
-            <tr><td>Accepted</td><td id="stat-accepted" style="text-align:right">—</td></tr>
-            <tr><td>Rejected</td><td id="stat-rejected" style="text-align:right">—</td></tr>
+            <tr><td>Accepted</td><td id="stat-accepted" style="text-align:right">--</td></tr>
+            <tr><td>Rejected</td><td id="stat-rejected" style="text-align:right">--</td></tr>
           </tbody>
         </table>
       </article>
@@ -58,9 +58,9 @@
         <h4 style="margin:0 0 0.5rem">Delivery (24h)</h4>
         <table style="margin:0">
           <tbody>
-            <tr><td>Delivered</td><td id="stat-delivered" style="text-align:right">—</td></tr>
-            <tr><td>Temp failure</td><td id="stat-temp-fail" style="text-align:right">—</td></tr>
-            <tr><td>Perm failure</td><td id="stat-perm-fail" style="text-align:right">—</td></tr>
+            <tr><td>Delivered</td><td id="stat-delivered" style="text-align:right">--</td></tr>
+            <tr><td>Temp failure</td><td id="stat-temp-fail" style="text-align:right">--</td></tr>
+            <tr><td>Perm failure</td><td id="stat-perm-fail" style="text-align:right">--</td></tr>
           </tbody>
         </table>
       </article>

@@ -1673,7 +1673,7 @@ func TestEnsureDefaultFolders_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Call twice — second call should succeed without error
+	// Call twice -- second call should succeed without error
 	if err := store.EnsureDefaultFolders(ctx, "user"); err != nil {
 		t.Fatalf("first EnsureDefaultFolders failed: %v", err)
 	}

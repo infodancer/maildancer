@@ -46,7 +46,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 
 	s := &Stack{logger: logger}
 
-	// Session-manager is required — it handles auth, delivery, and recipient validation.
+	// Session-manager is required -- it handles auth, delivery, and recipient validation.
 	if !cfg.Config.SessionManager.IsEnabled() {
 		return nil, fmt.Errorf("session-manager configuration is required")
 	}

@@ -23,7 +23,7 @@ type outboundServer struct {
 // chunks), DKIM-signs it if a key exists for the sender domain, and writes
 // it to the mail queue.
 //
-// No session token is required — access is controlled by socket perms / mTLS.
+// No session token is required -- access is controlled by socket perms / mTLS.
 func (s *outboundServer) Enqueue(stream pb.OutboundService_EnqueueServer) error {
 	// Read first chunk: must be metadata.
 	first, err := stream.Recv()

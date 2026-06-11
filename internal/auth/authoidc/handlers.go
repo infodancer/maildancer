@@ -42,7 +42,7 @@ var loginTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Sign in — {{.Domain}}</title>
+  <title>Sign in -- {{.Domain}}</title>
   <link rel="stylesheet" href="` + picoCSS + `">
   <style>main{margin-top:4rem}</style>
 </head>
@@ -554,7 +554,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, de *domai
 
 	// Derive a stable client_id from the registration inputs so a restart of
 	// auth-oidc, or a re-registration by a federated RP, yields the same id
-	// for the same RP. The id is not a secret — exact-match redirect_uri plus
+	// for the same RP. The id is not a secret -- exact-match redirect_uri plus
 	// PKCE are the authorization-time controls (see
 	// infodancer/docs/oidc-federation-design.md).
 	clientID := deriveClientID(de.name, req.ClientName, req.RedirectURIs)
@@ -604,7 +604,7 @@ func (s *Server) serveRegister(w http.ResponseWriter, r *http.Request, de *domai
 // SHA-256 over (domain, client_name, sorted redirect_uris) with NUL separators,
 // truncated to 120 bits and base32-encoded.
 //
-// The id is not a secret — exact-match redirect_uri + PKCE are the
+// The id is not a secret -- exact-match redirect_uri + PKCE are the
 // authorization-time controls. Sorting redirect_uris makes the derivation
 // order-independent: registering with [A, B] and [B, A] yields the same id.
 func deriveClientID(domain, clientName string, redirectURIs []string) string {

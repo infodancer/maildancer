@@ -235,7 +235,7 @@ func TestSessionManagerDelivery_LargeMessage(t *testing.T) {
 	}
 	defer func() { _ = agent.Close() }()
 
-	// 256KB message — forces multiple 64KB chunks.
+	// 256KB message -- forces multiple 64KB chunks.
 	largeBody := strings.Repeat("X", 256*1024)
 
 	err = agent.Deliver(context.Background(),

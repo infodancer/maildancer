@@ -226,8 +226,8 @@ func (h *DomainHandler) HandleDeleteDomain(w http.ResponseWriter, r *http.Reques
 
 // HandleUpdateDomainConfig writes or removes a per-domain config.toml override.
 // PUT /api/domains/{name}/config
-// Body: {"override":false} — removes config.toml (reverts to defaults)
-// Body: {"override":true,"auth_type":"...","credential_backend":"...","key_backend":"...","store_type":"...","base_path":"..."} — writes config.toml
+// Body: {"override":false} -- removes config.toml (reverts to defaults)
+// Body: {"override":true,"auth_type":"...","credential_backend":"...","key_backend":"...","store_type":"...","base_path":"..."} -- writes config.toml
 func (h *DomainHandler) HandleUpdateDomainConfig(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if !isValidDomainName(name) {

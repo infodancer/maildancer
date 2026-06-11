@@ -196,7 +196,7 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 // runIdleKeepalive periodically issues a cheap RPC against the upstream store
 // while an IDLE is active, preventing mail-session's idle interceptor from
 // reaping the session. Exits when done is closed (Idle returning) or when the
-// RPC fails irrecoverably — a failure is logged but the loop continues, since
+// RPC fails irrecoverably -- a failure is logged but the loop continues, since
 // recovery is the next rescan/operation's responsibility, not the heartbeat's.
 func (s *Session) runIdleKeepalive(done <-chan struct{}) {
 	ticker := time.NewTicker(s.keepaliveInterval)

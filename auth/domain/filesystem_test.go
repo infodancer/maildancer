@@ -320,7 +320,7 @@ base_path = "` + maildirPath + `"
 }
 
 func TestFilesystemDomainProvider_WithDefaults_NoConfig(t *testing.T) {
-	// Domain directory exists but has no config.toml — should load using defaults.
+	// Domain directory exists but has no config.toml -- should load using defaults.
 	tmpDir := t.TempDir()
 
 	domainDir := filepath.Join(tmpDir, "example.com")
@@ -370,7 +370,7 @@ func TestFilesystemDomainProvider_WithDefaults_NoConfig(t *testing.T) {
 		t.Error("expected MessageStore to be set")
 	}
 
-	// Directory exists but domain not in our base — should still return nil
+	// Directory exists but domain not in our base -- should still return nil
 	if provider.GetDomain("notadomain.com") != nil {
 		t.Error("expected nil for directory that does not exist")
 	}

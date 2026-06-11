@@ -205,7 +205,7 @@ func TestNewAgent_MissingPasswdFile(t *testing.T) {
 	passwdPath := filepath.Join(dir, "passwd")
 	keyDir := filepath.Join(dir, "keys")
 
-	// passwd file does not exist — should succeed with no users
+	// passwd file does not exist -- should succeed with no users
 	agent, err := NewAgent(passwdPath, keyDir)
 	if err != nil {
 		t.Fatalf("NewAgent with missing passwd file: %v", err)

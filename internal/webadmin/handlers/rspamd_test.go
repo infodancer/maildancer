@@ -118,7 +118,7 @@ func TestHandleSetRspamd_PreservesExistingPassword(t *testing.T) {
 		strings.NewReader(`{"url":"http://localhost:11334","password":"existing"}`))
 	h.HandleSetRspamd(httptest.NewRecorder(), req)
 
-	// Update URL only — password should be preserved
+	// Update URL only -- password should be preserved
 	req2 := httptest.NewRequest(http.MethodPost, "/api/rspamd",
 		strings.NewReader(`{"url":"http://newhost:11334"}`))
 	w2 := httptest.NewRecorder()

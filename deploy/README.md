@@ -26,7 +26,7 @@ docker compose down            # add -v to also wipe the data volumes
   outbound queue (`mailqueue`), and listens on a unix socket shared with the
   protocol daemons via the `sessmgr-sock` volume. It spawns the bundled
   `mail-session` per user (so it runs as root to set per-user uid/gid).
-- **smtpd / pop3d / imapd** mount *only* the socket volume — never `maildata`.
+- **smtpd / pop3d / imapd** mount *only* the socket volume -- never `maildata`.
   This matches the depguard privilege-separation boundary: the network-facing
   daemons have no filesystem access to mail data. smtpd hands both inbound
   delivery and outbound submission to session-manager.
@@ -51,11 +51,11 @@ A fresh stack has no domains or users, so login and delivery won't work until yo
 provision one. The `init` one-shot creates an empty `/var/mail/domains`; populate
 it with a domain and user:
 
-- **Via webadmin** (`http://localhost:8080`) — create a domain and users in the
+- **Via webadmin** (`http://localhost:8080`) -- create a domain and users in the
   UI. You first need an admin credential in `deploy/config/admin-passwd`
-  (RBAC is disabled by default, so any authenticated user is super_admin —
+  (RBAC is disabled by default, so any authenticated user is super_admin --
   set `roles_file` to enable RBAC).
-- **Via CLI** — `userctl --domains <path> add user@domain` (prompts for a
+- **Via CLI** -- `userctl --domains <path> add user@domain` (prompts for a
   password) against the `maildata` volume. `userctl` is a CLI, not one of the
   service images; run it from a build or a one-off container that mounts the
   volume.
@@ -88,7 +88,7 @@ untrusted network.
 ## Notes
 
 - `admin-passwd` is a placeholder; create a real credential and tighten its
-  permissions (`chmod 600`) — git cannot preserve restrictive modes.
+  permissions (`chmod 600`) -- git cannot preserve restrictive modes.
 - The outbound queue handoff (session-manager → `mailqueue` → queue-manager)
   uses the shared volume; verify the queue path matches your `[queue-manager]`
   config in production.

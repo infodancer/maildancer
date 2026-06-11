@@ -189,7 +189,7 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 }
 
 // parseSieve loads and parses the user's .sieve script.
-// Errors are logged but do not affect delivery — fail-safe.
+// Errors are logged but do not affect delivery -- fail-safe.
 func (dlvr *Deliverer) parseSieve(domainName, localpart string) {
 	path := filepath.Join(dlvr.cfg.DataPath(), domainName, "users", localpart, ".sieve")
 	f, err := os.Open(path)

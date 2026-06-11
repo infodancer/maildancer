@@ -12,7 +12,7 @@ passwd_file = "/etc/webadmin/admin-passwd"
 [webadmin.session]
 timeout_minutes = 30
 
-# Optional TLS — uncomment and mount certs via docker-compose volumes.
+# Optional TLS -- uncomment and mount certs via docker-compose volumes.
 # [webadmin.tls]
 # cert_file = "/etc/ssl/certs/mail.pem"
 # key_file = "/etc/ssl/private/mail.key"

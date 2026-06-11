@@ -68,9 +68,9 @@ func splitEmail(email string) (localpart, domain string) {
 // (which has the full address) or pop3d (which has already split on domain).
 //
 // An explicit pathTemplate overrides the default:
-//   - {localpart}  — same as default; domain stripped
-//   - {domain}     — use domain only
-//   - {email}      — use the full address as-is
+//   - {localpart}  -- same as default; domain stripped
+//   - {domain}     -- use domain only
+//   - {email}      -- use the full address as-is
 //   - arbitrary combinations, e.g. "{domain}/users/{localpart}"
 func (s *MaildirStore) expandMailbox(mailbox string) string {
 	localpart, domain := splitEmail(mailbox)
@@ -269,7 +269,7 @@ func (s *MaildirStore) lookupKey(path string, uid uint32) (string, error) {
 	}
 	s.uidlistMu.Unlock()
 
-	// Cache miss — load from disk.
+	// Cache miss -- load from disk.
 	lock, err := lockUIDList(path)
 	if err != nil {
 		return "", err
@@ -382,7 +382,7 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 		}
 
 		// Resolve delivery target. If the recipient has a +extension, deliver
-		// to the matching Maildir++ folder — but only if it already exists.
+		// to the matching Maildir++ folder -- but only if it already exists.
 		// The user controls which folders accept subaddressed mail: if the
 		// folder does not exist, fall back to the inbox silently.
 		var dir maildir.Dir

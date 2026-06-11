@@ -1,4 +1,4 @@
-# pop3d — POP3 server. Build from the repo root:
+# pop3d -- POP3 server. Build from the repo root:
 #   docker build -f docker/pop3d.Dockerfile -t maildancer-pop3d .
 FROM golang:1.26-alpine AS builder
 WORKDIR /build

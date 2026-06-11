@@ -68,7 +68,7 @@ func TestIsReady_OldEnough(t *testing.T) {
 	}
 	_ = f.Close()
 
-	// Set mtime to 10 minutes ago — should be ready (zero TTL falls back to 5m minimum).
+	// Set mtime to 10 minutes ago -- should be ready (zero TTL falls back to 5m minimum).
 	old := time.Now().Add(-10 * time.Minute)
 	if err := os.Chtimes(f.Name(), old, old); err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestIsReady_TooRecent(t *testing.T) {
 	}
 	_ = f.Close()
 
-	// mtime is effectively now — not ready.
+	// mtime is effectively now -- not ready.
 	s := mustNew(t, Config{QueueDir: t.TempDir(), Binary: "mail-remote", Interval: time.Minute})
 	if s.isReady(f.Name(), time.Time{}) {
 		t.Error("expected isReady=false for just-created file")
@@ -295,7 +295,7 @@ func TestProcessDomainDir_SkipsNotReady(t *testing.T) {
 	if err := os.WriteFile(envFile, []byte(fmt.Sprintf(`{"msgid":"%s"}`, msgid)), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// mtime is now — not ready; no need to chtimes
+	// mtime is now -- not ready; no need to chtimes
 
 	recordFile := filepath.Join(t.TempDir(), "args.txt")
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
@@ -714,7 +714,7 @@ func TestProcessDomainDir_ClaimedSkippedByConcurrentScan(t *testing.T) {
 	t.Setenv("QUEUE_MGR_RECORD_FILE", recordFile)
 
 	s := mustNew(t, Config{QueueDir: dir, Binary: fakeBin, Interval: time.Minute})
-	// processDomainDir directly — no recovery pass, simulating concurrent scan.
+	// processDomainDir directly -- no recovery pass, simulating concurrent scan.
 	if err := s.processDomainDir(envDir); err != nil {
 		t.Fatalf("processDomainDir: %v", err)
 	}
@@ -1084,7 +1084,7 @@ func TestProcessDomainDir_DSNSkippedWhenDisabled(t *testing.T) {
 	}
 	defer func() { _ = cl.Close() }()
 
-	// DSN disabled — should not deliver.
+	// DSN disabled -- should not deliver.
 	s := mustNew(t, Config{
 		QueueDir: dir,
 		Binary:   fakeBin,
@@ -1167,7 +1167,7 @@ func main() {
 	if err := os.MkdirAll(envDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	// TTL in the past — expired.
+	// TTL in the past -- expired.
 	ttl := time.Now().Add(-1 * time.Hour).UTC()
 	created := time.Now().Add(-169 * time.Hour).UTC()
 	envContent := fmt.Sprintf(`{"ttl":"%s","created":"%s","msgid":"%s","origin":"sender@example.com","recipient":"alice@gmail.com"}`,
@@ -1248,7 +1248,7 @@ func TestProcessDomainDir_DSNMissingOrigin(t *testing.T) {
 	if err := os.MkdirAll(envDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	// No origin field — pre-migration envelope.
+	// No origin field -- pre-migration envelope.
 	envContent := fmt.Sprintf(`{"msgid":"%s","recipient":"alice@gmail.com"}`, msgid)
 	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
 	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
@@ -1429,7 +1429,7 @@ strategy = "direct"
 			Strategy:      "smarthost",
 			Smarthost:     "global-relay:587",
 			SmarthostUser: "global-user",
-		}, // should be ignored — per-domain config takes precedence
+		}, // should be ignored -- per-domain config takes precedence
 	})
 	if err := s.processDomainDir(envDir); err != nil {
 		t.Fatalf("processDomainDir: %v", err)

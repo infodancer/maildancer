@@ -342,7 +342,7 @@ func extractDomain(email string) string {
 
 // checkFromAlignment parses the RFC 5322 From header and verifies it exactly
 // matches the envelope sender (and therefore the authenticated user). This
-// enforces both DMARC alignment and prevents header forgery — the DKIM
+// enforces both DMARC alignment and prevents header forgery -- the DKIM
 // signature domain will match the From header domain at the receiving MTA.
 func (s *Session) checkFromAlignment(r io.Reader) error {
 	msg, err := mail.ReadMessage(r)

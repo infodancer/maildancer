@@ -2,7 +2,7 @@
 // for mTLS between protocol handlers and the session manager.
 //
 // All certificates use Ed25519 keys. The CA is a self-signed root certificate
-// used only within the infodancer mail stack — it is not intended for
+// used only within the infodancer mail stack -- it is not intended for
 // public-facing TLS.
 package certutil
 

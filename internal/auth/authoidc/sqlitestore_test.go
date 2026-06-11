@@ -40,7 +40,7 @@ func TestSQLiteStore_CodeRoundTrip(t *testing.T) {
 		t.Errorf("ConsumeCode returned wrong record: %+v", got)
 	}
 
-	// Replay — second consume must return ErrNotFound.
+	// Replay -- second consume must return ErrNotFound.
 	if _, err := s.ConsumeCode(c.Code); !errors.Is(err, ErrNotFound) {
 		t.Errorf("replay: got %v, want ErrNotFound", err)
 	}

@@ -1,10 +1,10 @@
-# maildancer — full mail-suite stack for local development / deploy validation.
+# maildancer -- full mail-suite stack for local development / deploy validation.
 #
 #   docker compose up -d
 #
 # session-manager is the hub: it owns mail storage and the outbound queue, and
 # listens on a unix socket shared (via the sessmgr-sock volume) with the
-# protocol daemons. smtpd/pop3d/imapd reach storage ONLY through that socket —
+# protocol daemons. smtpd/pop3d/imapd reach storage ONLY through that socket --
 # they never mount maildata, matching the depguard privilege-separation boundary.
 #
 # This is a topology scaffold: full mail flow also needs a provisioned domain/user

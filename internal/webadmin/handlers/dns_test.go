@@ -30,7 +30,7 @@ func TestCheckMX_NoRecord(t *testing.T) {
 
 func TestCheckPTR_NoRecord(t *testing.T) {
 	ctx := context.Background()
-	// RFC 5737 documentation address — should have no PTR.
+	// RFC 5737 documentation address -- should have no PTR.
 	result := checkPTR(ctx, nil, "mail.example.com", "192.0.2.1")
 	if result.Status != "error" {
 		t.Errorf("expected error status for documentation IP, got %q: %s", result.Status, result.Message)

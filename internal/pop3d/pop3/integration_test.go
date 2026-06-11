@@ -142,7 +142,7 @@ func TestStack_POP3FullStack(t *testing.T) {
 		t.Fatalf("PASS failed: %s", resp)
 	}
 
-	// STAT — expect 1 message.
+	// STAT -- expect 1 message.
 	sendLine("STAT")
 	resp = readLine()
 	if !strings.HasPrefix(resp, "+OK") {

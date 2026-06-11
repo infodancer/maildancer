@@ -12,7 +12,7 @@ import (
 )
 
 // sieveScriptPath returns the filesystem path for a user's Sieve script.
-// The script is expected at {basePath}/{expandedMailbox}/.sieve — adjacent
+// The script is expected at {basePath}/{expandedMailbox}/.sieve -- adjacent
 // to the Maildir directory, in the user's mailbox root.
 func (s *MaildirStore) sieveScriptPath(mailbox string) (string, error) {
 	expandedMailbox := s.expandMailbox(mailbox)
@@ -29,8 +29,8 @@ func (s *MaildirStore) sieveScriptPath(mailbox string) (string, error) {
 
 // loadSieveScript loads and parses the Sieve script for a mailbox.
 //
-// Returns (nil, nil) if no script exists — delivery continues normally.
-// Returns (nil, err) if the script exists but fails to parse — the error
+// Returns (nil, nil) if no script exists -- delivery continues normally.
+// Returns (nil, err) if the script exists but fails to parse -- the error
 // is logged and delivery falls through to default behavior (fail-safe).
 func (s *MaildirStore) loadSieveScript(mailbox string) ([]gosieve.Command, error) {
 	path, err := s.sieveScriptPath(mailbox)

@@ -30,7 +30,7 @@ type mailSessionConfig struct {
 
 // keyEnvelope is the JSON structure written to fd 3 by the spawning daemon.
 // Using a versioned JSON envelope (rather than raw bytes) lets us add fields
-// without a breaking protocol change — e.g. Algorithm, KeyID, Expires, or a
+// without a breaking protocol change -- e.g. Algorithm, KeyID, Expires, or a
 // Keys array for keyring support. When auth implements DeriveKeyPair it will
 // encode this envelope; pop3d/imapd write a stub version for now.
 // See: infodancer/infodancer/docs/encryption-design.md
@@ -50,7 +50,7 @@ func maybeWrapWithDecryptingStore(underlying msgstore.MessageStore) msgstore.Mes
 	err := json.NewDecoder(keyFile).Decode(&env)
 	_ = keyFile.Close()
 	if err != nil || env.Version != 1 || len(env.Key) != 32 {
-		// fd 3 absent, parse error, or unexpected envelope — use store as-is.
+		// fd 3 absent, parse error, or unexpected envelope -- use store as-is.
 		if err != nil && !isErrBadFd(err) {
 			slog.Warn("fd 3 key envelope invalid, skipping encryption", "error", err)
 		}

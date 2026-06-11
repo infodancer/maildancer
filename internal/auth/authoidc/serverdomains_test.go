@@ -69,7 +69,7 @@ func TestNew_LoadsDomainsFromDataPath_WithoutClients(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
-		t.Fatalf("webfinger status = %d, want 200 — domain should load from domain_data_path "+
+		t.Fatalf("webfinger status = %d, want 200 -- domain should load from domain_data_path "+
 			"without a [[client]] entry; body=%s", rr.Code, rr.Body.String())
 	}
 }

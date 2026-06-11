@@ -36,7 +36,7 @@ func TestRateLimiter_IPUserLimit(t *testing.T) {
 	ip := "10.0.0.1"
 	user := "alice@example.com"
 
-	// 2 failures — not yet limited.
+	// 2 failures -- not yet limited.
 	rl.recordFailure(ip, user)
 	rl.recordFailure(ip, user)
 	if rl.isLimited(ip, user) {
@@ -49,12 +49,12 @@ func TestRateLimiter_IPUserLimit(t *testing.T) {
 		t.Fatal("should be limited after 3 failures")
 	}
 
-	// Different IP, same user — not limited (per-user threshold is 100).
+	// Different IP, same user -- not limited (per-user threshold is 100).
 	if rl.isLimited("10.0.0.2", user) {
 		t.Fatal("different IP should not be limited by per-pair limit")
 	}
 
-	// Same IP, different user — not limited.
+	// Same IP, different user -- not limited.
 	if rl.isLimited(ip, "bob@example.com") {
 		t.Fatal("different user should not be limited by per-pair limit")
 	}
@@ -145,10 +145,10 @@ func TestRateLimiter_WindowExpiry(t *testing.T) {
 	rl.recordFailure(ip, user)
 	rl.recordFailure(ip, user)
 
-	// Advance past window — old failures expire.
+	// Advance past window -- old failures expire.
 	now = now.Add(6 * time.Minute)
 
-	// 1 more failure — only 1 in the current window, under threshold.
+	// 1 more failure -- only 1 in the current window, under threshold.
 	rl.recordFailure(ip, user)
 	if rl.isLimited(ip, user) {
 		t.Fatal("should not be limited; old failures expired from window")
@@ -175,7 +175,7 @@ func TestRateLimiter_SuccessResetsIPUserPair(t *testing.T) {
 	// 2 failures, then success.
 	rl.recordSuccess(ip, user)
 
-	// 2 more failures — should not be limited (counter was reset).
+	// 2 more failures -- should not be limited (counter was reset).
 	rl.recordFailure(ip, user)
 	rl.recordFailure(ip, user)
 	if rl.isLimited(ip, user) {
@@ -195,7 +195,7 @@ func TestRateLimiter_NoIPContext(t *testing.T) {
 	now := time.Now()
 	rl.now = func() time.Time { return now }
 
-	// No IP — should still rate-limit by username.
+	// No IP -- should still rate-limit by username.
 	rl.recordFailure("", "alice@example.com")
 	rl.recordFailure("", "alice@example.com")
 	rl.recordFailure("", "alice@example.com")
@@ -277,7 +277,7 @@ func TestAuthRouter_RateLimitIntegration(t *testing.T) {
 		}
 	}
 
-	// 4th attempt — should be rate limited, even with correct password.
+	// 4th attempt -- should be rate limited, even with correct password.
 	_, err := router.AuthenticateWithDomain(ctx, "alice@example.com", "correct")
 	if err != autherrors.ErrRateLimited {
 		t.Fatalf("expected ErrRateLimited, got %v", err)
@@ -312,7 +312,7 @@ func TestAuthRouter_NoRateLimitByDefault(t *testing.T) {
 	router := NewAuthRouter(provider, nil)
 	ctx := WithClientIP(context.Background(), "10.0.0.1")
 
-	// 100 failed attempts — should never get ErrRateLimited.
+	// 100 failed attempts -- should never get ErrRateLimited.
 	for i := 0; i < 100; i++ {
 		_, err := router.AuthenticateWithDomain(ctx, "alice@example.com", "wrong")
 		if err == autherrors.ErrRateLimited {

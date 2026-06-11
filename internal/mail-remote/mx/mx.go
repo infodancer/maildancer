@@ -79,7 +79,7 @@ func Lookup(r Resolver, domain string) ([]Host, error) {
 		}
 	}
 
-	// No usable MX — fall back to A/AAAA on the domain itself.
+	// No usable MX -- fall back to A/AAAA on the domain itself.
 	addrs, aErr := r.LookupHost(domain)
 	if aErr != nil || len(addrs) == 0 {
 		// Classify: if MX lookup also failed, this is likely NXDOMAIN.

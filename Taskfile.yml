@@ -50,8 +50,9 @@ tasks:
         fi
 
   all:
-    desc: Run all checks (build, lint, vulncheck, test)
+    desc: Run all checks (fmt, build, lint, vulncheck, test)
     cmds:
+      - task: fmt
       - task: build
       - task: lint
       - cmd: task vulncheck

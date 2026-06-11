@@ -2,30 +2,28 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 
+	"github.com/infodancer/maildancer/internal/admin"
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
 	"github.com/infodancer/maildancer/internal/webadmin/config"
-	"github.com/infodancer/maildancer/internal/admin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/rbac"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
-	"github.com/infodancer/maildancer/internal/admin/uidalloc"
 )
 
-// domainNameRe validates domain names: lowercase alphanumeric, hyphens, dots.
-var domainNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
-
-// DomainHandler handles domain management API requests.
+// DomainHandler handles domain management API requests. Filesystem-level
+// operations delegate to internal/admin (shared with userctl); this layer
+// owns HTTP semantics, RBAC, and audit logging.
 type DomainHandler struct {
 	domainsPath string // config volume: auth config, passwd, keys
 	dataPath    string // data volume: gid config, maildirs, uid counter
+	ops         admin.Paths
 	sessions    *session.Store
 	logger      *slog.Logger
 	roles       *rbac.RoleStore
@@ -39,6 +37,7 @@ func NewDomainHandler(domainsPath, dataPath string, sessions *session.Store, log
 	return &DomainHandler{
 		domainsPath: domainsPath,
 		dataPath:    dataPath,
+		ops:         admin.Paths{Config: domainsPath, Data: dataPath},
 		sessions:    sessions,
 		logger:      logger,
 		roles:       roles,
@@ -71,7 +70,11 @@ type DomainKeyStatus struct {
 
 // HandleListDomains returns a JSON list of configured domains.
 func (h *DomainHandler) HandleListDomains(w http.ResponseWriter, r *http.Request) {
-	domains, err := h.listDomains()
+	infos, err := h.ops.ListDomains()
+	domains := make([]DomainSummary, 0, len(infos))
+	for _, d := range infos {
+		domains = append(domains, DomainSummary{Name: d.Name, UserCount: d.UserCount})
+	}
 	if err != nil {
 		h.logger.Error("failed to list domains", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list domains"})
@@ -118,20 +121,24 @@ func (h *DomainHandler) HandleGetDomain(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	domainPath := filepath.Join(h.domainsPath, name)
-	if !dirExists(domainPath) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
-		return
-	}
-
-	detail, err := h.getDomainDetail(name, domainPath)
+	info, err := h.ops.GetDomain(name)
 	if err != nil {
+		if errors.Is(err, admin.ErrDomainNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+			return
+		}
 		h.logger.Error("failed to get domain detail", "domain", name, "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get domain"})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, detail)
+	writeJSON(w, http.StatusOK, &DomainDetail{
+		Name:      info.Name,
+		AuthType:  info.AuthType,
+		StoreType: info.StoreType,
+		UserCount: info.UserCount,
+		GID:       info.GID,
+	})
 }
 
 // HandleCreateDomain creates a new domain directory with default config.
@@ -160,13 +167,11 @@ func (h *DomainHandler) HandleCreateDomain(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	domainPath := filepath.Join(h.domainsPath, req.Name)
-	if dirExists(domainPath) {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "domain already exists"})
-		return
-	}
-
-	if err := h.createDomain(req.Name, domainPath); err != nil {
+	if _, err := h.ops.CreateDomain(req.Name); err != nil {
+		if errors.Is(err, admin.ErrDomainExists) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "domain already exists"})
+			return
+		}
 		h.logger.Error("failed to create domain", "domain", req.Name, "error", err)
 		h.logAudit(r, "create_domain", req.Name, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create domain"})
@@ -194,29 +199,25 @@ func (h *DomainHandler) HandleDeleteDomain(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	domainPath := filepath.Join(h.domainsPath, name)
-	if !dirExists(domainPath) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
-		return
-	}
-
-	// Safety check: count users
-	userCount := countPasswdEntries(filepath.Join(domainPath, "passwd"))
-	if userCount > 0 {
-		// Require explicit confirmation via query param
-		if r.URL.Query().Get("confirm") != "true" {
+	force := r.URL.Query().Get("confirm") == "true"
+	if err := h.ops.DeleteDomain(name, force); err != nil {
+		switch {
+		case errors.Is(err, admin.ErrDomainNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+		case errors.Is(err, admin.ErrDomainHasUsers):
+			userCount := 0
+			if info, infoErr := h.ops.GetDomain(name); infoErr == nil {
+				userCount = info.UserCount
+			}
 			writeJSON(w, http.StatusConflict, map[string]string{
 				"error":      fmt.Sprintf("domain has %d users, add ?confirm=true to delete", userCount),
 				"user_count": fmt.Sprint(userCount),
 			})
-			return
+		default:
+			h.logger.Error("failed to delete domain", "domain", name, "error", err)
+			h.logAudit(r, "delete_domain", name, "failure", err.Error())
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete domain"})
 		}
-	}
-
-	if err := os.RemoveAll(domainPath); err != nil {
-		h.logger.Error("failed to delete domain", "domain", name, "error", err)
-		h.logAudit(r, "delete_domain", name, "failure", err.Error())
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete domain"})
 		return
 	}
 
@@ -314,25 +315,26 @@ func (h *DomainHandler) HandleGetDomainKeys(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	domainPath := filepath.Join(h.domainsPath, name)
-	if !dirExists(domainPath) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+	status, err := h.ops.DomainKeyStatus(name)
+	if err != nil {
+		if errors.Is(err, admin.ErrDomainNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+			return
+		}
+		h.logger.Error("failed to read domain keys", "domain", name, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read keys"})
 		return
 	}
-
-	keysDir := filepath.Join(domainPath, "keys")
-	pub, err := keys.LoadPublicKey(keysDir, "domain")
-	if err != nil {
+	if !status.Exists {
 		writeJSON(w, http.StatusOK, DomainKeyStatus{Exists: false})
 		return
 	}
 
-	_, privErr := os.Stat(filepath.Join(keysDir, "domain.key"))
 	writeJSON(w, http.StatusOK, DomainKeyStatus{
 		Exists:      true,
 		Algorithm:   "x25519",
-		Fingerprint: keys.PublicKeyFingerprint(pub),
-		HasPrivate:  privErr == nil,
+		Fingerprint: status.Fingerprint,
+		HasPrivate:  status.HasPrivate,
 	})
 }
 
@@ -348,12 +350,6 @@ func (h *DomainHandler) HandleCreateDomainKeys(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	domainPath := filepath.Join(h.domainsPath, name)
-	if !dirExists(domainPath) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
-		return
-	}
-
 	var req struct {
 		Password string `json:"password"`
 	}
@@ -361,29 +357,24 @@ func (h *DomainHandler) HandleCreateDomainKeys(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.Password == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password is required to encrypt the private key"})
-		return
-	}
 
-	pub, encPriv, err := keys.GenerateKeypair(req.Password)
+	fingerprint, err := h.ops.CreateDomainKeys(name, req.Password)
 	if err != nil {
-		h.logger.Error("failed to generate domain keypair", "domain", name, "error", err)
-		h.logAudit(r, "generate_domain_keys", name, "failure", err.Error())
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
-		return
-	}
-
-	keysDir := filepath.Join(domainPath, "keys")
-	if err := keys.SaveKeypair(keysDir, "domain", pub, encPriv); err != nil {
-		h.logger.Error("failed to save domain keypair", "domain", name, "error", err)
-		h.logAudit(r, "generate_domain_keys", name, "failure", err.Error())
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save keys"})
+		switch {
+		case errors.Is(err, admin.ErrPasswordRequired):
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password is required to encrypt the private key"})
+		case errors.Is(err, admin.ErrDomainNotFound):
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+		default:
+			h.logger.Error("failed to generate domain keypair", "domain", name, "error", err)
+			h.logAudit(r, "generate_domain_keys", name, "failure", err.Error())
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to generate keys"})
+		}
 		return
 	}
 
 	h.logAudit(r, "generate_domain_keys", name, "success", "")
-	writeJSON(w, http.StatusCreated, map[string]string{"domain": name, "status": "keys_generated", "fingerprint": keys.PublicKeyFingerprint(pub)})
+	writeJSON(w, http.StatusCreated, map[string]string{"domain": name, "status": "keys_generated", "fingerprint": fingerprint})
 }
 
 // HandleDeleteDomainKeys removes the domain keypair.
@@ -398,14 +389,11 @@ func (h *DomainHandler) HandleDeleteDomainKeys(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	domainPath := filepath.Join(h.domainsPath, name)
-	if !dirExists(domainPath) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
-		return
-	}
-
-	keysDir := filepath.Join(domainPath, "keys")
-	if err := keys.DeleteKeypair(keysDir, "domain"); err != nil {
+	if err := h.ops.DeleteDomainKeys(name); err != nil {
+		if errors.Is(err, admin.ErrDomainNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "domain not found"})
+			return
+		}
 		h.logger.Error("failed to delete domain keys", "domain", name, "error", err)
 		h.logAudit(r, "delete_domain_keys", name, "failure", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete keys"})
@@ -448,145 +436,9 @@ func (h *DomainHandler) logAudit(r *http.Request, operation, target, result, det
 	}
 }
 
-// listDomains reads the domains directory and returns summaries.
-func (h *DomainHandler) listDomains() ([]DomainSummary, error) {
-	entries, err := os.ReadDir(h.domainsPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []DomainSummary{}, nil
-		}
-		return nil, fmt.Errorf("read domains directory: %w", err)
-	}
-
-	var domains []DomainSummary
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		userCount := countPasswdEntries(filepath.Join(h.domainsPath, entry.Name(), "passwd"))
-		domains = append(domains, DomainSummary{
-			Name:      entry.Name(),
-			UserCount: userCount,
-		})
-	}
-
-	if domains == nil {
-		domains = []DomainSummary{}
-	}
-	return domains, nil
-}
-
-// getDomainDetail reads domain config and returns detail.
-// Auth/store config is read from the config volume (domainsPath); gid is read from the data volume (dataPath).
-// If config.toml is absent the domain is still valid (defaults apply in smtpd/pop3d);
-// we report the standard default values in that case.
-func (h *DomainHandler) getDomainDetail(name, domainPath string) (*DomainDetail, error) {
-	authType := "passwd"   // default
-	storeType := "maildir" // default
-
-	configPath := filepath.Join(domainPath, "config.toml")
-	data, err := os.ReadFile(configPath)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read config: %w", err)
-	}
-	if err == nil {
-		// Simple extraction of auth type and store type from TOML.
-		// We read the raw file rather than importing the domain config package
-		// to avoid circular dependencies and keep the webadmin self-contained.
-		if v := extractTOMLValue(string(data), "type", "auth"); v != "" {
-			authType = v
-		}
-		if v := extractTOMLValue(string(data), "type", "msgstore"); v != "" {
-			storeType = v
-		}
-	}
-
-	// Read gid from the data volume config.toml (separate from auth/msgstore config).
-	var gid uint32
-	dataConfigPath := filepath.Join(h.dataPath, name, "config.toml")
-	if dataBytes, dataErr := os.ReadFile(dataConfigPath); dataErr == nil {
-		if v := extractTOMLValue(string(dataBytes), "gid", "domain"); v != "" {
-			if parsed, parseErr := strconv.ParseUint(v, 10, 32); parseErr == nil {
-				gid = uint32(parsed)
-			}
-		}
-	}
-
-	userCount := countPasswdEntries(filepath.Join(domainPath, "passwd"))
-
-	return &DomainDetail{
-		Name:      name,
-		AuthType:  authType,
-		StoreType: storeType,
-		UserCount: userCount,
-		GID:       gid,
-	}, nil
-}
-
-// createDomain creates the domain directory structure with default config.
-// Config files (auth config, passwd, keys) go in the config volume (domainsPath).
-// Data files (gid config, maildirs) go in the data volume (dataPath).
-func (h *DomainHandler) createDomain(name, domainPath string) error {
-	// Create config volume directory structure.
-	keysDir := filepath.Join(domainPath, "keys")
-	if err := os.MkdirAll(keysDir, 0o750); err != nil {
-		return fmt.Errorf("create domain directory: %w", err)
-	}
-
-	// Write auth/msgstore config.toml to config volume (no gid here).
-	configContent := `[auth]
-type = "passwd"
-credential_backend = "passwd"
-key_backend = "keys"
-
-[msgstore]
-type = "maildir"
-base_path = "users"
-`
-	configPath := filepath.Join(domainPath, "config.toml")
-	if err := os.WriteFile(configPath, []byte(configContent), 0o640); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-
-	// Create empty passwd file in config volume.
-	passwdPath := filepath.Join(domainPath, "passwd")
-	if err := os.WriteFile(passwdPath, []byte("# Users for "+name+"\n"), 0o640); err != nil {
-		return fmt.Errorf("write passwd: %w", err)
-	}
-
-	// Allocate a gid and write gid config to the data volume.
-	gid, err := uidalloc.Allocate(h.dataPath)
-	if err != nil {
-		return fmt.Errorf("allocate domain gid: %w", err)
-	}
-	dataDir := filepath.Join(h.dataPath, name)
-	if err := os.MkdirAll(dataDir, 0o750); err != nil {
-		return fmt.Errorf("create data directory: %w", err)
-	}
-	dataConfig := fmt.Sprintf("[domain]\ngid = %d\n", gid)
-	if err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(dataConfig), 0o640); err != nil {
-		return fmt.Errorf("write data config: %w", err)
-	}
-
-	// Create users directory for maildir storage in data volume.
-	usersDir := filepath.Join(dataDir, "users")
-	if err := os.MkdirAll(usersDir, 0o750); err != nil {
-		return fmt.Errorf("create users directory: %w", err)
-	}
-
-	return nil
-}
-
 // isValidDomainName checks that the name is a valid, safe domain name.
 func isValidDomainName(name string) bool {
-	if name == "" || len(name) > 253 {
-		return false
-	}
-	// Prevent path traversal
-	if strings.Contains(name, "..") || strings.Contains(name, "/") || strings.Contains(name, "\\") {
-		return false
-	}
-	return domainNameRe.MatchString(name)
+	return admin.ValidDomainName(name)
 }
 
 // countPasswdEntries counts non-comment, non-empty lines in a passwd file.

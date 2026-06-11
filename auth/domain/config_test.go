@@ -85,3 +85,28 @@ max_sends_per_hour = 50
 		t.Errorf("expected MaxSendsPerHour 50, got %d", cfg.Limits.MaxSendsPerHour)
 	}
 }
+
+func TestDomainConfig_DNSTOML(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	content := `
+[dns]
+hostname = "mail.other-host.example"
+public_ip = "192.0.2.25"
+`
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadDomainConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadDomainConfig: %v", err)
+	}
+	if cfg.DNS.Hostname != "mail.other-host.example" {
+		t.Errorf("DNS.Hostname = %q", cfg.DNS.Hostname)
+	}
+	if cfg.DNS.PublicIP != "192.0.2.25" {
+		t.Errorf("DNS.PublicIP = %q", cfg.DNS.PublicIP)
+	}
+}

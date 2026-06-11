@@ -266,6 +266,8 @@ func usage() {
     userctl domain show   <domain>
     userctl domain set    <domain> <key> [<value>]    set/unset a config key
     userctl domain key    show|create|del <domain>    domain encryption keypair
+    userctl domain dkim   create <domain> [--selector <s>] [--force]
+    userctl domain dkim   show   <domain>             DKIM key + DNS TXT record
 
   Users:
     userctl user add    <user@domain> [--gen-keys] [--password-stdin]

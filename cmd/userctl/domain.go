@@ -84,6 +84,9 @@ func runDomainSubcommand(args []string, paths admin.Paths, stdin io.Reader) erro
 	case "key":
 		return runDomainKeyAction(rest, paths, stdin)
 
+	case "dkim":
+		return runDomainDKIMAction(rest, paths)
+
 	default:
 		domainUsage()
 		return fmt.Errorf("domain: unknown action %q", action)
@@ -251,6 +254,74 @@ func runDomainKeyAction(args []string, paths admin.Paths, stdin io.Reader) error
 	}
 }
 
+// runDomainDKIMAction handles `domain dkim create|show <domain>`.
+func runDomainDKIMAction(args []string, paths admin.Paths) error {
+	if len(args) < 2 {
+		domainUsage()
+		return fmt.Errorf("domain dkim: expected create|show <domain>")
+	}
+	action := args[0]
+
+	selector := ""
+	force := false
+	var names []string
+	rest := args[1:]
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case "--selector":
+			if i+1 >= len(rest) {
+				domainUsage()
+				return fmt.Errorf("domain dkim: --selector requires a value")
+			}
+			i++
+			selector = rest[i]
+		case "--force":
+			force = true
+		default:
+			names = append(names, rest[i])
+		}
+	}
+	if len(names) != 1 {
+		domainUsage()
+		return fmt.Errorf("domain dkim %s: expected <domain>", action)
+	}
+	name := names[0]
+
+	switch action {
+	case "create":
+		rec, err := paths.CreateDKIMKey(name, selector, force)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Generated DKIM key for %s\n", name)
+		printDKIMRecord(rec)
+		return nil
+
+	case "show":
+		rec, err := paths.DKIMStatus(name)
+		if err != nil {
+			return err
+		}
+		printDKIMRecord(rec)
+		return nil
+
+	default:
+		domainUsage()
+		return fmt.Errorf("domain dkim: unknown action %q", action)
+	}
+}
+
+// printDKIMRecord prints the key location and the DNS TXT record, including
+// a zone-file line ready to paste.
+func printDKIMRecord(rec *admin.DKIMRecord) {
+	fmt.Printf("Selector:    %s\n", rec.Selector)
+	fmt.Printf("Private key: %s\n", rec.KeyPath)
+	fmt.Printf("DNS record:  %s TXT\n", rec.DNSName)
+	fmt.Printf("  %s\n", rec.DNSValue)
+	fmt.Printf("Zone file line:\n")
+	fmt.Printf("  %s. IN TXT %q\n", rec.DNSName, rec.DNSValue)
+}
+
 func domainUsage() {
 	fmt.Fprintf(os.Stderr, `Usage:
   userctl domain create <domain>                    create domain (allocates gid)
@@ -262,6 +333,11 @@ func domainUsage() {
   userctl domain key    show   <domain>             show domain encryption key
   userctl domain key    create <domain> [--password-stdin]
   userctl domain key    del    <domain>
+  userctl domain dkim   create <domain> [--selector <s>] [--force]
+                                                    generate Ed25519 DKIM key and print
+                                                    the DNS TXT record (default selector
+                                                    is date-stamped, e.g. d202606)
+  userctl domain dkim   show   <domain>             show selector and DNS TXT record
 
 Config keys for domain set:
   %s

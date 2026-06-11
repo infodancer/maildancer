@@ -2,8 +2,25 @@
 #
 # Pre-push hook: run all checks (build, lint, vulncheck, test) before pushing.
 # Install with: task hooks:install
+#
+# Pushes that only delete remote branches carry no new code, so the checks
+# are skipped for them. Git reports a deletion as an all-zeros local sha on
+# stdin: "<local ref> <local sha> <remote ref> <remote sha>".
 
 set -e
+
+zero=$(printf '0%.0s' {1..40})
+has_update=false
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    if [ "$local_sha" != "$zero" ]; then
+        has_update=true
+    fi
+done
+
+if [ "$has_update" = false ]; then
+    echo "Push contains only deletions; skipping pre-push checks."
+    exit 0
+fi
 
 echo "Running pre-push checks..."
 

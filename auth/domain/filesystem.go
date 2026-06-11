@@ -282,11 +282,10 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		chain: chain,
 	}
 
-	// Wrap delivery agent to expand forwarding rules at delivery time.
+	// Wrap delivery agent as an extension seam for future per-domain delivery
+	// behavior. Forwarding is resolved upstream in mail-session deliver stage 1.
 	var finalDelivery msgstore.DeliveryAgent = &MailDeliveryAgent{
-		inner:    store,
-		chain:    chain,
-		provider: p,
+		inner: store,
 	}
 
 	p.logger.Debug("loaded domain",

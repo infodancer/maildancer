@@ -1,10 +1,7 @@
 package domain
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"path/filepath"
 
@@ -111,81 +108,20 @@ func (a *mailAuthAgent) HasEncryption(ctx context.Context, username string) (boo
 	return false, nil
 }
 
-// MailDeliveryAgent is a msgstore.DeliveryAgent that applies mail-routing
-// logic before delivering to the underlying store. It handles:
+// MailDeliveryAgent is a thin msgstore.DeliveryAgent wrapper around the
+// underlying store. It is an extension seam for future per-domain delivery
+// behavior (e.g. per-user filtering or quota enforcement); today it simply
+// passes through to the inner agent.
 //
-//   - Forwarding rule resolution and expansion via the three-level forwardChain
-//   - Routing forwarded messages to the correct domain's DeliveryAgent
-//
-// Future capabilities may include: relay routing, alias expansion, per-user
-// filtering, and quota enforcement.
-//
-// smtpd is entirely unaware of this logic -- it simply calls Deliver() and the
-// MailDeliveryAgent handles all routing decisions.
-//
-// Note: loop detection is not implemented. Avoid circular forwarding rules.
+// Forwarding is no longer resolved here. A forward is resolved once, in
+// mail-session's deliver stage 1 (which returns ResultRedirected); smtpd then
+// re-submits the message to the target. That makes deliver.go the sole owner
+// of forwarding -- this agent never expands forward rules.
 type MailDeliveryAgent struct {
-	inner    msgstore.DeliveryAgent
-	chain    *forwardChain
-	provider DomainProvider
+	inner msgstore.DeliveryAgent
 }
 
-// Deliver resolves any forwarding rules for the recipient and routes accordingly.
-//
-//   - No forward match: deliver locally via the inner agent.
-//   - envelope.Forwarded == true: skip rule resolution; deliver locally (1-hop enforcement).
-//   - Forward match: buffer and deliver to each target via its domain's DeliveryAgent.
-//   - Target on an unserved domain: returns an error (no outbound relay available).
+// Deliver passes the message straight through to the inner agent.
 func (a *MailDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envelope, message io.Reader) error {
-	if len(envelope.Recipients) == 0 {
-		return a.inner.Deliver(ctx, envelope, message)
-	}
-
-	// smtpd enforces one recipient per message; handle all defensively.
-	to := envelope.Recipients[0]
-	localpart, _ := SplitUsername(to)
-
-	// Enforce the 1-hop forwarding contract: if the envelope is already marked
-	// as forwarded (set by deliver.go stage 4 from DeliverRequest.Forwarded, or
-	// by the recursive call below), skip rule resolution and deliver locally.
-	// This prevents a second hop when the forward target is locally served.
-	if envelope.Forwarded {
-		return a.inner.Deliver(ctx, envelope, message)
-	}
-
-	targets, forwarded := a.chain.resolve(localpart)
-	if !forwarded {
-		return a.inner.Deliver(ctx, envelope, message)
-	}
-
-	// Buffer the message body so it can be re-read for each forward target.
-	data, err := io.ReadAll(message)
-	if err != nil {
-		return fmt.Errorf("buffer message for forwarding: %w", err)
-	}
-
-	var errs []error
-	for _, target := range targets {
-		_, targetDomain := SplitUsername(target)
-		if targetDomain == "" {
-			errs = append(errs, fmt.Errorf("forward target %q has no domain", target))
-			continue
-		}
-
-		d := a.provider.GetDomain(targetDomain)
-		if d == nil || d.DeliveryAgent == nil {
-			errs = append(errs, fmt.Errorf("forward to %q: domain %q is not locally served (no outbound relay)", target, targetDomain))
-			continue
-		}
-
-		fwdEnvelope := envelope
-		fwdEnvelope.Recipients = []string{target}
-		// Mark as forwarded so the target's MailDeliveryAgent does not re-resolve
-		// forwarding rules -- this is what closes the 1-hop gap.
-		fwdEnvelope.Forwarded = true
-		if err := d.DeliveryAgent.Deliver(ctx, fwdEnvelope, bytes.NewReader(data)); err != nil {
-			errs = append(errs, fmt.Errorf("forward to %q: %w", target, err))
-		}
-	}
-	return errors.Join(errs...)
+	return a.inner.Deliver(ctx, envelope, message)
 }

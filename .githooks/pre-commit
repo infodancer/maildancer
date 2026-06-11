@@ -1,0 +1,21 @@
+#!/bin/bash
+#
+# Pre-commit hook: gofmt check on the staged Go files.
+# Install with: task hooks:install
+
+set -e
+
+files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+if [ -z "$files" ]; then
+    exit 0
+fi
+
+unformatted=$(echo "$files" | xargs gofmt -l)
+if [ -n "$unformatted" ]; then
+    echo "gofmt check failed -- unformatted files:"
+    echo "$unformatted"
+    echo
+    echo "Fix with: echo \"\$files\" | xargs gofmt -w, or:"
+    echo "  git diff --cached --name-only -- '*.go' | xargs gofmt -w"
+    exit 1
+fi

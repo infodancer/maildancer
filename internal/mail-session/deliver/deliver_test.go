@@ -239,6 +239,11 @@ alice = "alice@other.example.com,alice@second.example.com"`)
 		if resp.Result != ResultRejected {
 			t.Errorf("want ResultRejected, got %v (reason: %q)", resp.Result, resp.Reason)
 		}
+		// A multi-target forward is a misconfiguration that must temp-fail (not
+		// perm-fail) so the sending MTA holds and retries while the admin fixes it.
+		if !resp.Temporary {
+			t.Errorf("want Temporary=true for multi-target misconfiguration, got false")
+		}
 		if resp.Reason == "" {
 			t.Error("want non-empty Reason for misconfiguration")
 		}

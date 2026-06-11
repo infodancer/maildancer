@@ -1,0 +1,201 @@
+package admin
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/infodancer/maildancer/auth/passwd"
+	"github.com/infodancer/maildancer/internal/admin/keys"
+	"github.com/infodancer/maildancer/internal/admin/uidalloc"
+)
+
+// UserSummary describes a user for listings.
+type UserSummary struct {
+	Username string
+	Mailbox  string
+	UID      uint32
+	HasKeys  bool
+}
+
+// CreateUserResult reports the outcome of CreateUser.
+type CreateUserResult struct {
+	UID           uint32
+	KeysGenerated bool
+	// Warnings holds non-fatal problems (e.g. maildir creation failure when
+	// the passwd entry was already written). The user exists when err is nil.
+	Warnings []string
+}
+
+// CreateUser validates inputs, allocates a uid, writes the passwd entry,
+// creates the maildir directory in the data volume, and optionally generates
+// an X25519 keypair encrypted with the user's password.
+func (p Paths) CreateUser(domain, username, password string, generateKeys bool) (*CreateUserResult, error) {
+	if !ValidDomainName(domain) {
+		return nil, ErrInvalidDomainName
+	}
+	if !ValidUsername(username) {
+		return nil, ErrInvalidUsername
+	}
+	if !ValidPassword(password) {
+		return nil, fmt.Errorf("%w: minimum %d characters", ErrWeakPassword, MinPasswordLength)
+	}
+	if !p.DomainExists(domain) {
+		return nil, ErrDomainNotFound
+	}
+
+	domainPath := filepath.Join(p.Config, domain)
+	passwdPath := filepath.Join(domainPath, "passwd")
+
+	unlock, err := p.lockDomain(domain)
+	if err != nil {
+		return nil, err
+	}
+
+	if userExists(passwdPath, username) {
+		unlock()
+		return nil, ErrUserExists
+	}
+
+	uid, err := uidalloc.Allocate(p.Data)
+	if err != nil {
+		unlock()
+		return nil, fmt.Errorf("allocate uid: %w", err)
+	}
+
+	if err := passwd.AddUserWithUID(passwdPath, username, password, uid); err != nil {
+		unlock()
+		return nil, fmt.Errorf("write passwd: %w", err)
+	}
+	unlock()
+
+	result := &CreateUserResult{UID: uid}
+
+	// Maildir creation is non-fatal: the passwd entry is already durable, and
+	// delivery creates maildirs on demand. Ownership (uid:gid) is applied by
+	// the deployment's privileged helper.
+	maildirPath := filepath.Join(p.Data, domain, "users", username)
+	if err := os.MkdirAll(maildirPath, 0o700); err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("create maildir: %v", err))
+	}
+
+	if generateKeys {
+		if err := p.createKeypair(domain, username, password); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("generate keys: %v", err))
+		} else {
+			result.KeysGenerated = true
+		}
+	}
+
+	return result, nil
+}
+
+// DeleteUser removes the user's passwd entry and any key files.
+func (p Paths) DeleteUser(domain, username string) error {
+	if !ValidDomainName(domain) {
+		return ErrInvalidDomainName
+	}
+	if !ValidUsername(username) {
+		return ErrInvalidUsername
+	}
+	if !p.DomainExists(domain) {
+		return ErrDomainNotFound
+	}
+
+	domainPath := filepath.Join(p.Config, domain)
+	passwdPath := filepath.Join(domainPath, "passwd")
+
+	unlock, err := p.lockDomain(domain)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	if !userExists(passwdPath, username) {
+		return ErrUserNotFound
+	}
+	if err := passwd.DeleteUser(passwdPath, username); err != nil {
+		return fmt.Errorf("remove passwd entry: %w", err)
+	}
+
+	// Key removal is best-effort, matching prior webadmin behavior.
+	_ = keys.DeleteKeypair(filepath.Join(domainPath, "keys"), username)
+
+	return nil
+}
+
+// ResetPassword replaces the user's password hash, preserving mailbox and uid.
+func (p Paths) ResetPassword(domain, username, password string) error {
+	if !ValidDomainName(domain) {
+		return ErrInvalidDomainName
+	}
+	if !ValidUsername(username) {
+		return ErrInvalidUsername
+	}
+	if !ValidPassword(password) {
+		return fmt.Errorf("%w: minimum %d characters", ErrWeakPassword, MinPasswordLength)
+	}
+	if !p.DomainExists(domain) {
+		return ErrDomainNotFound
+	}
+
+	passwdPath := filepath.Join(p.Config, domain, "passwd")
+
+	unlock, err := p.lockDomain(domain)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	if !userExists(passwdPath, username) {
+		return ErrUserNotFound
+	}
+	if err := passwd.SetPassword(passwdPath, username, password); err != nil {
+		return fmt.Errorf("update password: %w", err)
+	}
+	return nil
+}
+
+// ListUsers returns all users in a domain with key presence.
+func (p Paths) ListUsers(domain string) ([]UserSummary, error) {
+	if !ValidDomainName(domain) {
+		return nil, ErrInvalidDomainName
+	}
+	if !p.DomainExists(domain) {
+		return nil, ErrDomainNotFound
+	}
+
+	domainPath := filepath.Join(p.Config, domain)
+	users, err := passwd.ListUsers(filepath.Join(domainPath, "passwd"))
+	if err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+
+	keysDir := filepath.Join(domainPath, "keys")
+	summaries := []UserSummary{}
+	for _, u := range users {
+		_, pubErr := keys.LoadPublicKey(keysDir, u.Username)
+		summaries = append(summaries, UserSummary{
+			Username: u.Username,
+			Mailbox:  u.Mailbox,
+			UID:      u.Uid,
+			HasKeys:  pubErr == nil,
+		})
+	}
+	return summaries, nil
+}
+
+// userExists reports whether the username has a passwd entry. A missing or
+// unreadable passwd file reads as "no users".
+func userExists(passwdPath, username string) bool {
+	users, err := passwd.ListUsers(passwdPath)
+	if err != nil {
+		return false
+	}
+	for _, u := range users {
+		if u.Username == username {
+			return true
+		}
+	}
+	return false
+}

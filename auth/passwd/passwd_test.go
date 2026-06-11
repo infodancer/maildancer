@@ -16,8 +16,8 @@ import (
 // writeKeyFiles writes a .pub file (pubKeyBytes) and an encrypted .key file
 // for username into keyDir, sealing plaintextPriv under password using the
 // same format as decryptPrivateKey: salt[saltSize] || nonce[nonceSize] || ciphertext.
-// Pass a nil encryptPassword to use a different password than the one used for
-// .pub, which produces a blob that will fail to decrypt.
+// To exercise the decrypt-failure branch, seal under a password other than the
+// user's login password -- the resulting blob will fail to decrypt.
 func writeKeyFiles(t *testing.T, keyDir, username, password string, pubKeyBytes, plaintextPriv []byte) {
 	t.Helper()
 

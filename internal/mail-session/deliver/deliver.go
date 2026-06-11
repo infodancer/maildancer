@@ -165,6 +165,9 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 		From:           req.Sender,
 		Recipients:     []string{req.Recipient},
 		ClientHostname: req.ClientHostname,
+		// Thread the already-forwarded flag through to MailDeliveryAgent so it
+		// does not resolve forwarding rules a second time (1-hop enforcement).
+		Forwarded: req.Forwarded,
 	}
 	if req.ReceivedTime != "" {
 		if t, err := time.Parse(time.RFC3339, req.ReceivedTime); err == nil {

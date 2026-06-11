@@ -133,6 +133,7 @@ type MailDeliveryAgent struct {
 // Deliver resolves any forwarding rules for the recipient and routes accordingly.
 //
 //   - No forward match: deliver locally via the inner agent.
+//   - envelope.Forwarded == true: skip rule resolution; deliver locally (1-hop enforcement).
 //   - Forward match: buffer and deliver to each target via its domain's DeliveryAgent.
 //   - Target on an unserved domain: returns an error (no outbound relay available).
 func (a *MailDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envelope, message io.Reader) error {
@@ -143,6 +144,14 @@ func (a *MailDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envel
 	// smtpd enforces one recipient per message; handle all defensively.
 	to := envelope.Recipients[0]
 	localpart, _ := SplitUsername(to)
+
+	// Enforce the 1-hop forwarding contract: if the envelope is already marked
+	// as forwarded (set by deliver.go stage 4 from DeliverRequest.Forwarded, or
+	// by the recursive call below), skip rule resolution and deliver locally.
+	// This prevents a second hop when the forward target is locally served.
+	if envelope.Forwarded {
+		return a.inner.Deliver(ctx, envelope, message)
+	}
 
 	targets, forwarded := a.chain.resolve(localpart)
 	if !forwarded {
@@ -171,6 +180,9 @@ func (a *MailDeliveryAgent) Deliver(ctx context.Context, envelope msgstore.Envel
 
 		fwdEnvelope := envelope
 		fwdEnvelope.Recipients = []string{target}
+		// Mark as forwarded so the target's MailDeliveryAgent does not re-resolve
+		// forwarding rules — this is what closes the 1-hop gap.
+		fwdEnvelope.Forwarded = true
 		if err := d.DeliveryAgent.Deliver(ctx, fwdEnvelope, bytes.NewReader(data)); err != nil {
 			errs = append(errs, fmt.Errorf("forward to %q: %w", target, err))
 		}

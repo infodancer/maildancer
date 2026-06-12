@@ -20,3 +20,7 @@ least one. Use webadmin at http://localhost:8080 or the `userctl` CLI
 
 See [deploy/README.md](deploy/README.md) for the full topology, provisioning steps,
 TLS/outbound relay setup, and teardown instructions.
+
+## License
+
+Apache License 2.0 -- see [LICENSE](LICENSE).

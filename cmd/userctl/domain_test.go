@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,5 +168,80 @@ func TestRunDomainSubcommand_DKIMUsageErrors(t *testing.T) {
 		if err := runDomainSubcommand(args, p, strings.NewReader("")); err == nil {
 			t.Errorf("runDomainSubcommand(%v) succeeded, want error", args)
 		}
+	}
+}
+
+// dnsTestResolver returns a fake where example.com is fully configured for
+// mail.example.net / 192.0.2.25 (minus DKIM, unless a key is created).
+func dnsTestResolver() *fakeResolver {
+	return &fakeResolver{
+		hosts: map[string][]string{
+			"example.com":      {"192.0.2.25"},
+			"mail.example.net": {"192.0.2.25"},
+		},
+		mxs: map[string][]*net.MX{
+			"example.com": {{Host: "mail.example.net.", Pref: 10}},
+		},
+		txts: map[string][]string{
+			"example.com":        {"v=spf1 ip4:192.0.2.25 -all"},
+			"_dmarc.example.com": {"v=DMARC1; p=quarantine"},
+		},
+		ptrs: map[string][]string{
+			"192.0.2.25": {"mail.example.net."},
+		},
+	}
+}
+
+func TestRunDomainSubcommand_DNS(t *testing.T) {
+	p := testPaths(t)
+	if err := runDomainSubcommand([]string{"create", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatalf("domain create: %v", err)
+	}
+
+	old := dnsResolver
+	dnsResolver = dnsTestResolver()
+	defer func() { dnsResolver = old }()
+
+	// No hostname from any source: refused with guidance.
+	if err := runDomainSubcommand([]string{"dns", "example.com"}, p, strings.NewReader("")); err == nil {
+		t.Error("dns without hostname succeeded, want error")
+	}
+
+	// Explicit flags: passes (DKIM unconfigured is only a warning).
+	if err := runDomainSubcommand([]string{"dns", "example.com", "--hostname", "mail.example.net", "--ip", "192.0.2.25"}, p, strings.NewReader("")); err != nil {
+		t.Errorf("dns with flags: %v", err)
+	}
+
+	// Hostname only: IP derived from the hostname's A record.
+	if err := runDomainSubcommand([]string{"dns", "example.com", "--hostname", "mail.example.net"}, p, strings.NewReader("")); err != nil {
+		t.Errorf("dns with derived IP: %v", err)
+	}
+
+	// Sourcing from per-domain config, no flags at all.
+	if err := runDomainSubcommand([]string{"set", "example.com", "dns.hostname", "mail.example.net"}, p, strings.NewReader("")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDomainSubcommand([]string{"set", "example.com", "dns.public_ip", "192.0.2.25"}, p, strings.NewReader("")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDomainSubcommand([]string{"dns", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Errorf("dns from domain config: %v", err)
+	}
+}
+
+func TestRunDomainSubcommand_DNSFailures(t *testing.T) {
+	p := testPaths(t)
+	if err := runDomainSubcommand([]string{"create", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatal(err)
+	}
+
+	old := dnsResolver
+	dnsResolver = &fakeResolver{} // empty zone: everything fails
+	defer func() { dnsResolver = old }()
+
+	// Failed checks surface as a non-nil error so scripts can gate on it.
+	err := runDomainSubcommand([]string{"dns", "example.com", "--hostname", "mail.example.net", "--ip", "192.0.2.25"}, p, strings.NewReader(""))
+	if err == nil {
+		t.Error("dns with empty zone succeeded, want error")
 	}
 }

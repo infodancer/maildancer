@@ -3,7 +3,6 @@ module github.com/infodancer/maildancer
 go 1.26.4
 
 require (
-	git.sr.ht/~emersion/go-sieve v0.0.0-20240926192256-cf8e1a9b5da9
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-maildir v0.6.0
@@ -11,6 +10,7 @@ require (
 	github.com/emersion/go-msgauth v0.7.0
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.24.0
+	github.com/foxcpp/go-sieve v0.0.0-20260523221512-9ae51b269e52
 	github.com/infodancer/logging v0.1.0
 	github.com/lestrrat-go/jwx/v2 v2.1.6
 	github.com/pelletier/go-toml/v2 v2.3.1
@@ -53,4 +53,5 @@ require (
 	modernc.org/libc v1.72.5 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
+	rsc.io/binaryregexp v0.2.0 // indirect
 )

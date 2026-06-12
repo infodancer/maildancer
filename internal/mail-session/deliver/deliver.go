@@ -7,12 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	gosieve "git.sr.ht/~emersion/go-sieve"
 	"github.com/infodancer/maildancer/auth/domain"
 	_ "github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/msgstore"
@@ -158,14 +155,27 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 	}
 
 	// ── 3. Sieve script ──────────────────────────────────────────────────────
-	dlvr.parseSieve(domainName, localpart)
+	// A script decides the message's fate (fileinto, redirect, discard,
+	// reject, keep). No script -- or any script failure -- falls through to
+	// stage 4 (implicit keep).
+	if outcome, ok := dlvr.runSieve(ctx, dom, req, msg); ok {
+		return dlvr.applySieve(ctx, dom, req, outcome, msg)
+	}
 
 	// ── 4. Deliver to maildir ────────────────────────────────────────────────
+	return dlvr.deliverLocal(ctx, dom, req, msg)
+}
+
+// deliverLocal is the final delivery stage: it hands the message to the
+// domain's delivery agent for a normal mailbox write (including subaddress
+// folder routing). Used both as the default pipeline tail and as the keep
+// path after sieve execution.
+func (dlvr *Deliverer) deliverLocal(ctx context.Context, dom *domain.Domain, req DeliverRequest, msg []byte) (DeliverResponse, error) {
 	if dom.DeliveryAgent == nil {
 		return DeliverResponse{
 			Result:    ResultRejected,
 			Temporary: true,
-			Reason:    fmt.Sprintf("no delivery agent for domain %q", domainName),
+			Reason:    fmt.Sprintf("no delivery agent for domain %q", dom.Name),
 		}, nil
 	}
 
@@ -194,30 +204,6 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 	return DeliverResponse{
 		Result: ResultDelivered,
 	}, nil
-}
-
-// parseSieve loads and parses the user's .sieve script.
-// Errors are logged but do not affect delivery -- fail-safe.
-func (dlvr *Deliverer) parseSieve(domainName, localpart string) {
-	path := filepath.Join(dlvr.cfg.DataPath(), domainName, "users", localpart, ".sieve")
-	f, err := os.Open(path)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("opening sieve script", slog.String("path", path), slog.String("error", err.Error()))
-		}
-		return
-	}
-	defer func() { _ = f.Close() }()
-
-	cmds, err := gosieve.Parse(f)
-	if err != nil {
-		slog.Warn("parsing sieve script", slog.String("path", path), slog.String("error", err.Error()))
-		return
-	}
-
-	slog.Debug("sieve script parsed (execution not yet implemented)",
-		slog.String("path", path),
-		slog.Int("commands", len(cmds)))
 }
 
 // splitAddress splits an email address into localpart and domain.

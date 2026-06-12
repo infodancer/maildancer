@@ -1,13 +1,12 @@
 package maildir
 
 import (
-	"errors"
-	"log/slog"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	gosieve "git.sr.ht/~emersion/go-sieve"
 	mserrors "github.com/infodancer/maildancer/msgstore/errors"
 )
 
@@ -27,31 +26,13 @@ func (s *MaildirStore) sieveScriptPath(mailbox string) (string, error) {
 	return cleanCandidate, nil
 }
 
-// loadSieveScript loads and parses the Sieve script for a mailbox.
-//
-// Returns (nil, nil) if no script exists -- delivery continues normally.
-// Returns (nil, err) if the script exists but fails to parse -- the error
-// is logged and delivery falls through to default behavior (fail-safe).
-func (s *MaildirStore) loadSieveScript(mailbox string) ([]gosieve.Command, error) {
+// SieveScript implements msgstore.SieveScriptProvider. It opens the user's
+// Sieve script; the error satisfies errors.Is(err, fs.ErrNotExist) when no
+// script exists. Execution happens in the delivery pipeline, not here.
+func (s *MaildirStore) SieveScript(_ context.Context, mailbox string) (io.ReadCloser, error) {
 	path, err := s.sieveScriptPath(mailbox)
 	if err != nil {
 		return nil, err
 	}
-
-	f, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-
-	cmds, err := gosieve.Parse(f)
-	if err != nil {
-		return nil, err
-	}
-
-	slog.Debug("loaded sieve script", slog.String("mailbox", mailbox), slog.Int("commands", len(cmds)))
-	return cmds, nil
+	return os.Open(path)
 }

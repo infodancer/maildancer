@@ -273,35 +273,4 @@ alice = "alice@other.example.com,alice@second.example.com"`)
 	})
 }
 
-// TestDeliver_SieveNoEffect confirms that a present but syntactically valid
-// .sieve script does not break delivery (sieve execution is not yet implemented).
-func TestDeliver_SieveNoEffect(t *testing.T) {
-	dlvr := setupDomainFixture(t, "")
-
-	// Place a trivial .sieve script in the user's directory.
-	sieveDir := filepath.Join(dlvr.cfg.DataPath(), "example.com", "users", "alice")
-	if err := os.MkdirAll(sieveDir, 0755); err != nil {
-		t.Fatalf("create sieve dir: %v", err)
-	}
-	sieve := `require ["fileinto"];
-if header :contains "Subject" "test" {
-    fileinto "test";
-}
-`
-	if err := os.WriteFile(filepath.Join(sieveDir, ".sieve"), []byte(sieve), 0644); err != nil {
-		t.Fatalf("write .sieve: %v", err)
-	}
-
-	resp, err := dlvr.Deliver(context.Background(),
-		DeliverRequest{
-			Sender:    "sender@example.com",
-			Recipient: "alice@example.com",
-		},
-		[]byte(minimalMsg))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.Result != ResultDelivered {
-		t.Errorf("want ResultDelivered with sieve present, got %v (reason: %q)", resp.Result, resp.Reason)
-	}
-}
+// Sieve execution behavior is covered in sieve_test.go.

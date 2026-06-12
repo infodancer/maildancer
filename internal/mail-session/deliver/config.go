@@ -1,5 +1,5 @@
 // Package deliver orchestrates the full delivery pipeline: forwarding resolution,
-// sieve parsing, and final maildir write.
+// sieve execution, and final maildir write.
 package deliver
 
 // Config holds the runtime configuration for the delivery pipeline.

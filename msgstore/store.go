@@ -28,6 +28,17 @@ type MessageStore interface {
 	Stat(ctx context.Context, mailbox string) (count int, totalBytes int64, err error)
 }
 
+// SieveScriptProvider is implemented by stores that host per-user Sieve
+// filtering scripts alongside the mailbox data. The delivery pipeline
+// type-asserts to this interface to load the script; execution happens in
+// the pipeline, not in the store.
+type SieveScriptProvider interface {
+	// SieveScript opens the Sieve script for a mailbox.
+	// Returns an error satisfying errors.Is(err, fs.ErrNotExist) when the
+	// mailbox has no script. The caller must close the returned ReadCloser.
+	SieveScript(ctx context.Context, mailbox string) (io.ReadCloser, error)
+}
+
 // MessageInfo contains metadata about a stored message.
 type MessageInfo struct {
 	// UID is the persistent numeric IMAP UID assigned by the uidlist.

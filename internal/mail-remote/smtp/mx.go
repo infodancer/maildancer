@@ -6,14 +6,23 @@ import (
 	"fmt"
 	"log/slog"
 
-	gosmtp "github.com/emersion/go-smtp"
 	"github.com/infodancer/maildancer/internal/mail-remote/envelope"
 	"github.com/infodancer/maildancer/internal/mail-remote/mx"
 )
 
+// maxMXAttempts caps connection attempts per delivery run. The MX list is
+// attacker-controlled data; a hostile domain could otherwise publish dozens
+// of records and turn one delivery into a port scan on its behalf.
+const maxMXAttempts = 5
+
 // DeliverViaMX resolves MX hosts for the recipient domain and delivers
-// each envelope via direct SMTP. MX hosts are tried in priority order;
-// the first one that accepts a TCP connection is used for all envelopes.
+// each envelope via direct SMTP. Hosts are tried in priority order, both
+// for the initial connection and on mid-session connection failures:
+// envelopes whose outcome was never determined fail over to the next host.
+// Envelopes with a definitive outcome never move -- an SMTP verdict (4xx/5xx)
+// stands, and an envelope whose DATA terminator was sent but whose final
+// response was lost is deferred to the queue retry rather than re-sent
+// (duplicate-delivery risk; see AmbiguousError).
 //
 // Each envelope is a separate MAIL FROM transaction (VERP).
 // No SMTP AUTH is used (standard for MX delivery).
@@ -31,15 +40,6 @@ func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bod
 		return results
 	}
 
-	c, err := connectToMX(hosts, hostname)
-	if err != nil {
-		for _, env := range envs {
-			results[env.Path] = fmt.Errorf("all MX hosts unreachable for %s: %w", domain, err)
-		}
-		return results
-	}
-	defer func() { _ = c.Close() }()
-
 	bodySize, err := fileSize(bodyPath)
 	if err != nil {
 		for _, env := range envs {
@@ -48,22 +48,15 @@ func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bod
 		return results
 	}
 
-	if err := checkSize(c, bodySize); err != nil {
-		for _, env := range envs {
-			results[env.Path] = err
-		}
-		return results
-	}
-
-	deliverAll(c, bodyPath, envs, results, maxTxn)
-	return results
-}
-
-// connectToMX tries each MX host in order and returns the first successful
-// SMTP connection. Returns the last error if all hosts fail.
-func connectToMX(hosts []mx.Host, hostname string) (*gosmtp.Client, error) {
+	pending := envs
+	attempts := 0
 	var lastErr error
 	for _, h := range hosts {
+		if len(pending) == 0 || attempts >= maxMXAttempts {
+			break
+		}
+		attempts++
+
 		slog.Debug("trying MX host", "host", h.Name, "addr", h.Addr())
 		c, err := DialMX(h.Addr(), hostname)
 		if err != nil {
@@ -71,13 +64,39 @@ func connectToMX(hosts []mx.Host, hostname string) (*gosmtp.Client, error) {
 			lastErr = err
 			continue
 		}
+
+		// SIZE limits differ per host; a too-large verdict from one host
+		// only rules out that host.
+		if err := checkSize(c, bodySize); err != nil {
+			slog.Debug("MX host rejected size", "host", h.Name, "error", err)
+			lastErr = err
+			_ = c.Close()
+			continue
+		}
+
 		slog.Info("connected to MX host", "host", h.Name)
-		return c, nil
+		retryable, cause := deliverAll(c, bodyPath, pending, results, maxTxn)
+		_ = c.Close()
+		if len(retryable) == 0 {
+			pending = nil
+			break
+		}
+		slog.Info("connection to MX host lost mid-session; failing over",
+			"host", h.Name, "remaining", len(retryable), "error", cause)
+		pending = retryable
+		lastErr = cause
 	}
-	if lastErr == nil {
-		lastErr = errors.New("no MX hosts to try")
+
+	if len(pending) > 0 {
+		if lastErr == nil {
+			lastErr = errors.New("no MX hosts to try")
+		}
+		finalErr := fmt.Errorf("all usable MX hosts failed for %s: %w", domain, lastErr)
+		for _, env := range pending {
+			results[env.Path] = finalErr
+		}
 	}
-	return nil, lastErr
+	return results
 }
 
 // classifyMXError converts mx.PermanentError into smtp.PermanentError

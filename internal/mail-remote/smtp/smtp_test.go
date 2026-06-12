@@ -416,13 +416,21 @@ func TestDeliverAll_ConnectionDeath(t *testing.T) {
 	// Force-close the TCP connection.
 	_ = c.Close()
 
-	// Now deliverAll on remaining envelopes should detect connection death.
-	deliverAll(c, bodyPath, []*envelope.Envelope{env2, env3}, results, 0)
+	// deliverAll detects connection death and hands back the undetermined
+	// envelopes for the caller to fail over or record.
+	retryable, cause := deliverAll(c, bodyPath, []*envelope.Envelope{env2, env3}, results, 0)
 
-	// Both remaining envelopes should fail.
+	if cause == nil {
+		t.Fatal("expected a connection-failure cause, got nil")
+	}
+	if len(retryable) != 2 {
+		t.Fatalf("expected 2 retryable envelopes, got %d", len(retryable))
+	}
+	// Neither got a final outcome recorded: the connection died before the
+	// server could rule on them (env2 pre-DATA-terminator, env3 unattempted).
 	for _, env := range []*envelope.Envelope{env2, env3} {
-		if results[env.Path] == nil {
-			t.Fatalf("%s: expected error, got nil", env.Path)
+		if err, ok := results[env.Path]; ok {
+			t.Fatalf("%s: expected no recorded outcome, got %v", env.Path, err)
 		}
 	}
 }

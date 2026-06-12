@@ -42,8 +42,9 @@ type keyEnvelope struct {
 // maybeWrapWithDecryptingStore attempts to read a keyEnvelope from fd 3
 // (ExtraFiles[0] as set by the spawning daemon). If fd 3 is present and
 // contains a valid v1 envelope with a 32-byte key, the store is wrapped in a
-// PassthroughDecryptingStore with the key applied; otherwise the store is
-// returned unchanged (encryption not configured or fd 3 absent).
+// decrypting store with the key applied (FolderStore support is preserved
+// when the underlying store has it); otherwise the store is returned
+// unchanged (encryption not configured or fd 3 absent).
 func maybeWrapWithDecryptingStore(underlying msgstore.MessageStore) msgstore.MessageStore {
 	keyFile := os.NewFile(3, "key-pipe")
 	var env keyEnvelope
@@ -56,7 +57,7 @@ func maybeWrapWithDecryptingStore(underlying msgstore.MessageStore) msgstore.Mes
 		}
 		return underlying
 	}
-	ds := msgstore.NewPassthroughDecryptingStore(underlying)
+	ds := msgstore.NewDecryptingStore(underlying)
 	ds.SetSessionKey(env.Key)
 	// Zero the local copy; ds holds the only in-memory key bytes.
 	for i := range env.Key {

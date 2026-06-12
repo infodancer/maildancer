@@ -30,6 +30,25 @@ func IsPermanent(err error) bool {
 	return errors.As(err, &pe)
 }
 
+// AmbiguousError wraps a connection failure that occurred after the DATA
+// terminator was sent: the server may or may not have accepted the message.
+// Such envelopes must not be retried on another MX host in the same run --
+// that would knowingly double-send. They defer to the queue's retry cycle
+// instead (the same duplicate-vs-loss tradeoff every MTA makes after a lost
+// DATA verdict; SMTP offers no way to ask).
+type AmbiguousError struct {
+	Err error
+}
+
+func (e *AmbiguousError) Error() string { return e.Err.Error() }
+func (e *AmbiguousError) Unwrap() error { return e.Err }
+
+// isAmbiguous reports whether err wraps an AmbiguousError.
+func isAmbiguous(err error) bool {
+	var ae *AmbiguousError
+	return errors.As(err, &ae)
+}
+
 // SMTPCode extracts the SMTP reply code from an error chain.
 // Returns 0 if no SMTP error is found (e.g., connection failures).
 func SMTPCode(err error) int {
@@ -151,33 +170,51 @@ func DeliverViaSmarthost(_ context.Context, sh Smarthost, bodyPath string, envs 
 		return results
 	}
 
-	deliverAll(c, bodyPath, envs, results, maxTxn)
+	retryable, cause := deliverAll(c, bodyPath, envs, results, maxTxn)
+	// A smarthost is a single fixed relay -- nowhere to fail over to.
+	for _, env := range retryable {
+		results[env.Path] = fmt.Errorf("connection lost: %w", cause)
+	}
 	return results
 }
 
 // deliverAll sends each envelope over the connection, resetting between
 // transactions and aborting early if the connection dies or the transaction
 // limit is reached. maxTxn <= 0 means no limit.
-func deliverAll(c *gosmtp.Client, bodyPath string, envs []*envelope.Envelope, results map[string]error, maxTxn int) {
+//
+// Envelopes that received a definitive outcome (success, an SMTP verdict,
+// an ambiguous post-DATA failure, or a transaction-limit deferral) get an
+// entry in results. Envelopes that did NOT -- the connection died before
+// their outcome was determined -- are returned as retryable, along with the
+// connection error that ended the session; the caller decides whether to
+// try them on another host (MX failover) or record the error (smarthost).
+func deliverAll(c *gosmtp.Client, bodyPath string, envs []*envelope.Envelope, results map[string]error, maxTxn int) (retryable []*envelope.Envelope, cause error) {
 	for i, env := range envs {
 		if maxTxn > 0 && i >= maxTxn {
+			// A deliberate per-connection limit, not a failure: defer the
+			// remainder to the next queue scan rather than failing over.
 			limitErr := fmt.Errorf("transaction limit (%d) reached; deferring", maxTxn)
 			for _, remaining := range envs[i:] {
 				results[remaining.Path] = limitErr
 			}
-			return
+			return nil, nil
 		}
 
 		err := deliver(c, bodyPath, env)
-		results[env.Path] = err
 
 		if err != nil && isConnectionError(err) {
-			connErr := fmt.Errorf("connection lost: %w", err)
-			for _, remaining := range envs[i+1:] {
-				results[remaining.Path] = connErr
+			if isAmbiguous(err) {
+				// The server may have accepted this one; its outcome is
+				// final for this run (temporary error, queue retries).
+				results[env.Path] = err
+				return envs[i+1:], err
 			}
-			return
+			// Pre-terminator failure: the server cannot have accepted
+			// this envelope, so it fails over along with the remainder.
+			return envs[i:], err
 		}
+
+		results[env.Path] = err
 
 		// RSET between transactions to clean up server state. Skip after
 		// the last envelope (we'll QUIT instead). We RSET after both
@@ -187,15 +224,12 @@ func deliverAll(c *gosmtp.Client, bodyPath string, envs []*envelope.Envelope, re
 			if resetErr := c.Reset(); resetErr != nil {
 				slog.Debug("RSET failed between transactions", "error", resetErr)
 				if isConnectionError(resetErr) {
-					connErr := fmt.Errorf("connection lost during RSET: %w", resetErr)
-					for _, remaining := range envs[i+1:] {
-						results[remaining.Path] = connErr
-					}
-					return
+					return envs[i+1:], fmt.Errorf("connection lost during RSET: %w", resetErr)
 				}
 			}
 		}
 	}
+	return nil, nil
 }
 
 // deliver sends one envelope over an already-authenticated SMTP connection.
@@ -226,6 +260,15 @@ func deliver(c *gosmtp.Client, bodyPath string, env *envelope.Envelope) error {
 
 	resp, err := dataCmd.CloseWithResponse()
 	if err != nil {
+		// A connection failure here is the one ambiguous point in the
+		// dialogue: the terminator may have been flushed, so the server
+		// may have accepted the message even though we never saw the
+		// verdict. Earlier failures (MAIL/RCPT/DATA command, body copy)
+		// happen before the terminator, so the server cannot have
+		// accepted and a retry elsewhere is safe.
+		if isConnectionError(err) {
+			return &AmbiguousError{Err: fmt.Errorf("DATA close: %w", err)}
+		}
 		return classifyError(fmt.Errorf("DATA close: %w", err))
 	}
 

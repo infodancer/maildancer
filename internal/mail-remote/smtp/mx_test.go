@@ -13,6 +13,7 @@ import (
 
 	gosmtp "github.com/emersion/go-smtp"
 	"github.com/infodancer/maildancer/internal/mail-remote/envelope"
+	"github.com/infodancer/maildancer/internal/mail-remote/mtasts"
 )
 
 // fakeResolver returns pre-configured MX results.
@@ -64,7 +65,7 @@ func TestDeliverViaMX_Success(t *testing.T) {
 		"abc123@example.com",
 	)
 
-	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "gmail.com", bodyPath, []*envelope.Envelope{env}, 0)
+	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "gmail.com", bodyPath, []*envelope.Envelope{env}, 0, nil)
 
 	if err := results[env.Path]; err != nil {
 		t.Fatalf("expected success, got: %v", err)
@@ -101,7 +102,7 @@ func TestDeliverViaMX_MultipleEnvelopes(t *testing.T) {
 		"bounces+bob=gmail.com@mail.example.com", "bob@gmail.com", "dead1234@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "gmail.com", bodyPath,
-		[]*envelope.Envelope{env1, env2}, 0)
+		[]*envelope.Envelope{env1, env2}, 0, nil)
 
 	for _, env := range []*envelope.Envelope{env1, env2} {
 		if err := results[env.Path]; err != nil {
@@ -130,7 +131,7 @@ func TestDeliverViaMX_NullMX(t *testing.T) {
 		"bounces+alice=noemail.com@mail.example.com", "alice@noemail.com", "abc123@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "noemail.com", bodyPath,
-		[]*envelope.Envelope{env}, 0)
+		[]*envelope.Envelope{env}, 0, nil)
 
 	err := results[env.Path]
 	if err == nil {
@@ -156,7 +157,7 @@ func TestDeliverViaMX_NoRecords(t *testing.T) {
 		"bounces+alice=bad.com@mail.example.com", "alice@bad.com", "abc123@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "bad.com", bodyPath,
-		[]*envelope.Envelope{env}, 0)
+		[]*envelope.Envelope{env}, 0, nil)
 
 	err := results[env.Path]
 	if err == nil {
@@ -201,7 +202,7 @@ func TestDeliverViaMX_FallbackToSecondMX(t *testing.T) {
 		"bounces+alice=gmail.com@mail.example.com", "alice@gmail.com", "abc123@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "gmail.com", bodyPath,
-		[]*envelope.Envelope{env}, 0)
+		[]*envelope.Envelope{env}, 0, nil)
 
 	if err := results[env.Path]; err != nil {
 		t.Fatalf("expected success via fallback MX, got: %v", err)
@@ -240,7 +241,7 @@ func TestDeliverViaMX_PermanentRcptFailure(t *testing.T) {
 		"bounces+nobody=example.com@mail.example.com", "nobody@example.com", "abc123@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
-		[]*envelope.Envelope{env}, 0)
+		[]*envelope.Envelope{env}, 0, nil)
 
 	err := results[env.Path]
 	if err == nil {
@@ -388,7 +389,7 @@ func TestDeliverViaMX_FailoverAfterConnectionDrop(t *testing.T) {
 	env3 := makeEnvFile(t, dir, "c@m.2", "b+c=example.com@mail.example.com", "c@example.com", "m@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
-		[]*envelope.Envelope{env1, env2, env3}, 0)
+		[]*envelope.Envelope{env1, env2, env3}, 0, nil)
 
 	// env1 was accepted by the first host before it died.
 	if err := results[env1.Path]; err != nil {
@@ -439,7 +440,7 @@ func TestDeliverViaMX_AmbiguousDataDeferredNotRetried(t *testing.T) {
 	env2 := makeEnvFile(t, dir, "b@m.1", "b+b=example.com@mail.example.com", "b@example.com", "m@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
-		[]*envelope.Envelope{env1, env2}, 0)
+		[]*envelope.Envelope{env1, env2}, 0, nil)
 
 	// env1: temporary error (queue retries it later), never permanent.
 	err1 := results[env1.Path]
@@ -496,7 +497,7 @@ func TestDeliverViaMX_TempVerdictDoesNotFailOver(t *testing.T) {
 	env2 := makeEnvFile(t, dir, "b@m.1", "b+b=example.com@mail.example.com", "ok@example.com", "m@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
-		[]*envelope.Envelope{env1, env2}, 0)
+		[]*envelope.Envelope{env1, env2}, 0, nil)
 
 	err1 := results[env1.Path]
 	if err1 == nil || IsPermanent(err1) {
@@ -534,12 +535,147 @@ func TestDeliverViaMX_ConnectionAttemptCap(t *testing.T) {
 	env := makeEnvFile(t, dir, "a@m.0", "b+a=example.com@mail.example.com", "a@example.com", "m@example.com")
 
 	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
-		[]*envelope.Envelope{env}, 0)
+		[]*envelope.Envelope{env}, 0, nil)
 
 	if err := results[env.Path]; err == nil || IsPermanent(err) {
 		t.Errorf("want temporary error after exhausting hosts, got: %v", err)
 	}
 	if calls != maxMXAttempts {
 		t.Errorf("dial calls = %d, want %d (capped)", calls, maxMXAttempts)
+	}
+}
+
+// --- MTA-STS enforcement tests (issue #45) ---
+
+func TestDeliverViaMX_EnforceSkipsUnlistedHosts(t *testing.T) {
+	addr, be, stop := startTestServer(t)
+	defer stop()
+
+	// Strict dial succeeds (tests substitute plaintext for the TLS layer);
+	// the point here is host filtering, not the handshake.
+	origStrict := DialMXStrict
+	strictDials := 0
+	DialMXStrict = func(_, _ string) (*gosmtp.Client, error) {
+		strictDials++
+		return gosmtp.Dial(addr)
+	}
+	t.Cleanup(func() { DialMXStrict = origStrict })
+
+	// DialMX must never be used under enforce.
+	origDial := DialMX
+	DialMX = func(_, _ string) (*gosmtp.Client, error) {
+		t.Error("opportunistic DialMX used under an enforce policy")
+		return nil, fmt.Errorf("must not be called")
+	}
+	t.Cleanup(func() { DialMX = origDial })
+
+	resolver := &fakeResolver{mxRecords: []*net.MX{
+		{Host: "evil.attacker.example.", Pref: 5}, // not in policy: skipped
+		{Host: "mail.example.com.", Pref: 10},
+	}}
+	policy := &mtasts.Policy{Mode: mtasts.ModeEnforce, MXs: []string{"mail.example.com"}, MaxAge: 86400}
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("Subject: t\r\n\r\nsts\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := makeEnvFile(t, dir, "a@m.0", "b+a=example.com@mail.example.com", "a@example.com", "m@example.com")
+
+	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
+		[]*envelope.Envelope{env}, 0, policy)
+
+	if err := results[env.Path]; err != nil {
+		t.Errorf("expected success via policy-listed host, got: %v", err)
+	}
+	if strictDials != 1 {
+		t.Errorf("strict dials = %d, want 1 (unlisted host skipped without dialing)", strictDials)
+	}
+	be.mu.Lock()
+	defer be.mu.Unlock()
+	if len(be.deliveries) != 1 {
+		t.Errorf("deliveries = %d, want 1", len(be.deliveries))
+	}
+}
+
+func TestDeliverViaMX_EnforceNoMatchingHostIsTemporary(t *testing.T) {
+	resolver := &fakeResolver{mxRecords: []*net.MX{
+		{Host: "mx.elsewhere.example.", Pref: 10},
+	}}
+	policy := &mtasts.Policy{Mode: mtasts.ModeEnforce, MXs: []string{"mail.example.com"}, MaxAge: 86400}
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := makeEnvFile(t, dir, "a@m.0", "b+a=example.com@mail.example.com", "a@example.com", "m@example.com")
+
+	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
+		[]*envelope.Envelope{env}, 0, policy)
+
+	err := results[env.Path]
+	if err == nil {
+		t.Fatal("expected error when no MX matches the enforce policy")
+	}
+	if IsPermanent(err) {
+		t.Errorf("enforce failures must be temporary (mail waits), got permanent: %v", err)
+	}
+}
+
+func TestDeliverViaMX_EnforceTLSFailureIsTemporary(t *testing.T) {
+	// Strict dial fails (no verified TLS available): under enforce there is
+	// no plaintext fallback -- the delivery defers.
+	origStrict := DialMXStrict
+	DialMXStrict = func(addr, _ string) (*gosmtp.Client, error) {
+		return nil, fmt.Errorf("mta-sts enforce requires verified TLS to %s: handshake failed", addr)
+	}
+	t.Cleanup(func() { DialMXStrict = origStrict })
+
+	resolver := &fakeResolver{mxRecords: []*net.MX{{Host: "mail.example.com.", Pref: 10}}}
+	policy := &mtasts.Policy{Mode: mtasts.ModeEnforce, MXs: []string{"mail.example.com"}, MaxAge: 86400}
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("body"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := makeEnvFile(t, dir, "a@m.0", "b+a=example.com@mail.example.com", "a@example.com", "m@example.com")
+
+	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
+		[]*envelope.Envelope{env}, 0, policy)
+
+	err := results[env.Path]
+	if err == nil || IsPermanent(err) {
+		t.Errorf("want temporary error when verified TLS unavailable under enforce, got: %v", err)
+	}
+}
+
+func TestDeliverViaMX_TestingModeDeliversAnyway(t *testing.T) {
+	addr, be, stop := startTestServer(t)
+	defer stop()
+	overrideDialMX(t, addr)
+
+	// Host is NOT in the policy, but mode=testing only logs.
+	resolver := &fakeResolver{mxRecords: []*net.MX{{Host: "mx.unlisted.example.", Pref: 10}}}
+	policy := &mtasts.Policy{Mode: mtasts.ModeTesting, MXs: []string{"mail.example.com"}, MaxAge: 86400}
+
+	dir := t.TempDir()
+	bodyPath := filepath.Join(dir, "body.txt")
+	if err := os.WriteFile(bodyPath, []byte("Subject: t\r\n\r\ntesting\r\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	env := makeEnvFile(t, dir, "a@m.0", "b+a=example.com@mail.example.com", "a@example.com", "m@example.com")
+
+	results := DeliverViaMX(context.Background(), resolver, "mail.example.com", "example.com", bodyPath,
+		[]*envelope.Envelope{env}, 0, policy)
+
+	if err := results[env.Path]; err != nil {
+		t.Errorf("testing mode must deliver, got: %v", err)
+	}
+	be.mu.Lock()
+	defer be.mu.Unlock()
+	if len(be.deliveries) != 1 {
+		t.Errorf("deliveries = %d, want 1", len(be.deliveries))
 	}
 }

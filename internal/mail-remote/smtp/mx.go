@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/infodancer/maildancer/internal/mail-remote/envelope"
+	"github.com/infodancer/maildancer/internal/mail-remote/mtasts"
 	"github.com/infodancer/maildancer/internal/mail-remote/mx"
 )
 
@@ -27,8 +28,16 @@ const maxMXAttempts = 5
 // Each envelope is a separate MAIL FROM transaction (VERP).
 // No SMTP AUTH is used (standard for MX delivery).
 //
+// policy is the recipient domain's MTA-STS policy, or nil when it has none.
+// Under an enforce policy, MX hosts that do not match the policy's mx
+// patterns are skipped and connections require STARTTLS with a verified
+// certificate -- no plaintext or unverified fallback (RFC 8461 section 4.2).
+// Failures under enforce are temporary: the mail waits in the queue rather
+// than ever being delivered insecurely. A testing-mode policy only logs
+// would-be violations.
+//
 // Returns a map of envelope path → error, like DeliverViaSmarthost.
-func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bodyPath string, envs []*envelope.Envelope, maxTxn int) map[string]error {
+func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bodyPath string, envs []*envelope.Envelope, maxTxn int, policy *mtasts.Policy) map[string]error {
 	results := make(map[string]error, len(envs))
 
 	hosts, err := mx.Lookup(resolver, domain)
@@ -38,6 +47,40 @@ func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bod
 			results[env.Path] = classifiedErr
 		}
 		return results
+	}
+
+	dial := DialMX
+	if policy != nil {
+		switch policy.Mode {
+		case mtasts.ModeEnforce:
+			matching := hosts[:0:0]
+			for _, h := range hosts {
+				if policy.MXMatches(h.Name) {
+					matching = append(matching, h)
+				} else {
+					slog.Warn("mta-sts: skipping MX host not in policy",
+						"domain", domain, "host", h.Name)
+				}
+			}
+			if len(matching) == 0 {
+				// Likely a spoofed MX answer or a stale policy; either way
+				// enforce means we wait, not deliver somewhere unlisted.
+				noMatch := fmt.Errorf("mta-sts: no MX host for %s matches its enforce policy", domain)
+				for _, env := range envs {
+					results[env.Path] = noMatch
+				}
+				return results
+			}
+			hosts = matching
+			dial = DialMXStrict
+		case mtasts.ModeTesting:
+			for _, h := range hosts {
+				if !policy.MXMatches(h.Name) {
+					slog.Warn("mta-sts testing: MX host not in policy (would be skipped under enforce)",
+						"domain", domain, "host", h.Name)
+				}
+			}
+		}
 	}
 
 	bodySize, err := fileSize(bodyPath)
@@ -58,7 +101,7 @@ func DeliverViaMX(_ context.Context, resolver mx.Resolver, hostname, domain, bod
 		attempts++
 
 		slog.Debug("trying MX host", "host", h.Name, "addr", h.Addr())
-		c, err := DialMX(h.Addr(), hostname)
+		c, err := dial(h.Addr(), hostname)
 		if err != nil {
 			slog.Debug("MX host failed", "host", h.Name, "error", err)
 			lastErr = err

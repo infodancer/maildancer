@@ -47,6 +47,7 @@ import (
 
 	"github.com/infodancer/maildancer/internal/mail-remote/config"
 	"github.com/infodancer/maildancer/internal/mail-remote/envelope"
+	"github.com/infodancer/maildancer/internal/mail-remote/mtasts"
 	"github.com/infodancer/maildancer/internal/mail-remote/mx"
 	"github.com/infodancer/maildancer/internal/mail-remote/smtp"
 )
@@ -250,7 +251,25 @@ func run() int {
 			slog.Error("cannot determine recipient domain", "error", err)
 			return exUsage
 		}
-		results = smtp.DeliverViaMX(context.Background(), mx.NetResolver{}, cfg.Hostname, domain, bodyPath, envs, cfg.RemoteMX.MaxTransactionsPerConn)
+
+		// MTA-STS: discover the recipient domain's policy. A lookup failure
+		// with nothing cached degrades to no-policy (logged); enforcement
+		// failures inside DeliverViaMX are temporary, never insecure sends.
+		checker := mtasts.NewChecker(cfg.RemoteMX.MTASTSCache)
+		if cfg.RemoteMX.MTASTSCache == "" {
+			slog.Warn("mta-sts cache directory not configured; policies will not persist across runs " +
+				"(set mta_sts_cache under [mail-remote.remote-mx])")
+		}
+		policy, err := checker.PolicyFor(domain)
+		if err != nil {
+			slog.Warn("mta-sts policy discovery failed; proceeding without policy",
+				"domain", domain, "error", err)
+		}
+		if policy != nil {
+			slog.Info("mta-sts policy active", "domain", domain, "mode", policy.Mode)
+		}
+
+		results = smtp.DeliverViaMX(context.Background(), mx.NetResolver{}, cfg.Hostname, domain, bodyPath, envs, cfg.RemoteMX.MaxTransactionsPerConn, policy)
 	}
 
 	tempFail, permFail := false, false

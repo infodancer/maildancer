@@ -300,9 +300,9 @@ func TestDecryptMessage_InvalidData(t *testing.T) {
 		_, privKey2 := generateTestKeyPair()
 
 		message := []byte("test message")
-		encrypted, err := encryptMessage(message, pubKey1)
+		encrypted, err := EncryptMessage(message, pubKey1)
 		if err != nil {
-			t.Fatalf("encryptMessage failed: %v", err)
+			t.Fatalf("EncryptMessage failed: %v", err)
 		}
 
 		// Try to decrypt with different key

@@ -102,7 +102,7 @@ func (e *EncryptingDeliveryAgent) Deliver(ctx context.Context, envelope Envelope
 	for _, recipient := range encryptedRecipients {
 		pubKey := recipientKeys[recipient]
 
-		encryptedData, err := encryptMessage(messageData, pubKey)
+		encryptedData, err := EncryptMessage(messageData, pubKey)
 		if err != nil {
 			return fmt.Errorf("encrypt for %s: %w", recipient, err)
 		}
@@ -122,9 +122,12 @@ func (e *EncryptingDeliveryAgent) Deliver(ctx context.Context, envelope Envelope
 	return nil
 }
 
-// encryptMessage encrypts message data using NaCl box with an ephemeral key pair.
-// Returns: ephemeral_public_key (32B) || nonce (24B) || ciphertext
-func encryptMessage(message []byte, recipientPubKey []byte) ([]byte, error) {
+// EncryptMessage encrypts message data using NaCl box with an ephemeral key pair.
+// The output is self-describing -- ephemeral_public_key (32B) || nonce (24B) ||
+// ciphertext -- and decryptable by DecryptMessage with only the recipient's
+// private key. Exported for the delivery pipeline, which encrypts once and
+// writes the same blob through every path (inbox keep and Sieve fileinto).
+func EncryptMessage(message []byte, recipientPubKey []byte) ([]byte, error) {
 	if len(recipientPubKey) != PublicKeySize {
 		return nil, fmt.Errorf("invalid recipient public key size: %d", len(recipientPubKey))
 	}

@@ -183,9 +183,11 @@ func digestActions(data *interp.RuntimeData) *sieveOutcome {
 }
 
 // applySieve carries out a sieveOutcome: rejects, folder deliveries, keep,
-// and redirect propagation. An error is returned only for internal storage
-// failures (temp-fail at the SMTP layer, same as the normal delivery path).
-func (dlvr *Deliverer) applySieve(ctx context.Context, dom *domain.Domain, req DeliverRequest, outcome *sieveOutcome, msg []byte) (DeliverResponse, error) {
+// and redirect propagation. msg is the bytes to store -- already encrypted
+// when encInfo is non-nil (Sieve itself evaluated the plaintext earlier).
+// An error is returned only for internal storage failures (temp-fail at the
+// SMTP layer, same as the normal delivery path).
+func (dlvr *Deliverer) applySieve(ctx context.Context, dom *domain.Domain, req DeliverRequest, outcome *sieveOutcome, msg []byte, encInfo *msgstore.EncryptionInfo) (DeliverResponse, error) {
 	// RFC 5429: reject is incompatible with actions that deliver the
 	// message; when a script produces both, the reject wins.
 	if outcome.rejectReason != "" {
@@ -203,7 +205,7 @@ func (dlvr *Deliverer) applySieve(ctx context.Context, dom *domain.Domain, req D
 	mailbox := msgstore.ParseRecipient(req.Recipient).Address
 
 	for _, target := range outcome.fileinto {
-		if err := dlvr.deliverToFolder(ctx, dom, req, mailbox, target, msg); err != nil {
+		if err := dlvr.deliverToFolder(ctx, dom, req, mailbox, target, msg, encInfo); err != nil {
 			return DeliverResponse{}, err
 		}
 	}
@@ -211,14 +213,14 @@ func (dlvr *Deliverer) applySieve(ctx context.Context, dom *domain.Domain, req D
 	if outcome.keep {
 		if len(outcome.keepFlags) > 0 {
 			err := dlvr.deliverToFolder(ctx, dom, req, mailbox,
-				fileintoTarget{folder: "INBOX", flags: outcome.keepFlags}, msg)
+				fileintoTarget{folder: "INBOX", flags: outcome.keepFlags}, msg, encInfo)
 			if err != nil {
 				return DeliverResponse{}, err
 			}
 		} else {
 			// Flagless keep goes through the standard delivery path so
 			// subaddress folder routing still applies.
-			if resp, err := dlvr.deliverLocal(ctx, dom, req, msg); err != nil || resp.Result != ResultDelivered {
+			if resp, err := dlvr.deliverLocal(ctx, dom, req, msg, encInfo); err != nil || resp.Result != ResultDelivered {
 				return resp, err
 			}
 		}
@@ -235,8 +237,9 @@ func (dlvr *Deliverer) applySieve(ctx context.Context, dom *domain.Domain, req D
 
 // deliverToFolder writes the message to a folder in the recipient's mailbox.
 // Deliveries carrying imap4flags go through AppendToFolder (which accepts
-// flags); flagless deliveries use DeliverToFolder.
-func (dlvr *Deliverer) deliverToFolder(ctx context.Context, dom *domain.Domain, req DeliverRequest, mailbox string, target fileintoTarget, msg []byte) error {
+// flags); flagless deliveries use DeliverToFolder. msg is the bytes to
+// store -- already encrypted when encInfo is non-nil.
+func (dlvr *Deliverer) deliverToFolder(ctx context.Context, dom *domain.Domain, req DeliverRequest, mailbox string, target fileintoTarget, msg []byte, encInfo *msgstore.EncryptionInfo) error {
 	folderStore, ok := dom.MessageStore.(msgstore.FolderStore)
 	if !ok {
 		// No folder support in this store: fall back to the inbox rather
@@ -244,7 +247,7 @@ func (dlvr *Deliverer) deliverToFolder(ctx context.Context, dom *domain.Domain, 
 		slog.Warn("sieve fileinto unsupported by message store, delivering to inbox",
 			slog.String("recipient", req.Recipient),
 			slog.String("folder", target.folder))
-		_, err := dlvr.deliverLocal(ctx, dom, req, msg)
+		_, err := dlvr.deliverLocal(ctx, dom, req, msg, encInfo)
 		return err
 	}
 
@@ -259,7 +262,7 @@ func (dlvr *Deliverer) deliverToFolder(ctx context.Context, dom *domain.Domain, 
 		return err
 	}
 	if strings.EqualFold(target.folder, "INBOX") {
-		_, err := dlvr.deliverLocal(ctx, dom, req, msg)
+		_, err := dlvr.deliverLocal(ctx, dom, req, msg, encInfo)
 		return err
 	}
 	return folderStore.DeliverToFolder(ctx, mailbox, target.folder, bytes.NewReader(msg))

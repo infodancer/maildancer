@@ -157,20 +157,33 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 	// ── 3. Sieve script ──────────────────────────────────────────────────────
 	// A script decides the message's fate (fileinto, redirect, discard,
 	// reject, keep). No script -- or any script failure -- falls through to
-	// stage 4 (implicit keep).
-	if outcome, ok := dlvr.runSieve(ctx, dom, req, msg); ok {
-		return dlvr.applySieve(ctx, dom, req, outcome, msg)
+	// stage 4 (implicit keep). Sieve evaluates the plaintext message.
+	outcome, sieveRan := dlvr.runSieve(ctx, dom, req, msg)
+
+	// ── 3.5. At-rest encryption ──────────────────────────────────────────────
+	// After Sieve (which needs plaintext), before any write, so that every
+	// write path below -- keep, fileinto, redirect :copy -- stores the same
+	// encrypted blob. Fail-closed: a requested encryption that cannot be
+	// performed temp-fails instead of writing plaintext.
+	writeMsg, encInfo, encReject := dlvr.maybeEncrypt(ctx, dom, req, msg)
+	if encReject != nil {
+		return *encReject, nil
+	}
+
+	if sieveRan {
+		return dlvr.applySieve(ctx, dom, req, outcome, writeMsg, encInfo)
 	}
 
 	// ── 4. Deliver to maildir ────────────────────────────────────────────────
-	return dlvr.deliverLocal(ctx, dom, req, msg)
+	return dlvr.deliverLocal(ctx, dom, req, writeMsg, encInfo)
 }
 
 // deliverLocal is the final delivery stage: it hands the message to the
 // domain's delivery agent for a normal mailbox write (including subaddress
 // folder routing). Used both as the default pipeline tail and as the keep
-// path after sieve execution.
-func (dlvr *Deliverer) deliverLocal(ctx context.Context, dom *domain.Domain, req DeliverRequest, msg []byte) (DeliverResponse, error) {
+// path after sieve execution. msg is the bytes to store -- already encrypted
+// when encInfo is non-nil.
+func (dlvr *Deliverer) deliverLocal(ctx context.Context, dom *domain.Domain, req DeliverRequest, msg []byte, encInfo *msgstore.EncryptionInfo) (DeliverResponse, error) {
 	if dom.DeliveryAgent == nil {
 		return DeliverResponse{
 			Result:    ResultRejected,
@@ -185,7 +198,8 @@ func (dlvr *Deliverer) deliverLocal(ctx context.Context, dom *domain.Domain, req
 		ClientHostname: req.ClientHostname,
 		// Thread the already-forwarded flag through to MailDeliveryAgent so it
 		// does not resolve forwarding rules a second time (1-hop enforcement).
-		Forwarded: req.Forwarded,
+		Forwarded:  req.Forwarded,
+		Encryption: encInfo,
 	}
 	if req.ReceivedTime != "" {
 		if t, err := time.Parse(time.RFC3339, req.ReceivedTime); err == nil {

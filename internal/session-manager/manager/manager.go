@@ -7,6 +7,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -57,7 +59,7 @@ type Manager struct {
 
 	// Test hooks (unexported, nil in production).
 	authFn  func(ctx context.Context, username, password string) (mailbox string, err error)
-	spawnFn func(username, mailbox string) (*sessionEntry, error)
+	spawnFn func(username, mailbox string, privKey []byte) (*sessionEntry, error)
 }
 
 // New creates a new Manager.
@@ -85,6 +87,7 @@ type LoginResult struct {
 func (m *Manager) Login(ctx context.Context, username, password string) (*LoginResult, error) {
 	var mailbox, extension string
 	var maxSendsPerHour int
+	var privKey []byte
 	var err error
 
 	if m.authFn != nil {
@@ -98,11 +101,21 @@ func (m *Manager) Login(ctx context.Context, username, password string) (*LoginR
 			if result.Domain != nil {
 				maxSendsPerHour = result.Domain.Limits.MaxSendsPerHour
 			}
+			// The user's decrypted private key, present when encryption is
+			// enabled. Handed to mail-session over fd 3 at spawn time so
+			// retrieval can decrypt at-rest messages; zeroed before Login
+			// returns (spawnSession has written it into the pipe by then).
+			privKey = result.Session.PrivateKey
 		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("authentication failed: %w", err)
 	}
+	defer func() {
+		for i := range privKey {
+			privKey[i] = 0
+		}
+	}()
 
 	mkResult := func(token string) *LoginResult {
 		return &LoginResult{
@@ -140,9 +153,9 @@ func (m *Manager) Login(ctx context.Context, username, password string) (*LoginR
 	// Slow path: spawn outside the lock to avoid blocking other operations.
 	var entry *sessionEntry
 	if m.spawnFn != nil {
-		entry, err = m.spawnFn(username, mailbox)
+		entry, err = m.spawnFn(username, mailbox, privKey)
 	} else {
-		entry, err = m.spawnSession(username, mailbox)
+		entry, err = m.spawnSession(username, mailbox, privKey)
 	}
 	if err != nil {
 		return nil, err
@@ -314,8 +327,34 @@ func (m *Manager) Close() {
 	m.byUser = make(map[string]*sessionEntry)
 }
 
+// keyEnvelope mirrors the fd 3 JSON contract read by cmd/mail-session:
+// {"version":1,"key":"<base64 32 bytes>"}. See encryption-design.md.
+type keyEnvelope struct {
+	Version int    `json:"version"`
+	Key     []byte `json:"key"`
+}
+
+// keyPipe writes a v1 key envelope into a pipe and returns the read end,
+// to be passed to the child as ExtraFiles[0] (fd 3). The envelope is tiny,
+// so the write completes into the pipe buffer before the child exists.
+func keyPipe(privKey []byte) (*os.File, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("create key pipe: %w", err)
+	}
+	encErr := json.NewEncoder(w).Encode(keyEnvelope{Version: 1, Key: privKey})
+	closeErr := w.Close()
+	if encErr != nil || closeErr != nil {
+		_ = r.Close()
+		return nil, fmt.Errorf("write key envelope: %w", errors.Join(encErr, closeErr))
+	}
+	return r, nil
+}
+
 // spawnSession starts a new mail-session daemon process for the given user.
-func (m *Manager) spawnSession(username, mailbox string) (*sessionEntry, error) {
+// When privKey is a 32-byte session key, it is passed to the child over fd 3
+// so the mail-session decrypting store can serve plaintext to pop3d/imapd.
+func (m *Manager) spawnSession(username, mailbox string, privKey []byte) (*sessionEntry, error) {
 	localpart, domainName, ok := strings.Cut(username, "@")
 	if !ok {
 		return nil, fmt.Errorf("invalid username %q: missing @domain", username)
@@ -361,6 +400,19 @@ func (m *Manager) spawnSession(username, mailbox string) (*sessionEntry, error) 
 			Uid: creds.UID,
 			Gid: creds.GID,
 		},
+	}
+
+	// Pass the session key (if any) over fd 3. The parent's read end is
+	// closed once the child has started; the envelope lives only in the
+	// pipe buffer and the child's memory.
+	if len(privKey) == 32 {
+		keyR, err := keyPipe(privKey)
+		if err != nil {
+			_ = os.RemoveAll(socketDir)
+			return nil, err
+		}
+		defer func() { _ = keyR.Close() }()
+		cmd.ExtraFiles = []*os.File{keyR}
 	}
 
 	if err := m.startAndWaitReady(cmd); err != nil {

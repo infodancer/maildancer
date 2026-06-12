@@ -31,7 +31,7 @@ func newTestManager(idleTimeout time.Duration) *Manager {
 	m.authFn = func(_ context.Context, username, _ string) (string, error) {
 		return username, nil
 	}
-	m.spawnFn = func(username, mailbox string) (*sessionEntry, error) {
+	m.spawnFn = func(username, mailbox string, _ []byte) (*sessionEntry, error) {
 		return &sessionEntry{
 			username:  username,
 			mailbox:   mailbox,
@@ -119,7 +119,7 @@ func TestLogin_AuthFailure(t *testing.T) {
 
 func TestLogin_SpawnFailure(t *testing.T) {
 	m := newTestManager(5 * time.Minute)
-	m.spawnFn = func(_, _ string) (*sessionEntry, error) {
+	m.spawnFn = func(_, _ string, _ []byte) (*sessionEntry, error) {
 		return nil, fmt.Errorf("spawn failed")
 	}
 
@@ -134,7 +134,7 @@ func TestLogin_RaceReconciliation(t *testing.T) {
 	started := make(chan struct{})
 
 	m := newTestManager(5 * time.Minute)
-	m.spawnFn = func(username, mailbox string) (*sessionEntry, error) {
+	m.spawnFn = func(username, mailbox string, _ []byte) (*sessionEntry, error) {
 		spawnCount.Add(1)
 		// Block until both goroutines have started spawning.
 		<-started

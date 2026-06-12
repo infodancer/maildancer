@@ -16,6 +16,7 @@ type DomainConfig struct {
 	DKIM     DKIMConfig           `toml:"dkim,omitempty"`
 	Outbound OutboundConfig       `toml:"outbound,omitempty"`
 	Limits   LimitsConfig         `toml:"limits,omitempty"`
+	DNS      DNSConfig            `toml:"dns,omitempty"`
 
 	// Gid is the OS group ID under which mail-session runs for this domain.
 	// 0 means not configured.
@@ -91,6 +92,20 @@ type OutboundConfig struct {
 	// PasswordFile is the path to a file containing the SMTP AUTH password.
 	// Relative paths resolve from the domain directory.
 	PasswordFile string `toml:"password_file,omitempty"`
+}
+
+// DNSConfig holds per-domain overrides for the server identity used by DNS
+// checks. Most domains inherit the deployment-wide hostname and IP; domains
+// served by a different host or routed through a different smarthost can
+// override them here.
+type DNSConfig struct {
+	// Hostname is the mail server hostname DNS records should reference
+	// (MX target, PTR value).
+	Hostname string `toml:"hostname,omitempty"`
+
+	// PublicIP is the outbound IP address DNS records should authorize
+	// (SPF) and reverse-resolve (PTR).
+	PublicIP string `toml:"public_ip,omitempty"`
 }
 
 // LimitsConfig holds rate limiting and resource limit settings for a domain.

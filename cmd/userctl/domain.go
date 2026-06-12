@@ -87,6 +87,36 @@ func runDomainSubcommand(args []string, paths admin.Paths, stdin io.Reader) erro
 	case "dkim":
 		return runDomainDKIMAction(rest, paths)
 
+	case "dns":
+		hostname := ""
+		ip := ""
+		var names []string
+		for i := 0; i < len(rest); i++ {
+			switch rest[i] {
+			case "--hostname":
+				if i+1 >= len(rest) {
+					domainUsage()
+					return fmt.Errorf("domain dns: --hostname requires a value")
+				}
+				i++
+				hostname = rest[i]
+			case "--ip":
+				if i+1 >= len(rest) {
+					domainUsage()
+					return fmt.Errorf("domain dns: --ip requires a value")
+				}
+				i++
+				ip = rest[i]
+			default:
+				names = append(names, rest[i])
+			}
+		}
+		if len(names) != 1 {
+			domainUsage()
+			return fmt.Errorf("domain dns: expected <domain>")
+		}
+		return cmdDomainDNS(paths, names[0], hostname, ip)
+
 	default:
 		domainUsage()
 		return fmt.Errorf("domain: unknown action %q", action)
@@ -338,6 +368,11 @@ func domainUsage() {
                                                     the DNS TXT record (default selector
                                                     is date-stamped, e.g. d202606)
   userctl domain dkim   show   <domain>             show selector and DNS TXT record
+  userctl domain dns    <domain> [--hostname <h>] [--ip <i>]
+                                                    check MX/SPF/DKIM/DMARC/PTR against
+                                                    public DNS (hostname/IP fall back to
+                                                    domain dns.* config, then [dns] or
+                                                    smtpd.hostname in the server config)
 
 Config keys for domain set:
   %s

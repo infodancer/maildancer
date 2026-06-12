@@ -47,12 +47,20 @@ const (
 	defaultAuthOIDCConfigPath = "/etc/auth-oidc/config.toml"
 )
 
-// serverConfig is a minimal view of the shared server config for path discovery.
+// serverConfig is a minimal view of the shared server config for path and
+// server-identity discovery.
 type serverConfig struct {
 	SMTPD struct {
+		Hostname        string `toml:"hostname"`
 		DomainsPath     string `toml:"domains_path"`
 		DomainsDataPath string `toml:"domains_data_path"`
 	} `toml:"smtpd"`
+	// DNS optionally pins the deployment's public identity for DNS checks,
+	// overriding smtpd.hostname and A-record derivation.
+	DNS struct {
+		Hostname string `toml:"hostname"`
+		PublicIP string `toml:"public_ip"`
+	} `toml:"dns"`
 }
 
 // authOIDCConfig is a minimal view of the auth-oidc config for data_dir
@@ -268,6 +276,7 @@ func usage() {
     userctl domain key    show|create|del <domain>    domain encryption keypair
     userctl domain dkim   create <domain> [--selector <s>] [--force]
     userctl domain dkim   show   <domain>             DKIM key + DNS TXT record
+    userctl domain dns    <domain> [--hostname <h>] [--ip <i>]   check public DNS records
 
   Users:
     userctl user add    <user@domain> [--gen-keys] [--password-stdin]

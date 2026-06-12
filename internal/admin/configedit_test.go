@@ -124,3 +124,38 @@ func TestSetDomainConfig_PreservesComments(t *testing.T) {
 		}
 	}
 }
+
+func TestSetDomainConfig_DNSKeys(t *testing.T) {
+	p := newTestPaths(t)
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.SetDomainConfig("example.com", "dns.hostname", "mail.example.net"); err != nil {
+		t.Fatalf("set dns.hostname: %v", err)
+	}
+	if err := p.SetDomainConfig("example.com", "dns.public_ip", "192.0.2.25"); err != nil {
+		t.Fatalf("set dns.public_ip: %v", err)
+	}
+
+	cfg, err := domain.LoadDomainConfig(filepath.Join(p.Config, "example.com", "config.toml"))
+	if err != nil {
+		t.Fatalf("LoadDomainConfig: %v", err)
+	}
+	if cfg.DNS.Hostname != "mail.example.net" || cfg.DNS.PublicIP != "192.0.2.25" {
+		t.Errorf("dns config = %+v", cfg.DNS)
+	}
+
+	// IPv6 accepted, garbage rejected.
+	if err := p.SetDomainConfig("example.com", "dns.public_ip", "2001:db8::25"); err != nil {
+		t.Errorf("set IPv6: %v", err)
+	}
+	if err := p.SetDomainConfig("example.com", "dns.public_ip", "not-an-ip"); err == nil {
+		t.Error("set garbage IP succeeded, want error")
+	}
+
+	// Empty value unsets.
+	if err := p.SetDomainConfig("example.com", "dns.public_ip", ""); err != nil {
+		t.Errorf("unset: %v", err)
+	}
+}

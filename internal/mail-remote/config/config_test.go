@@ -143,3 +143,26 @@ func TestLoadInvalidTOML(t *testing.T) {
 		t.Fatal("expected error for invalid TOML")
 	}
 }
+
+func TestLoad_MTASTSCache(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := `
+[mail-remote.remote-mx]
+mta_sts_cache = "/var/spool/maildancer/mta-sts"
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RemoteMX.MTASTSCache != "/var/spool/maildancer/mta-sts" {
+		t.Errorf("MTASTSCache = %q", cfg.RemoteMX.MTASTSCache)
+	}
+	// Default is empty (caching off until configured).
+	if def := Default(); def.RemoteMX.MTASTSCache != "" {
+		t.Errorf("default MTASTSCache = %q, want empty", def.RemoteMX.MTASTSCache)
+	}
+}

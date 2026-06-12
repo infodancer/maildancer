@@ -38,6 +38,13 @@ type RemoteMXConfig struct {
 	// MaxTransactionsPerConn limits MAIL FROM transactions per connection.
 	// Default: 25 (conservative for foreign servers).
 	MaxTransactionsPerConn int `toml:"max_transactions_per_conn"`
+
+	// MTASTSCache is the directory for cached MTA-STS policies (RFC 8461).
+	// The cache is security-relevant: a cached enforce policy protects
+	// deliveries while an attacker blocks the domain's policy publication.
+	// Point it at a persistent directory on the queue data volume. Empty
+	// disables caching (policies are still fetched and enforced per run).
+	MTASTSCache string `toml:"mta_sts_cache"`
 }
 
 // fileConfig is the top-level TOML structure for the shared config file.
@@ -95,6 +102,9 @@ func Load(path string) (Config, error) {
 	}
 	if fc.MailRemote.RemoteMX.MaxTransactionsPerConn > 0 {
 		cfg.RemoteMX.MaxTransactionsPerConn = fc.MailRemote.RemoteMX.MaxTransactionsPerConn
+	}
+	if fc.MailRemote.RemoteMX.MTASTSCache != "" {
+		cfg.RemoteMX.MTASTSCache = fc.MailRemote.RemoteMX.MTASTSCache
 	}
 
 	return cfg, nil

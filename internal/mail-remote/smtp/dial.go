@@ -77,6 +77,31 @@ var DialMX = func(addr, hostname string) (*gosmtp.Client, error) {
 	return c, nil
 }
 
+// DialMXStrict dials an MX host requiring STARTTLS with a certificate valid
+// for the MX hostname -- no unverified-TLS or plaintext fallback. Used when
+// an MTA-STS enforce policy applies (RFC 8461 section 4.2).
+var DialMXStrict = func(addr, hostname string) (*gosmtp.Client, error) {
+	host, _, _ := net.SplitHostPort(addr)
+
+	conn, err := dialTCP(addr)
+	if err != nil {
+		return nil, err
+	}
+
+	tlsConn, err := negotiateSTARTTLS(conn, hostname, &tls.Config{ServerName: host})
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("mta-sts enforce requires verified TLS to %s: %w", addr, err)
+	}
+
+	c := gosmtp.NewClient(tlsConn)
+	if err := c.Hello(hostname); err != nil {
+		_ = c.Close()
+		return nil, fmt.Errorf("post-tls ehlo %s: %w", addr, err)
+	}
+	return c, nil
+}
+
 func dialTCP(addr string) (net.Conn, error) {
 	conn, err := net.DialTimeout("tcp", addr, dialTimeout)
 	if err != nil {

@@ -1,11 +1,93 @@
 package testutil
 
 import (
+	"crypto/subtle"
+	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/argon2"
 )
+
+// verifyArgon2 mirrors auth/passwd.verifyPassword: parse the encoded hash,
+// re-derive with the password, constant-time compare. testutil cannot import
+// auth/passwd (smtpd depguard boundary), so this replicates the parser to
+// confirm the fixture hashes are actually verifiable -- the exact check the
+// old hardcoded constant failed (issue #56).
+func verifyArgon2(t *testing.T, password, encoded string) bool {
+	t.Helper()
+	parts := strings.Split(encoded, "$")
+	if len(parts) != 6 || parts[1] != "argon2id" {
+		t.Fatalf("malformed hash: %q", encoded)
+	}
+	var memory, time uint32
+	var threads uint8
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time, &threads); err != nil {
+		t.Fatalf("parse params %q: %v", parts[3], err)
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		t.Fatalf("decode salt: %v", err)
+	}
+	want, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil {
+		t.Fatalf("decode hash: %v", err)
+	}
+	got := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(want)))
+	return subtle.ConstantTimeCompare(got, want) == 1
+}
+
+// TestFixturePasswordsVerify pins #56: every generated passwd entry must
+// actually verify against its plaintext password, including a non-default one.
+func TestFixturePasswordsVerify(t *testing.T) {
+	domains := []TestDomain{{
+		Name: "example.com",
+		Users: []TestUser{
+			{Username: "alice", Password: "testpass"},
+			{Username: "bob", Password: "a-different-password"},
+			{Username: "carol"}, // empty -> defaults to "testpass"
+		},
+	}}
+	basePath := SetupTestDomains(t, domains)
+
+	data, err := os.ReadFile(filepath.Join(basePath, "example.com", "passwd"))
+	if err != nil {
+		t.Fatalf("read passwd: %v", err)
+	}
+	hashes := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.SplitN(line, ":", 3)
+		if len(fields) < 2 {
+			t.Fatalf("malformed passwd line: %q", line)
+		}
+		hashes[fields[0]] = fields[1]
+	}
+
+	cases := map[string]string{
+		"alice": "testpass",
+		"bob":   "a-different-password",
+		"carol": "testpass",
+	}
+	for user, password := range cases {
+		hash, ok := hashes[user]
+		if !ok {
+			t.Errorf("no passwd entry for %s", user)
+			continue
+		}
+		if !verifyArgon2(t, password, hash) {
+			t.Errorf("%s: hash does not verify against %q", user, password)
+		}
+		if verifyArgon2(t, "wrong-password", hash) {
+			t.Errorf("%s: hash verifies against a wrong password", user)
+		}
+	}
+}
 
 func TestSetupTestDomains(t *testing.T) {
 	domains := []TestDomain{

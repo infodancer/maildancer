@@ -45,13 +45,12 @@ func (d *DeliveryServer) Deliver(stream pb.DeliveryService_DeliverServer) error 
 	}
 
 	req := deliver.DeliverRequest{
-		Sender:            meta.GetSender(),
-		Recipient:         meta.GetRecipient(),
-		ClientIP:          meta.GetClientIp(),
-		ClientHostname:    meta.GetClientHostname(),
-		Forwarded:         meta.GetForwarded(),
-		EncryptionKeyHint: meta.GetEncryptionKeyHint(),
-		ReceivedTime:      meta.GetReceivedTime(),
+		Sender:         meta.GetSender(),
+		Recipient:      meta.GetRecipient(),
+		ClientIP:       meta.GetClientIp(),
+		ClientHostname: meta.GetClientHostname(),
+		Forwarded:      meta.GetForwarded(),
+		ReceivedTime:   meta.GetReceivedTime(),
 	}
 
 	resp, err := d.srv.deliverer.Deliver(stream.Context(), req, body)

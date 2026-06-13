@@ -42,9 +42,11 @@ message DeliverMetadata {
   // When true, forwarding resolution is skipped (1-hop limit enforcement).
   bool forwarded = 5;
 
-  // Identifies the recipient's public key for at-rest encryption.
-  // Empty means no encryption. Resolved by the KeyProvider in auth.
-  string encryption_key_hint = 6;
+  // Field 6 was encryption_key_hint: retired in maildancer#65. At-rest
+  // encryption is now gated on recipient key presence in mail-session, not
+  // signalled per-delivery, so no hint travels on the wire.
+  reserved 6;
+  reserved "encryption_key_hint";
 
   // When the message was accepted by the upstream daemon (RFC 3339).
   string received_time = 7;

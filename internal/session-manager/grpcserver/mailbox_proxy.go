@@ -74,6 +74,14 @@ func (p *mailboxProxy) FetchHeaders(ctx context.Context, req *pb.FetchHeadersReq
 	return cl.FetchHeaders(ctx, req)
 }
 
+func (p *mailboxProxy) SearchContent(ctx context.Context, req *pb.SearchContentRequest) (*pb.SearchContentResponse, error) {
+	cl, err := p.upstream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return cl.SearchContent(ctx, req)
+}
+
 func (p *mailboxProxy) Append(stream pb.MailboxService_AppendServer) error {
 	cl, err := p.upstream(stream.Context())
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/infodancer/maildancer/auth/passwd"
+	"github.com/infodancer/maildancer/internal/admin"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
@@ -336,5 +337,57 @@ func TestHashPassword(t *testing.T) {
 	}
 	if !strings.HasPrefix(hash, "$argon2id$v=19$") {
 		t.Errorf("expected argon2id prefix, got %q", hash[:20])
+	}
+}
+
+// TestHandleResetPassword_KeyedUser covers the admin reset of a user with
+// encryption keys: a bare reset is refused with 409 (it would orphan the
+// sealed key and lock the user out), and the explicit regenerate_keys
+// confirmation replaces the keypair and reports the consequence.
+func TestHandleResetPassword_KeyedUser(t *testing.T) {
+	h, dir := newTestUserHandler(t)
+	createTestDomain(t, dir, "example.com")
+
+	p := admin.Paths{Config: dir, Data: dir}
+	before, err := p.CreateUserKeys("example.com", "user1", "originalpassword")
+	if err != nil {
+		t.Fatalf("provision keys: %v", err)
+	}
+
+	put := func(payload map[string]any) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(payload)
+		req := httptest.NewRequest(http.MethodPut, "/api/domains/example.com/users/user1/password", bytes.NewReader(body))
+		req.SetPathValue("domain", "example.com")
+		req.SetPathValue("username", "user1")
+		rr := httptest.NewRecorder()
+		h.HandleResetPassword(rr, req)
+		return rr
+	}
+
+	// Bare reset refused: would orphan the sealed key.
+	rr := put(map[string]any{"password": "newstrongpassword"})
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("bare reset of keyed user: expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Explicit confirmation regenerates the keypair.
+	rr = put(map[string]any{"password": "newstrongpassword", "regenerate_keys": true})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("reset with regenerate_keys: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["warning"] == "" || resp["fingerprint"] == "" {
+		t.Errorf("response must carry the regeneration warning and new fingerprint: %v", resp)
+	}
+	if resp["fingerprint"] == before {
+		t.Error("fingerprint unchanged; keypair must be regenerated")
+	}
+
+	status, err := p.UserKeyStatus("example.com", "user1")
+	if err != nil || !status.Exists || !status.HasPrivate {
+		t.Fatalf("keys missing after regen: %+v, %v", status, err)
 	}
 }

@@ -31,28 +31,40 @@ func GenerateKeypair(password string) (pubKey, encryptedPrivKey []byte, err erro
 		return nil, nil, fmt.Errorf("generate keypair: %w", err)
 	}
 
+	encPriv, err := EncryptPrivateKey(priv[:], password)
+	if err != nil {
+		return nil, nil, err
+	}
+	return pub[:], encPriv, nil
+}
+
+// EncryptPrivateKey seals a private key under a password.
+// Format: salt(32B) || nonce(24B) || secretbox.Seal(privkey) -- the same
+// layout auth/passwd reads at authentication time (pinned by the round-trip
+// test in internal/admin).
+func EncryptPrivateKey(privKey []byte, password string) ([]byte, error) {
 	salt := make([]byte, saltSize)
 	if _, err := rand.Read(salt); err != nil {
-		return nil, nil, fmt.Errorf("generate salt: %w", err)
+		return nil, fmt.Errorf("generate salt: %w", err)
 	}
 
 	var nonce [nonceSize]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return nil, nil, fmt.Errorf("generate nonce: %w", err)
+		return nil, fmt.Errorf("generate nonce: %w", err)
 	}
 
 	var key [32]byte
 	derived := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
 	copy(key[:], derived)
 
-	encrypted := secretbox.Seal(nil, priv[:], &nonce, &key)
+	encrypted := secretbox.Seal(nil, privKey, &nonce, &key)
 
 	encPriv := make([]byte, 0, saltSize+nonceSize+len(encrypted))
 	encPriv = append(encPriv, salt...)
 	encPriv = append(encPriv, nonce[:]...)
 	encPriv = append(encPriv, encrypted...)
 
-	return pub[:], encPriv, nil
+	return encPriv, nil
 }
 
 // SaveKeypair writes pubKey to dir/name.pub and encryptedPrivKey to dir/name.key.

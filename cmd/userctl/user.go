@@ -30,7 +30,7 @@ func runUserSubcommand(args []string, paths admin.Paths, stdin io.Reader) error 
 	}
 
 	action := args[0]
-	genKeys, passwordStdin := false, false
+	genKeys, passwordStdin, adminReset := false, false, false
 	var positional []string
 	for _, a := range args[1:] {
 		switch a {
@@ -38,6 +38,8 @@ func runUserSubcommand(args []string, paths admin.Paths, stdin io.Reader) error 
 			genKeys = true
 		case "--password-stdin":
 			passwordStdin = true
+		case "--reset":
+			adminReset = true
 		default:
 			positional = append(positional, a)
 		}
@@ -86,15 +88,7 @@ func runUserSubcommand(args []string, paths admin.Paths, stdin io.Reader) error 
 		if err != nil {
 			return err
 		}
-		password, err := readNewPassword(stdin, passwordStdin)
-		if err != nil {
-			return err
-		}
-		if err := paths.ResetPassword(domainName, username, password); err != nil {
-			return err
-		}
-		fmt.Printf("Password updated for %s@%s\n", username, domainName)
-		return nil
+		return cmdUserPasswd(paths, domainName, username, adminReset, passwordStdin, stdin)
 
 	case "verify":
 		if len(positional) != 1 {
@@ -135,6 +129,113 @@ func cmdUserAdd(paths admin.Paths, domainName, username string, genKeys, passwor
 		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
 	}
 	return nil
+}
+
+// cmdUserPasswd changes or resets a user's password, keeping sealed
+// encryption keys consistent with the hash:
+//
+//   - User has keys, no --reset: re-seal flow. Requires the current password
+//     (prompted, or first of two stdin lines with --password-stdin); the
+//     keypair is preserved and old mail stays readable.
+//   - --reset (admin flow, current password unknown): keyed users get a fresh
+//     keypair sealed under the new password -- old encrypted mail becomes
+//     unreadable, and the command says so. Keyless users get a plain reset.
+//   - Keyless, no --reset: plain reset, same as before.
+func cmdUserPasswd(paths admin.Paths, domainName, username string, adminReset, passwordStdin bool, stdin io.Reader) error {
+	status, err := paths.UserKeyStatus(domainName, username)
+	if err != nil {
+		return err
+	}
+	hasKeys := status != nil && status.Exists && status.HasPrivate
+
+	if adminReset {
+		password, err := readNewPassword(stdin, passwordStdin)
+		if err != nil {
+			return err
+		}
+		if hasKeys {
+			fingerprint, err := paths.ResetPasswordRegenKeys(domainName, username, password)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Password reset for %s@%s\n", username, domainName)
+			fmt.Fprintf(os.Stderr, "warning: encryption keypair regenerated (new fingerprint %s); previously encrypted mail is no longer readable\n", fingerprint)
+			return nil
+		}
+		if err := paths.ResetPassword(domainName, username, password); err != nil {
+			return err
+		}
+		fmt.Printf("Password reset for %s@%s\n", username, domainName)
+		return nil
+	}
+
+	if hasKeys {
+		current, newPass, err := readPasswordChange(stdin, passwordStdin)
+		if err != nil {
+			return err
+		}
+		if err := paths.ChangePassword(domainName, username, current, newPass); err != nil {
+			return err
+		}
+		fmt.Printf("Password updated for %s@%s (encryption key re-sealed)\n", username, domainName)
+		return nil
+	}
+
+	password, err := readNewPassword(stdin, passwordStdin)
+	if err != nil {
+		return err
+	}
+	if err := paths.ResetPassword(domainName, username, password); err != nil {
+		return err
+	}
+	fmt.Printf("Password updated for %s@%s\n", username, domainName)
+	return nil
+}
+
+// readPasswordChange obtains (current, new) passwords for the re-seal flow.
+// With fromStdin it reads two lines (current, then new) using one scanner --
+// two readNewPassword calls would each buffer ahead and lose input.
+// Interactively it prompts for the current password, then the new password
+// with confirmation.
+func readPasswordChange(stdin io.Reader, fromStdin bool) (current, newPass string, err error) {
+	if fromStdin {
+		scanner := bufio.NewScanner(stdin)
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				return "", "", fmt.Errorf("read current password from stdin: %w", err)
+			}
+			return "", "", fmt.Errorf("read current password from stdin: empty input")
+		}
+		current = scanner.Text()
+		if !scanner.Scan() {
+			if err := scanner.Err(); err != nil {
+				return "", "", fmt.Errorf("read new password from stdin: %w", err)
+			}
+			return "", "", fmt.Errorf("read new password from stdin: expected a second line (current, then new)")
+		}
+		return current, scanner.Text(), nil
+	}
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return "", "", fmt.Errorf("stdin is not a terminal: use --password-stdin with two lines (current, then new)")
+	}
+
+	current, err = promptPassword("Current password: ")
+	if err != nil {
+		return "", "", err
+	}
+	newPass, err = promptPassword("New password: ")
+	if err != nil {
+		return "", "", err
+	}
+	confirm, err := promptPassword("Confirm new password: ")
+	if err != nil {
+		return "", "", err
+	}
+	if newPass != confirm {
+		return "", "", fmt.Errorf("passwords do not match")
+	}
+	return current, newPass, nil
 }
 
 func cmdUserList(paths admin.Paths, domainName string) error {
@@ -267,12 +368,19 @@ func userUsage() {
   userctl user add    <user@domain> [--gen-keys] [--password-stdin]   add user (allocates uid)
   userctl user del    <user@domain>                                   remove user
   userctl user list   <domain>                                        list users
-  userctl user passwd <user@domain> [--password-stdin]                reset password
+  userctl user passwd <user@domain> [--reset] [--password-stdin]      change/reset password
   userctl user verify <user@domain>                                   verify password
   userctl user key    show   <user@domain>                            show encryption key
   userctl user key    create <user@domain> [--password-stdin]         generate keypair
   userctl user key    del    <user@domain>                            delete keypair
 
 --password-stdin reads the password from the first line of stdin (for
-scripting); without it, userctl prompts on the terminal.`)
+scripting); without it, userctl prompts on the terminal.
+
+passwd on a user WITH encryption keys requires the current password (it
+re-seals the key, preserving access to old mail): interactively you are
+prompted; with --password-stdin supply two lines (current, then new).
+passwd --reset is the admin flow when the current password is unknown:
+keyed users get a regenerated keypair and old encrypted mail becomes
+unreadable.`)
 }

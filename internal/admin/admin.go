@@ -43,4 +43,11 @@ var (
 	ErrInvalidUsername   = errors.New("invalid username")
 	ErrWeakPassword      = errors.New("password does not meet minimum requirements")
 	ErrPasswordRequired  = errors.New("password is required")
+	// ErrUserHasKeys is returned by ResetPassword when the user has a sealed
+	// encryption key: a bare hash reset would orphan it and lock the user
+	// out at the next login (auth/passwd treats an unsealable key as a hard
+	// authentication failure, by design). Callers must use ChangePassword
+	// (re-seals, current password required) or ResetPasswordRegenKeys
+	// (explicit keypair regeneration; old encrypted mail becomes unreadable).
+	ErrUserHasKeys = errors.New("user has encryption keys; password reset would orphan them")
 )

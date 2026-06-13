@@ -125,6 +125,10 @@ func (p Paths) DeleteUser(domain, username string) error {
 }
 
 // ResetPassword replaces the user's password hash, preserving mailbox and uid.
+// Users with a sealed encryption key are refused with ErrUserHasKeys: a bare
+// hash reset would orphan the key and lock the user out at the next login.
+// Use ChangePassword (current password known) or ResetPasswordRegenKeys
+// (explicit admin reset, regenerates the keypair).
 func (p Paths) ResetPassword(domain, username, password string) error {
 	if !ValidDomainName(domain) {
 		return ErrInvalidDomainName
@@ -149,6 +153,9 @@ func (p Paths) ResetPassword(domain, username, password string) error {
 
 	if !userExists(passwdPath, username) {
 		return ErrUserNotFound
+	}
+	if status := p.keyStatus(domain, username); status.Exists && status.HasPrivate {
+		return ErrUserHasKeys
 	}
 	if err := passwd.SetPassword(passwdPath, username, password); err != nil {
 		return fmt.Errorf("update password: %w", err)

@@ -51,6 +51,7 @@ var domainConfigFields = map[string]configField{
 	"dns.public_ip":             {section: "dns", key: "public_ip", kind: kindIP},
 	"max_message_size":          {section: "", key: "max_message_size", kind: kindInt},
 	"recipient_rejection":       {section: "", key: "recipient_rejection", kind: kindEnum, enum: []string{"rcpt", "data"}},
+	"encryption_mode":           {section: "", key: "encryption_mode", kind: kindEnum, enum: []string{"off", "on"}},
 }
 
 // ErrUnknownConfigKey is returned for keys outside the curated set.

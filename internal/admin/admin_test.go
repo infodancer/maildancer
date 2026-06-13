@@ -243,6 +243,44 @@ func TestCreateUserWithKeys(t *testing.T) {
 	}
 }
 
+// TestCreateUser_DomainEncryptionMode: with the domain's encryption_mode set
+// to "on", CreateUser provisions a keypair even when the caller does not pass
+// generateKeys -- the per-domain mode is the provisioning default (issue #65).
+func TestCreateUser_DomainEncryptionMode(t *testing.T) {
+	p := newTestPaths(t)
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Default (mode unset/off): no keys without an explicit request.
+	res, err := p.CreateUser("example.com", "bob", "password123", false)
+	if err != nil {
+		t.Fatalf("CreateUser bob: %v", err)
+	}
+	if res.KeysGenerated {
+		t.Error("bob got keys with mode off and generateKeys=false")
+	}
+
+	// Flip the domain to "on", then a plain create provisions keys.
+	if err := p.SetDomainConfig("example.com", "encryption_mode", "on"); err != nil {
+		t.Fatalf("SetDomainConfig: %v", err)
+	}
+	res, err = p.CreateUser("example.com", "alice", "password123", false)
+	if err != nil {
+		t.Fatalf("CreateUser alice: %v", err)
+	}
+	if !res.KeysGenerated {
+		t.Fatalf("alice got no keys with mode on, warnings: %v", res.Warnings)
+	}
+	status, err := p.UserKeyStatus("example.com", "alice")
+	if err != nil {
+		t.Fatalf("UserKeyStatus: %v", err)
+	}
+	if !status.Exists || !status.HasPrivate {
+		t.Errorf("key status = %+v, want provisioned keypair", status)
+	}
+}
+
 func TestDeleteUser(t *testing.T) {
 	p := newTestPaths(t)
 	if _, err := p.CreateDomain("example.com"); err != nil {

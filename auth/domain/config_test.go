@@ -110,3 +110,30 @@ public_ip = "192.0.2.25"
 		t.Errorf("DNS.PublicIP = %q", cfg.DNS.PublicIP)
 	}
 }
+
+func TestDomainConfig_EncryptionMode(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.toml")
+
+	if err := os.WriteFile(configPath, []byte("encryption_mode = \"on\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadDomainConfig(configPath)
+	if err != nil {
+		t.Fatalf("LoadDomainConfig: %v", err)
+	}
+	if cfg.EncryptionMode != EncryptionModeOn {
+		t.Errorf("EncryptionMode = %q, want %q", cfg.EncryptionMode, EncryptionModeOn)
+	}
+	if !cfg.ProvisionKeysByDefault() {
+		t.Error("ProvisionKeysByDefault() = false for mode \"on\"")
+	}
+
+	// Unset and "off" both mean no default provisioning.
+	for _, mode := range []string{"", EncryptionModeOff, "bogus"} {
+		c := DomainConfig{EncryptionMode: mode}
+		if c.ProvisionKeysByDefault() {
+			t.Errorf("ProvisionKeysByDefault() = true for mode %q, want false", mode)
+		}
+	}
+}

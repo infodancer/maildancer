@@ -374,6 +374,10 @@ func userUsage() {
   userctl user key    create <user@domain> [--password-stdin]         generate keypair
   userctl user key    del    <user@domain>                            delete keypair
 
+--gen-keys forces an encryption keypair to be generated. Without it, a
+keypair is still generated when the domain's encryption_mode is "on"
+(at-rest encryption then activates for the user automatically).
+
 --password-stdin reads the password from the first line of stdin (for
 scripting); without it, userctl prompts on the terminal.
 

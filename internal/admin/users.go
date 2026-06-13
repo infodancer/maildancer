@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	domainpkg "github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/internal/admin/keys"
 	"github.com/infodancer/maildancer/internal/admin/uidalloc"
@@ -79,7 +80,11 @@ func (p Paths) CreateUser(domain, username, password string, generateKeys bool) 
 		result.Warnings = append(result.Warnings, fmt.Sprintf("create maildir: %v", err))
 	}
 
-	if generateKeys {
+	// Generate a keypair when explicitly requested, or by default when the
+	// domain's encryption_mode is "on". The runtime encrypt gate is key
+	// presence, so provisioning a key here is what turns on at-rest encryption
+	// for this user (maildancer#65).
+	if generateKeys || p.domainProvisionsKeys(domain) {
 		if err := p.createKeypair(domain, username, password); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("generate keys: %v", err))
 		} else {
@@ -88,6 +93,17 @@ func (p Paths) CreateUser(domain, username, password string, generateKeys bool) 
 	}
 
 	return result, nil
+}
+
+// domainProvisionsKeys reports whether the domain's encryption_mode is "on",
+// so new users are provisioned an encryption keypair by default. A missing or
+// unreadable config is treated as "off".
+func (p Paths) domainProvisionsKeys(domain string) bool {
+	cfg, err := domainpkg.LoadDomainConfig(filepath.Join(p.Config, domain, "config.toml"))
+	if err != nil {
+		return false
+	}
+	return cfg.ProvisionKeysByDefault()
 }
 
 // DeleteUser removes the user's passwd entry and any key files.

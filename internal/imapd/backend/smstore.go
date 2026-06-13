@@ -10,11 +10,12 @@ import (
 
 // Compile-time interface assertions.
 var (
-	_ msgstore.MessageStore = (*sessionManagerStore)(nil)
-	_ msgstore.FolderStore  = (*sessionManagerStore)(nil)
-	_ mover                 = (*sessionManagerStore)(nil)
-	_ rescanner             = (*sessionManagerStore)(nil)
-	_ io.Closer             = (*sessionManagerStore)(nil)
+	_ msgstore.MessageStore    = (*sessionManagerStore)(nil)
+	_ msgstore.FolderStore     = (*sessionManagerStore)(nil)
+	_ msgstore.ContentSearcher = (*sessionManagerStore)(nil)
+	_ mover                    = (*sessionManagerStore)(nil)
+	_ rescanner                = (*sessionManagerStore)(nil)
+	_ io.Closer                = (*sessionManagerStore)(nil)
 )
 
 // sessionManagerStore adapts a SessionManagerClient into msgstore.MessageStore,
@@ -103,6 +104,25 @@ func (s *sessionManagerStore) RetrieveFromFolder(ctx context.Context, _ string, 
 
 func (s *sessionManagerStore) DeleteInFolder(ctx context.Context, _ string, folder string, uid uint32) error {
 	return s.client.DeleteMessage(ctx, s.token, folder, uid)
+}
+
+// SearchContent implements msgstore.ContentSearcher, evaluating content
+// predicates in mail-session so message bodies never cross the proxy.
+func (s *sessionManagerStore) SearchContent(ctx context.Context, folder string, uids []uint32, bodyTerms, textTerms []string, needHeaders bool) ([]msgstore.ContentMatch, error) {
+	results, err := s.client.SearchContent(ctx, s.token, folder, uids, bodyTerms, textTerms, needHeaders)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]msgstore.ContentMatch, 0, len(results))
+	for _, r := range results {
+		out = append(out, msgstore.ContentMatch{
+			UID:         r.GetUid(),
+			Headers:     r.GetHeaders(),
+			BodyMatches: r.GetBodyMatches(),
+			TextMatches: r.GetTextMatches(),
+		})
+	}
+	return out, nil
 }
 
 func (s *sessionManagerStore) ExpungeFolder(ctx context.Context, _ string, folder string) error {

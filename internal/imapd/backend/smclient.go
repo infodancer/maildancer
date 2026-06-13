@@ -143,6 +143,24 @@ func (c *SessionManagerClient) FetchMessage(ctx context.Context, token, folder s
 	return io.NopCloser(&buf), nil
 }
 
+// SearchContent evaluates content predicates server-side, returning header
+// bytes and per-term match booleans per UID. Message bodies are scanned in
+// mail-session and never returned across the proxy. Results are proto types;
+// the store adapter converts them to msgstore.ContentMatch.
+func (c *SessionManagerClient) SearchContent(ctx context.Context, token, folder string, uids []uint32, bodyTerms, textTerms []string, needHeaders bool) ([]*pb.SearchContentResult, error) {
+	resp, err := c.mailbox.SearchContent(smTokenCtx(ctx, token), &pb.SearchContentRequest{
+		Folder:      folder,
+		Uids:        uids,
+		BodyTerms:   bodyTerms,
+		TextTerms:   textTerms,
+		NeedHeaders: needHeaders,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp.GetResults(), nil
+}
+
 // SetFlags replaces the complete flag set on a message.
 func (c *SessionManagerClient) SetFlags(ctx context.Context, token, folder string, uid uint32, flags []string) error {
 	_, err := c.mailbox.SetFlags(smTokenCtx(ctx, token), &pb.SetFlagsRequest{

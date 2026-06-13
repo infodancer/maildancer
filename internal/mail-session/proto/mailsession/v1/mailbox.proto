@@ -21,6 +21,14 @@ service MailboxService {
   // FetchHeaders retrieves only the message headers (and optionally a few body lines).
   rpc FetchHeaders(FetchHeadersRequest) returns (FetchHeadersResponse);
 
+  // SearchContent evaluates content predicates server-side so that callers
+  // (e.g. imapd SEARCH) never pull full message bodies across the proxy.
+  // For each requested UID it returns the parsed header bytes (optional) and
+  // per-term match booleans. The matching is protocol-agnostic substring
+  // containment; callers compose their own query semantics (AND/OR/NOT) from
+  // the results.
+  rpc SearchContent(SearchContentRequest) returns (SearchContentResponse);
+
   // Append stores a new message in a folder. Client-streaming: the first chunk
   // carries metadata (folder, flags, date), subsequent chunks carry message body.
   rpc Append(stream AppendRequest) returns (AppendResponse);
@@ -102,6 +110,38 @@ message FetchHeadersRequest {
 
 message FetchHeadersResponse {
   bytes headers = 1;
+}
+
+message SearchContentRequest {
+  string folder = 1;
+
+  // Candidate UIDs to evaluate. Empty means every message in the folder.
+  repeated uint32 uids = 2;
+
+  // Substring terms to test against the message body and against the full
+  // message (headers + body) respectively. Matching is case-insensitive
+  // octet containment. The response reports one boolean per term, in order.
+  repeated string body_terms = 3;
+  repeated string text_terms = 4;
+
+  // When true, the response carries each message's header bytes so the caller
+  // can evaluate header and date predicates without retrieving the body.
+  bool need_headers = 5;
+}
+
+message SearchContentResult {
+  uint32 uid = 1;
+
+  // Header bytes (RFC 5322 header block), present only when need_headers was set.
+  bytes headers = 2;
+
+  // Match results aligned with the request's body_terms / text_terms.
+  repeated bool body_matches = 3;
+  repeated bool text_matches = 4;
+}
+
+message SearchContentResponse {
+  repeated SearchContentResult results = 1;
 }
 
 message AppendRequest {

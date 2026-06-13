@@ -471,6 +471,202 @@ func (x *FetchHeadersResponse) GetHeaders() []byte {
 	return nil
 }
 
+type SearchContentRequest struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Folder string                 `protobuf:"bytes,1,opt,name=folder,proto3" json:"folder,omitempty"`
+	// Candidate UIDs to evaluate. Empty means every message in the folder.
+	Uids []uint32 `protobuf:"varint,2,rep,packed,name=uids,proto3" json:"uids,omitempty"`
+	// Substring terms to test against the message body and against the full
+	// message (headers + body) respectively. Matching is case-insensitive
+	// octet containment. The response reports one boolean per term, in order.
+	BodyTerms []string `protobuf:"bytes,3,rep,name=body_terms,json=bodyTerms,proto3" json:"body_terms,omitempty"`
+	TextTerms []string `protobuf:"bytes,4,rep,name=text_terms,json=textTerms,proto3" json:"text_terms,omitempty"`
+	// When true, the response carries each message's header bytes so the caller
+	// can evaluate header and date predicates without retrieving the body.
+	NeedHeaders   bool `protobuf:"varint,5,opt,name=need_headers,json=needHeaders,proto3" json:"need_headers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SearchContentRequest) Reset() {
+	*x = SearchContentRequest{}
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchContentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchContentRequest) ProtoMessage() {}
+
+func (x *SearchContentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchContentRequest.ProtoReflect.Descriptor instead.
+func (*SearchContentRequest) Descriptor() ([]byte, []int) {
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SearchContentRequest) GetFolder() string {
+	if x != nil {
+		return x.Folder
+	}
+	return ""
+}
+
+func (x *SearchContentRequest) GetUids() []uint32 {
+	if x != nil {
+		return x.Uids
+	}
+	return nil
+}
+
+func (x *SearchContentRequest) GetBodyTerms() []string {
+	if x != nil {
+		return x.BodyTerms
+	}
+	return nil
+}
+
+func (x *SearchContentRequest) GetTextTerms() []string {
+	if x != nil {
+		return x.TextTerms
+	}
+	return nil
+}
+
+func (x *SearchContentRequest) GetNeedHeaders() bool {
+	if x != nil {
+		return x.NeedHeaders
+	}
+	return false
+}
+
+type SearchContentResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Uid   uint32                 `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	// Header bytes (RFC 5322 header block), present only when need_headers was set.
+	Headers []byte `protobuf:"bytes,2,opt,name=headers,proto3" json:"headers,omitempty"`
+	// Match results aligned with the request's body_terms / text_terms.
+	BodyMatches   []bool `protobuf:"varint,3,rep,packed,name=body_matches,json=bodyMatches,proto3" json:"body_matches,omitempty"`
+	TextMatches   []bool `protobuf:"varint,4,rep,packed,name=text_matches,json=textMatches,proto3" json:"text_matches,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SearchContentResult) Reset() {
+	*x = SearchContentResult{}
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchContentResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchContentResult) ProtoMessage() {}
+
+func (x *SearchContentResult) ProtoReflect() protoreflect.Message {
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchContentResult.ProtoReflect.Descriptor instead.
+func (*SearchContentResult) Descriptor() ([]byte, []int) {
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SearchContentResult) GetUid() uint32 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *SearchContentResult) GetHeaders() []byte {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+func (x *SearchContentResult) GetBodyMatches() []bool {
+	if x != nil {
+		return x.BodyMatches
+	}
+	return nil
+}
+
+func (x *SearchContentResult) GetTextMatches() []bool {
+	if x != nil {
+		return x.TextMatches
+	}
+	return nil
+}
+
+type SearchContentResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Results       []*SearchContentResult `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SearchContentResponse) Reset() {
+	*x = SearchContentResponse{}
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchContentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchContentResponse) ProtoMessage() {}
+
+func (x *SearchContentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchContentResponse.ProtoReflect.Descriptor instead.
+func (*SearchContentResponse) Descriptor() ([]byte, []int) {
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SearchContentResponse) GetResults() []*SearchContentResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
 type AppendRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Payload:
@@ -484,7 +680,7 @@ type AppendRequest struct {
 
 func (x *AppendRequest) Reset() {
 	*x = AppendRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[9]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -496,7 +692,7 @@ func (x *AppendRequest) String() string {
 func (*AppendRequest) ProtoMessage() {}
 
 func (x *AppendRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[9]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -509,7 +705,7 @@ func (x *AppendRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendRequest.ProtoReflect.Descriptor instead.
 func (*AppendRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{9}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *AppendRequest) GetPayload() isAppendRequest_Payload {
@@ -567,7 +763,7 @@ type AppendMetadata struct {
 
 func (x *AppendMetadata) Reset() {
 	*x = AppendMetadata{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[10]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -579,7 +775,7 @@ func (x *AppendMetadata) String() string {
 func (*AppendMetadata) ProtoMessage() {}
 
 func (x *AppendMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[10]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -592,7 +788,7 @@ func (x *AppendMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendMetadata.ProtoReflect.Descriptor instead.
 func (*AppendMetadata) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{10}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AppendMetadata) GetFolder() string {
@@ -626,7 +822,7 @@ type AppendResponse struct {
 
 func (x *AppendResponse) Reset() {
 	*x = AppendResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[11]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -638,7 +834,7 @@ func (x *AppendResponse) String() string {
 func (*AppendResponse) ProtoMessage() {}
 
 func (x *AppendResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[11]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -651,7 +847,7 @@ func (x *AppendResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendResponse.ProtoReflect.Descriptor instead.
 func (*AppendResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{11}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *AppendResponse) GetUid() uint32 {
@@ -672,7 +868,7 @@ type CopyRequest struct {
 
 func (x *CopyRequest) Reset() {
 	*x = CopyRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[12]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -684,7 +880,7 @@ func (x *CopyRequest) String() string {
 func (*CopyRequest) ProtoMessage() {}
 
 func (x *CopyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[12]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -697,7 +893,7 @@ func (x *CopyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyRequest.ProtoReflect.Descriptor instead.
 func (*CopyRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{12}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CopyRequest) GetFolder() string {
@@ -730,7 +926,7 @@ type CopyResponse struct {
 
 func (x *CopyResponse) Reset() {
 	*x = CopyResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[13]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -742,7 +938,7 @@ func (x *CopyResponse) String() string {
 func (*CopyResponse) ProtoMessage() {}
 
 func (x *CopyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[13]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -755,7 +951,7 @@ func (x *CopyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CopyResponse.ProtoReflect.Descriptor instead.
 func (*CopyResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{13}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *CopyResponse) GetNewUid() uint32 {
@@ -776,7 +972,7 @@ type MoveRequest struct {
 
 func (x *MoveRequest) Reset() {
 	*x = MoveRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[14]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -788,7 +984,7 @@ func (x *MoveRequest) String() string {
 func (*MoveRequest) ProtoMessage() {}
 
 func (x *MoveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[14]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -801,7 +997,7 @@ func (x *MoveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveRequest.ProtoReflect.Descriptor instead.
 func (*MoveRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{14}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *MoveRequest) GetUid() uint32 {
@@ -834,7 +1030,7 @@ type MoveResponse struct {
 
 func (x *MoveResponse) Reset() {
 	*x = MoveResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[15]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -846,7 +1042,7 @@ func (x *MoveResponse) String() string {
 func (*MoveResponse) ProtoMessage() {}
 
 func (x *MoveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[15]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -859,7 +1055,7 @@ func (x *MoveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MoveResponse.ProtoReflect.Descriptor instead.
 func (*MoveResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{15}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *MoveResponse) GetNewUid() uint32 {
@@ -880,7 +1076,7 @@ type SetFlagsRequest struct {
 
 func (x *SetFlagsRequest) Reset() {
 	*x = SetFlagsRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[16]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -892,7 +1088,7 @@ func (x *SetFlagsRequest) String() string {
 func (*SetFlagsRequest) ProtoMessage() {}
 
 func (x *SetFlagsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[16]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -905,7 +1101,7 @@ func (x *SetFlagsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetFlagsRequest.ProtoReflect.Descriptor instead.
 func (*SetFlagsRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{16}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SetFlagsRequest) GetFolder() string {
@@ -937,7 +1133,7 @@ type SetFlagsResponse struct {
 
 func (x *SetFlagsResponse) Reset() {
 	*x = SetFlagsResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[17]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -949,7 +1145,7 @@ func (x *SetFlagsResponse) String() string {
 func (*SetFlagsResponse) ProtoMessage() {}
 
 func (x *SetFlagsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[17]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -962,7 +1158,7 @@ func (x *SetFlagsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetFlagsResponse.ProtoReflect.Descriptor instead.
 func (*SetFlagsResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{17}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{20}
 }
 
 type ExpungeRequest struct {
@@ -974,7 +1170,7 @@ type ExpungeRequest struct {
 
 func (x *ExpungeRequest) Reset() {
 	*x = ExpungeRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[18]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -986,7 +1182,7 @@ func (x *ExpungeRequest) String() string {
 func (*ExpungeRequest) ProtoMessage() {}
 
 func (x *ExpungeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[18]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -999,7 +1195,7 @@ func (x *ExpungeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExpungeRequest.ProtoReflect.Descriptor instead.
 func (*ExpungeRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{18}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ExpungeRequest) GetFolder() string {
@@ -1019,7 +1215,7 @@ type ExpungeResponse struct {
 
 func (x *ExpungeResponse) Reset() {
 	*x = ExpungeResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[19]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1031,7 +1227,7 @@ func (x *ExpungeResponse) String() string {
 func (*ExpungeResponse) ProtoMessage() {}
 
 func (x *ExpungeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[19]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1044,7 +1240,7 @@ func (x *ExpungeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExpungeResponse.ProtoReflect.Descriptor instead.
 func (*ExpungeResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{19}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ExpungeResponse) GetExpelledUids() []uint32 {
@@ -1063,7 +1259,7 @@ type RescanRequest struct {
 
 func (x *RescanRequest) Reset() {
 	*x = RescanRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[20]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1075,7 +1271,7 @@ func (x *RescanRequest) String() string {
 func (*RescanRequest) ProtoMessage() {}
 
 func (x *RescanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[20]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1088,7 +1284,7 @@ func (x *RescanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RescanRequest.ProtoReflect.Descriptor instead.
 func (*RescanRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{20}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RescanRequest) GetFolder() string {
@@ -1108,7 +1304,7 @@ type RescanResponse struct {
 
 func (x *RescanResponse) Reset() {
 	*x = RescanResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[21]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1120,7 +1316,7 @@ func (x *RescanResponse) String() string {
 func (*RescanResponse) ProtoMessage() {}
 
 func (x *RescanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[21]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1133,7 +1329,7 @@ func (x *RescanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RescanResponse.ProtoReflect.Descriptor instead.
 func (*RescanResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{21}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RescanResponse) GetNewMessages() []*MessageInfo {
@@ -1152,7 +1348,7 @@ type UIDValidityRequest struct {
 
 func (x *UIDValidityRequest) Reset() {
 	*x = UIDValidityRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[22]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1164,7 +1360,7 @@ func (x *UIDValidityRequest) String() string {
 func (*UIDValidityRequest) ProtoMessage() {}
 
 func (x *UIDValidityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[22]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1177,7 +1373,7 @@ func (x *UIDValidityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UIDValidityRequest.ProtoReflect.Descriptor instead.
 func (*UIDValidityRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{22}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *UIDValidityRequest) GetFolder() string {
@@ -1197,7 +1393,7 @@ type UIDValidityResponse struct {
 
 func (x *UIDValidityResponse) Reset() {
 	*x = UIDValidityResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[23]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1209,7 +1405,7 @@ func (x *UIDValidityResponse) String() string {
 func (*UIDValidityResponse) ProtoMessage() {}
 
 func (x *UIDValidityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[23]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1222,7 +1418,7 @@ func (x *UIDValidityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UIDValidityResponse.ProtoReflect.Descriptor instead.
 func (*UIDValidityResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{23}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *UIDValidityResponse) GetUidValidity() uint32 {
@@ -1248,7 +1444,7 @@ type DeleteRequest struct {
 
 func (x *DeleteRequest) Reset() {
 	*x = DeleteRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[24]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1260,7 +1456,7 @@ func (x *DeleteRequest) String() string {
 func (*DeleteRequest) ProtoMessage() {}
 
 func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[24]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1273,7 +1469,7 @@ func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{24}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *DeleteRequest) GetUid() uint32 {
@@ -1291,7 +1487,7 @@ type DeleteResponse struct {
 
 func (x *DeleteResponse) Reset() {
 	*x = DeleteResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[25]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1303,7 +1499,7 @@ func (x *DeleteResponse) String() string {
 func (*DeleteResponse) ProtoMessage() {}
 
 func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[25]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1316,7 +1512,7 @@ func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteResponse.ProtoReflect.Descriptor instead.
 func (*DeleteResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{25}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{28}
 }
 
 type UndeleteRequest struct {
@@ -1328,7 +1524,7 @@ type UndeleteRequest struct {
 
 func (x *UndeleteRequest) Reset() {
 	*x = UndeleteRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[26]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1340,7 +1536,7 @@ func (x *UndeleteRequest) String() string {
 func (*UndeleteRequest) ProtoMessage() {}
 
 func (x *UndeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[26]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1353,7 +1549,7 @@ func (x *UndeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UndeleteRequest.ProtoReflect.Descriptor instead.
 func (*UndeleteRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{26}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *UndeleteRequest) GetUid() uint32 {
@@ -1371,7 +1567,7 @@ type UndeleteResponse struct {
 
 func (x *UndeleteResponse) Reset() {
 	*x = UndeleteResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[27]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1383,7 +1579,7 @@ func (x *UndeleteResponse) String() string {
 func (*UndeleteResponse) ProtoMessage() {}
 
 func (x *UndeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[27]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1396,7 +1592,7 @@ func (x *UndeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UndeleteResponse.ProtoReflect.Descriptor instead.
 func (*UndeleteResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{27}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{30}
 }
 
 type CommitRequest struct {
@@ -1407,7 +1603,7 @@ type CommitRequest struct {
 
 func (x *CommitRequest) Reset() {
 	*x = CommitRequest{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[28]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1419,7 +1615,7 @@ func (x *CommitRequest) String() string {
 func (*CommitRequest) ProtoMessage() {}
 
 func (x *CommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[28]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1432,7 +1628,7 @@ func (x *CommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitRequest.ProtoReflect.Descriptor instead.
 func (*CommitRequest) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{28}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{31}
 }
 
 type CommitResponse struct {
@@ -1443,7 +1639,7 @@ type CommitResponse struct {
 
 func (x *CommitResponse) Reset() {
 	*x = CommitResponse{}
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[29]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1455,7 +1651,7 @@ func (x *CommitResponse) String() string {
 func (*CommitResponse) ProtoMessage() {}
 
 func (x *CommitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_mailbox_proto_msgTypes[29]
+	mi := &file_mailsession_v1_mailbox_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1468,7 +1664,7 @@ func (x *CommitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitResponse.ProtoReflect.Descriptor instead.
 func (*CommitResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{29}
+	return file_mailsession_v1_mailbox_proto_rawDescGZIP(), []int{32}
 }
 
 var File_mailsession_v1_mailbox_proto protoreflect.FileDescriptor
@@ -1501,7 +1697,22 @@ const file_mailsession_v1_mailbox_proto_rawDesc = "" +
 	"\n" +
 	"body_lines\x18\x03 \x01(\x05R\tbodyLines\"0\n" +
 	"\x14FetchHeadersResponse\x12\x18\n" +
-	"\aheaders\x18\x01 \x01(\fR\aheaders\"n\n" +
+	"\aheaders\x18\x01 \x01(\fR\aheaders\"\xa3\x01\n" +
+	"\x14SearchContentRequest\x12\x16\n" +
+	"\x06folder\x18\x01 \x01(\tR\x06folder\x12\x12\n" +
+	"\x04uids\x18\x02 \x03(\rR\x04uids\x12\x1d\n" +
+	"\n" +
+	"body_terms\x18\x03 \x03(\tR\tbodyTerms\x12\x1d\n" +
+	"\n" +
+	"text_terms\x18\x04 \x03(\tR\ttextTerms\x12!\n" +
+	"\fneed_headers\x18\x05 \x01(\bR\vneedHeaders\"\x87\x01\n" +
+	"\x13SearchContentResult\x12\x10\n" +
+	"\x03uid\x18\x01 \x01(\rR\x03uid\x12\x18\n" +
+	"\aheaders\x18\x02 \x01(\fR\aheaders\x12!\n" +
+	"\fbody_matches\x18\x03 \x03(\bR\vbodyMatches\x12!\n" +
+	"\ftext_matches\x18\x04 \x03(\bR\vtextMatches\"V\n" +
+	"\x15SearchContentResponse\x12=\n" +
+	"\aresults\x18\x01 \x03(\v2#.mailsession.v1.SearchContentResultR\aresults\"n\n" +
 	"\rAppendRequest\x12<\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x1e.mailsession.v1.AppendMetadataH\x00R\bmetadata\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +
@@ -1552,12 +1763,13 @@ const file_mailsession_v1_mailbox_proto_rawDesc = "" +
 	"\x03uid\x18\x01 \x01(\rR\x03uid\"\x12\n" +
 	"\x10UndeleteResponse\"\x0f\n" +
 	"\rCommitRequest\"\x10\n" +
-	"\x0eCommitResponse2\xa7\b\n" +
+	"\x0eCommitResponse2\x85\t\n" +
 	"\x0eMailboxService\x12A\n" +
 	"\x04List\x12\x1b.mailsession.v1.ListRequest\x1a\x1c.mailsession.v1.ListResponse\x12A\n" +
 	"\x04Stat\x12\x1b.mailsession.v1.StatRequest\x1a\x1c.mailsession.v1.StatResponse\x12F\n" +
 	"\x05Fetch\x12\x1c.mailsession.v1.FetchRequest\x1a\x1d.mailsession.v1.FetchResponse0\x01\x12Y\n" +
-	"\fFetchHeaders\x12#.mailsession.v1.FetchHeadersRequest\x1a$.mailsession.v1.FetchHeadersResponse\x12I\n" +
+	"\fFetchHeaders\x12#.mailsession.v1.FetchHeadersRequest\x1a$.mailsession.v1.FetchHeadersResponse\x12\\\n" +
+	"\rSearchContent\x12$.mailsession.v1.SearchContentRequest\x1a%.mailsession.v1.SearchContentResponse\x12I\n" +
 	"\x06Append\x12\x1d.mailsession.v1.AppendRequest\x1a\x1e.mailsession.v1.AppendResponse(\x01\x12A\n" +
 	"\x04Copy\x12\x1b.mailsession.v1.CopyRequest\x1a\x1c.mailsession.v1.CopyResponse\x12A\n" +
 	"\x04Move\x12\x1b.mailsession.v1.MoveRequest\x1a\x1c.mailsession.v1.MoveResponse\x12M\n" +
@@ -1581,76 +1793,82 @@ func file_mailsession_v1_mailbox_proto_rawDescGZIP() []byte {
 	return file_mailsession_v1_mailbox_proto_rawDescData
 }
 
-var file_mailsession_v1_mailbox_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
+var file_mailsession_v1_mailbox_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_mailsession_v1_mailbox_proto_goTypes = []any{
-	(*MessageInfo)(nil),          // 0: mailsession.v1.MessageInfo
-	(*ListRequest)(nil),          // 1: mailsession.v1.ListRequest
-	(*ListResponse)(nil),         // 2: mailsession.v1.ListResponse
-	(*StatRequest)(nil),          // 3: mailsession.v1.StatRequest
-	(*StatResponse)(nil),         // 4: mailsession.v1.StatResponse
-	(*FetchRequest)(nil),         // 5: mailsession.v1.FetchRequest
-	(*FetchResponse)(nil),        // 6: mailsession.v1.FetchResponse
-	(*FetchHeadersRequest)(nil),  // 7: mailsession.v1.FetchHeadersRequest
-	(*FetchHeadersResponse)(nil), // 8: mailsession.v1.FetchHeadersResponse
-	(*AppendRequest)(nil),        // 9: mailsession.v1.AppendRequest
-	(*AppendMetadata)(nil),       // 10: mailsession.v1.AppendMetadata
-	(*AppendResponse)(nil),       // 11: mailsession.v1.AppendResponse
-	(*CopyRequest)(nil),          // 12: mailsession.v1.CopyRequest
-	(*CopyResponse)(nil),         // 13: mailsession.v1.CopyResponse
-	(*MoveRequest)(nil),          // 14: mailsession.v1.MoveRequest
-	(*MoveResponse)(nil),         // 15: mailsession.v1.MoveResponse
-	(*SetFlagsRequest)(nil),      // 16: mailsession.v1.SetFlagsRequest
-	(*SetFlagsResponse)(nil),     // 17: mailsession.v1.SetFlagsResponse
-	(*ExpungeRequest)(nil),       // 18: mailsession.v1.ExpungeRequest
-	(*ExpungeResponse)(nil),      // 19: mailsession.v1.ExpungeResponse
-	(*RescanRequest)(nil),        // 20: mailsession.v1.RescanRequest
-	(*RescanResponse)(nil),       // 21: mailsession.v1.RescanResponse
-	(*UIDValidityRequest)(nil),   // 22: mailsession.v1.UIDValidityRequest
-	(*UIDValidityResponse)(nil),  // 23: mailsession.v1.UIDValidityResponse
-	(*DeleteRequest)(nil),        // 24: mailsession.v1.DeleteRequest
-	(*DeleteResponse)(nil),       // 25: mailsession.v1.DeleteResponse
-	(*UndeleteRequest)(nil),      // 26: mailsession.v1.UndeleteRequest
-	(*UndeleteResponse)(nil),     // 27: mailsession.v1.UndeleteResponse
-	(*CommitRequest)(nil),        // 28: mailsession.v1.CommitRequest
-	(*CommitResponse)(nil),       // 29: mailsession.v1.CommitResponse
+	(*MessageInfo)(nil),           // 0: mailsession.v1.MessageInfo
+	(*ListRequest)(nil),           // 1: mailsession.v1.ListRequest
+	(*ListResponse)(nil),          // 2: mailsession.v1.ListResponse
+	(*StatRequest)(nil),           // 3: mailsession.v1.StatRequest
+	(*StatResponse)(nil),          // 4: mailsession.v1.StatResponse
+	(*FetchRequest)(nil),          // 5: mailsession.v1.FetchRequest
+	(*FetchResponse)(nil),         // 6: mailsession.v1.FetchResponse
+	(*FetchHeadersRequest)(nil),   // 7: mailsession.v1.FetchHeadersRequest
+	(*FetchHeadersResponse)(nil),  // 8: mailsession.v1.FetchHeadersResponse
+	(*SearchContentRequest)(nil),  // 9: mailsession.v1.SearchContentRequest
+	(*SearchContentResult)(nil),   // 10: mailsession.v1.SearchContentResult
+	(*SearchContentResponse)(nil), // 11: mailsession.v1.SearchContentResponse
+	(*AppendRequest)(nil),         // 12: mailsession.v1.AppendRequest
+	(*AppendMetadata)(nil),        // 13: mailsession.v1.AppendMetadata
+	(*AppendResponse)(nil),        // 14: mailsession.v1.AppendResponse
+	(*CopyRequest)(nil),           // 15: mailsession.v1.CopyRequest
+	(*CopyResponse)(nil),          // 16: mailsession.v1.CopyResponse
+	(*MoveRequest)(nil),           // 17: mailsession.v1.MoveRequest
+	(*MoveResponse)(nil),          // 18: mailsession.v1.MoveResponse
+	(*SetFlagsRequest)(nil),       // 19: mailsession.v1.SetFlagsRequest
+	(*SetFlagsResponse)(nil),      // 20: mailsession.v1.SetFlagsResponse
+	(*ExpungeRequest)(nil),        // 21: mailsession.v1.ExpungeRequest
+	(*ExpungeResponse)(nil),       // 22: mailsession.v1.ExpungeResponse
+	(*RescanRequest)(nil),         // 23: mailsession.v1.RescanRequest
+	(*RescanResponse)(nil),        // 24: mailsession.v1.RescanResponse
+	(*UIDValidityRequest)(nil),    // 25: mailsession.v1.UIDValidityRequest
+	(*UIDValidityResponse)(nil),   // 26: mailsession.v1.UIDValidityResponse
+	(*DeleteRequest)(nil),         // 27: mailsession.v1.DeleteRequest
+	(*DeleteResponse)(nil),        // 28: mailsession.v1.DeleteResponse
+	(*UndeleteRequest)(nil),       // 29: mailsession.v1.UndeleteRequest
+	(*UndeleteResponse)(nil),      // 30: mailsession.v1.UndeleteResponse
+	(*CommitRequest)(nil),         // 31: mailsession.v1.CommitRequest
+	(*CommitResponse)(nil),        // 32: mailsession.v1.CommitResponse
 }
 var file_mailsession_v1_mailbox_proto_depIdxs = []int32{
 	0,  // 0: mailsession.v1.ListResponse.messages:type_name -> mailsession.v1.MessageInfo
-	10, // 1: mailsession.v1.AppendRequest.metadata:type_name -> mailsession.v1.AppendMetadata
-	0,  // 2: mailsession.v1.RescanResponse.new_messages:type_name -> mailsession.v1.MessageInfo
-	1,  // 3: mailsession.v1.MailboxService.List:input_type -> mailsession.v1.ListRequest
-	3,  // 4: mailsession.v1.MailboxService.Stat:input_type -> mailsession.v1.StatRequest
-	5,  // 5: mailsession.v1.MailboxService.Fetch:input_type -> mailsession.v1.FetchRequest
-	7,  // 6: mailsession.v1.MailboxService.FetchHeaders:input_type -> mailsession.v1.FetchHeadersRequest
-	9,  // 7: mailsession.v1.MailboxService.Append:input_type -> mailsession.v1.AppendRequest
-	12, // 8: mailsession.v1.MailboxService.Copy:input_type -> mailsession.v1.CopyRequest
-	14, // 9: mailsession.v1.MailboxService.Move:input_type -> mailsession.v1.MoveRequest
-	16, // 10: mailsession.v1.MailboxService.SetFlags:input_type -> mailsession.v1.SetFlagsRequest
-	18, // 11: mailsession.v1.MailboxService.Expunge:input_type -> mailsession.v1.ExpungeRequest
-	20, // 12: mailsession.v1.MailboxService.Rescan:input_type -> mailsession.v1.RescanRequest
-	22, // 13: mailsession.v1.MailboxService.UIDValidity:input_type -> mailsession.v1.UIDValidityRequest
-	24, // 14: mailsession.v1.MailboxService.Delete:input_type -> mailsession.v1.DeleteRequest
-	26, // 15: mailsession.v1.MailboxService.Undelete:input_type -> mailsession.v1.UndeleteRequest
-	28, // 16: mailsession.v1.MailboxService.Commit:input_type -> mailsession.v1.CommitRequest
-	2,  // 17: mailsession.v1.MailboxService.List:output_type -> mailsession.v1.ListResponse
-	4,  // 18: mailsession.v1.MailboxService.Stat:output_type -> mailsession.v1.StatResponse
-	6,  // 19: mailsession.v1.MailboxService.Fetch:output_type -> mailsession.v1.FetchResponse
-	8,  // 20: mailsession.v1.MailboxService.FetchHeaders:output_type -> mailsession.v1.FetchHeadersResponse
-	11, // 21: mailsession.v1.MailboxService.Append:output_type -> mailsession.v1.AppendResponse
-	13, // 22: mailsession.v1.MailboxService.Copy:output_type -> mailsession.v1.CopyResponse
-	15, // 23: mailsession.v1.MailboxService.Move:output_type -> mailsession.v1.MoveResponse
-	17, // 24: mailsession.v1.MailboxService.SetFlags:output_type -> mailsession.v1.SetFlagsResponse
-	19, // 25: mailsession.v1.MailboxService.Expunge:output_type -> mailsession.v1.ExpungeResponse
-	21, // 26: mailsession.v1.MailboxService.Rescan:output_type -> mailsession.v1.RescanResponse
-	23, // 27: mailsession.v1.MailboxService.UIDValidity:output_type -> mailsession.v1.UIDValidityResponse
-	25, // 28: mailsession.v1.MailboxService.Delete:output_type -> mailsession.v1.DeleteResponse
-	27, // 29: mailsession.v1.MailboxService.Undelete:output_type -> mailsession.v1.UndeleteResponse
-	29, // 30: mailsession.v1.MailboxService.Commit:output_type -> mailsession.v1.CommitResponse
-	17, // [17:31] is the sub-list for method output_type
-	3,  // [3:17] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	10, // 1: mailsession.v1.SearchContentResponse.results:type_name -> mailsession.v1.SearchContentResult
+	13, // 2: mailsession.v1.AppendRequest.metadata:type_name -> mailsession.v1.AppendMetadata
+	0,  // 3: mailsession.v1.RescanResponse.new_messages:type_name -> mailsession.v1.MessageInfo
+	1,  // 4: mailsession.v1.MailboxService.List:input_type -> mailsession.v1.ListRequest
+	3,  // 5: mailsession.v1.MailboxService.Stat:input_type -> mailsession.v1.StatRequest
+	5,  // 6: mailsession.v1.MailboxService.Fetch:input_type -> mailsession.v1.FetchRequest
+	7,  // 7: mailsession.v1.MailboxService.FetchHeaders:input_type -> mailsession.v1.FetchHeadersRequest
+	9,  // 8: mailsession.v1.MailboxService.SearchContent:input_type -> mailsession.v1.SearchContentRequest
+	12, // 9: mailsession.v1.MailboxService.Append:input_type -> mailsession.v1.AppendRequest
+	15, // 10: mailsession.v1.MailboxService.Copy:input_type -> mailsession.v1.CopyRequest
+	17, // 11: mailsession.v1.MailboxService.Move:input_type -> mailsession.v1.MoveRequest
+	19, // 12: mailsession.v1.MailboxService.SetFlags:input_type -> mailsession.v1.SetFlagsRequest
+	21, // 13: mailsession.v1.MailboxService.Expunge:input_type -> mailsession.v1.ExpungeRequest
+	23, // 14: mailsession.v1.MailboxService.Rescan:input_type -> mailsession.v1.RescanRequest
+	25, // 15: mailsession.v1.MailboxService.UIDValidity:input_type -> mailsession.v1.UIDValidityRequest
+	27, // 16: mailsession.v1.MailboxService.Delete:input_type -> mailsession.v1.DeleteRequest
+	29, // 17: mailsession.v1.MailboxService.Undelete:input_type -> mailsession.v1.UndeleteRequest
+	31, // 18: mailsession.v1.MailboxService.Commit:input_type -> mailsession.v1.CommitRequest
+	2,  // 19: mailsession.v1.MailboxService.List:output_type -> mailsession.v1.ListResponse
+	4,  // 20: mailsession.v1.MailboxService.Stat:output_type -> mailsession.v1.StatResponse
+	6,  // 21: mailsession.v1.MailboxService.Fetch:output_type -> mailsession.v1.FetchResponse
+	8,  // 22: mailsession.v1.MailboxService.FetchHeaders:output_type -> mailsession.v1.FetchHeadersResponse
+	11, // 23: mailsession.v1.MailboxService.SearchContent:output_type -> mailsession.v1.SearchContentResponse
+	14, // 24: mailsession.v1.MailboxService.Append:output_type -> mailsession.v1.AppendResponse
+	16, // 25: mailsession.v1.MailboxService.Copy:output_type -> mailsession.v1.CopyResponse
+	18, // 26: mailsession.v1.MailboxService.Move:output_type -> mailsession.v1.MoveResponse
+	20, // 27: mailsession.v1.MailboxService.SetFlags:output_type -> mailsession.v1.SetFlagsResponse
+	22, // 28: mailsession.v1.MailboxService.Expunge:output_type -> mailsession.v1.ExpungeResponse
+	24, // 29: mailsession.v1.MailboxService.Rescan:output_type -> mailsession.v1.RescanResponse
+	26, // 30: mailsession.v1.MailboxService.UIDValidity:output_type -> mailsession.v1.UIDValidityResponse
+	28, // 31: mailsession.v1.MailboxService.Delete:output_type -> mailsession.v1.DeleteResponse
+	30, // 32: mailsession.v1.MailboxService.Undelete:output_type -> mailsession.v1.UndeleteResponse
+	32, // 33: mailsession.v1.MailboxService.Commit:output_type -> mailsession.v1.CommitResponse
+	19, // [19:34] is the sub-list for method output_type
+	4,  // [4:19] is the sub-list for method input_type
+	4,  // [4:4] is the sub-list for extension type_name
+	4,  // [4:4] is the sub-list for extension extendee
+	0,  // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_mailsession_v1_mailbox_proto_init() }
@@ -1658,7 +1876,7 @@ func file_mailsession_v1_mailbox_proto_init() {
 	if File_mailsession_v1_mailbox_proto != nil {
 		return
 	}
-	file_mailsession_v1_mailbox_proto_msgTypes[9].OneofWrappers = []any{
+	file_mailsession_v1_mailbox_proto_msgTypes[12].OneofWrappers = []any{
 		(*AppendRequest_Metadata)(nil),
 		(*AppendRequest_Data)(nil),
 	}
@@ -1668,7 +1886,7 @@ func file_mailsession_v1_mailbox_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mailsession_v1_mailbox_proto_rawDesc), len(file_mailsession_v1_mailbox_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   30,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

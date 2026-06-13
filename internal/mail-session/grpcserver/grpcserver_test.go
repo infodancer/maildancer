@@ -1,6 +1,7 @@
 package grpcserver_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -290,5 +291,76 @@ func TestMailboxService_Rescan(t *testing.T) {
 	}
 	if len(rescanResp.GetNewMessages()) != 0 {
 		t.Errorf("expected 0 new messages, got %d", len(rescanResp.GetNewMessages()))
+	}
+}
+
+func TestMailboxService_SearchContent(t *testing.T) {
+	sock, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	conn := dialTest(t, sock)
+	client := pb.NewMailboxServiceClient(conn)
+	ctx := context.Background()
+
+	appendMsg := func(subject, body string) uint32 {
+		t.Helper()
+		stream, err := client.Append(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := stream.Send(&pb.AppendRequest{Payload: &pb.AppendRequest_Metadata{
+			Metadata: &pb.AppendMetadata{Folder: "INBOX", Date: time.Now().Format(time.RFC3339)},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		msg := []byte("From: alice@example.com\r\nSubject: " + subject + "\r\n\r\n" + body + "\r\n")
+		if err := stream.Send(&pb.AppendRequest{Payload: &pb.AppendRequest_Data{Data: msg}}); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := stream.CloseAndRecv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.GetUid()
+	}
+
+	u1 := appendMsg("Lunch plans", "Let's meet at noon.")
+	u2 := appendMsg("Project update", "The deploy is done.")
+
+	resp, err := client.SearchContent(ctx, &pb.SearchContentRequest{
+		Folder:      "INBOX",
+		BodyTerms:   []string{"noon"},  // body of u1 only
+		TextTerms:   []string{"lunch"}, // subject of u1 only
+		NeedHeaders: true,
+	})
+	if err != nil {
+		t.Fatalf("SearchContent: %v", err)
+	}
+	if len(resp.GetResults()) != 2 {
+		t.Fatalf("want 2 results, got %d", len(resp.GetResults()))
+	}
+
+	byUID := map[uint32]*pb.SearchContentResult{}
+	for _, r := range resp.GetResults() {
+		byUID[r.GetUid()] = r
+	}
+
+	if !byUID[u1].GetBodyMatches()[0] {
+		t.Error("u1 body should match 'noon'")
+	}
+	if byUID[u2].GetBodyMatches()[0] {
+		t.Error("u2 body should not match 'noon'")
+	}
+	if !byUID[u1].GetTextMatches()[0] {
+		t.Error("u1 text should match 'lunch' (subject)")
+	}
+	if byUID[u2].GetTextMatches()[0] {
+		t.Error("u2 text should not match 'lunch'")
+	}
+	if !bytes.Contains(byUID[u1].GetHeaders(), []byte("Subject: Lunch plans")) {
+		t.Errorf("u1 headers missing subject: %q", byUID[u1].GetHeaders())
+	}
+	if bytes.Contains(byUID[u1].GetHeaders(), []byte("noon")) {
+		t.Error("header block must not include the body")
 	}
 }

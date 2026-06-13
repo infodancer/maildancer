@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
+	"github.com/infodancer/maildancer/msgstore"
 )
 
 // MailboxServer implements the MailboxService gRPC service.
@@ -125,6 +126,52 @@ func (m *MailboxServer) FetchHeaders(ctx context.Context, req *pb.FetchHeadersRe
 
 	headers := extractHeaders(data, int(req.GetBodyLines()))
 	return &pb.FetchHeadersResponse{Headers: headers}, nil
+}
+
+// SearchContent evaluates content predicates against messages in a folder,
+// returning header bytes and per-term match booleans. The message bodies are
+// read (and decrypted) here so they never cross the proxy to the caller --
+// imapd composes its SEARCH semantics from the returned match data.
+func (m *MailboxServer) SearchContent(ctx context.Context, req *pb.SearchContentRequest) (*pb.SearchContentResponse, error) {
+	m.srv.mu.Lock()
+	defer m.srv.mu.Unlock()
+
+	folder := req.GetFolder()
+	if folder == "" {
+		folder = "INBOX"
+	}
+	if _, err := m.srv.sess.Select(ctx, folder); err != nil {
+		return nil, status.Errorf(codes.Internal, "select %q: %v", folder, err)
+	}
+
+	uids := req.GetUids()
+	if len(uids) == 0 {
+		for _, info := range m.srv.sess.List() {
+			uids = append(uids, info.UID)
+		}
+	}
+
+	resp := &pb.SearchContentResponse{Results: make([]*pb.SearchContentResult, 0, len(uids))}
+	for _, uid := range uids {
+		rc, err := m.srv.sess.Retrieve(ctx, uid)
+		if err != nil {
+			// Could not retrieve; omit (caller treats a missing UID as no match).
+			continue
+		}
+		data, err := io.ReadAll(rc)
+		_ = rc.Close()
+		if err != nil {
+			continue
+		}
+		match := msgstore.MatchMessageContent(data, uid, req.GetBodyTerms(), req.GetTextTerms(), req.GetNeedHeaders())
+		resp.Results = append(resp.Results, &pb.SearchContentResult{
+			Uid:         match.UID,
+			Headers:     match.Headers,
+			BodyMatches: match.BodyMatches,
+			TextMatches: match.TextMatches,
+		})
+	}
+	return resp, nil
 }
 
 func (m *MailboxServer) Append(stream pb.MailboxService_AppendServer) error {

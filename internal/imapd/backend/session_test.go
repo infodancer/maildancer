@@ -591,3 +591,109 @@ func TestSubscribe_Unsubscribe(t *testing.T) {
 		t.Errorf("Unsubscribe failed: %v", err)
 	}
 }
+
+// fullMsg builds a minimal RFC822 message for content-search tests.
+func fullMsg(from, subject, body string) string {
+	return "From: " + from + "\r\nTo: bob@example.com\r\nSubject: " + subject +
+		"\r\nDate: Wed, 10 Jun 2026 09:00:00 +0000\r\n\r\n" + body + "\r\n"
+}
+
+func searchUIDs(t *testing.T, s *Session, criteria *imap.SearchCriteria) []imap.UID {
+	t.Helper()
+	res, err := s.Search(imapserver.NumKindUID, criteria, nil)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	set, ok := res.All.(imap.UIDSet)
+	if !ok {
+		return nil
+	}
+	nums, _ := set.Nums()
+	return nums
+}
+
+func newContentSession(t *testing.T) *Session {
+	t.Helper()
+	store := newMockStore()
+	store.addInboxMessage("testuser@example.com", nil, fullMsg("alice@example.com", "Lunch plans", "Let's meet at noon."))
+	store.addInboxMessage("testuser@example.com", nil, fullMsg("carol@example.com", "Project update", "The noon deploy is done."))
+	s := newTestSession(t, store)
+	if _, err := s.Select("INBOX", nil); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestSearch_Header(t *testing.T) {
+	s := newContentSession(t)
+	got := searchUIDs(t, s, &imap.SearchCriteria{
+		Header: []imap.SearchCriteriaHeaderField{{Key: "From", Value: "alice"}},
+	})
+	if len(got) != 1 || got[0] != 1 {
+		t.Errorf("HEADER From alice: want [1], got %v", got)
+	}
+}
+
+func TestSearch_Body(t *testing.T) {
+	s := newContentSession(t)
+	// "noon" is in both bodies.
+	if got := searchUIDs(t, s, &imap.SearchCriteria{Body: []string{"noon"}}); len(got) != 2 {
+		t.Errorf("BODY noon: want 2 matches, got %v", got)
+	}
+	// "lunch" is only in a Subject header, never in a body -> BODY must not match.
+	if got := searchUIDs(t, s, &imap.SearchCriteria{Body: []string{"lunch"}}); len(got) != 0 {
+		t.Errorf("BODY lunch: want 0 (header-only term), got %v", got)
+	}
+}
+
+func TestSearch_Text(t *testing.T) {
+	s := newContentSession(t)
+	// TEXT searches the whole message, so a Subject-only term matches.
+	got := searchUIDs(t, s, &imap.SearchCriteria{Text: []string{"lunch"}})
+	if len(got) != 1 || got[0] != 1 {
+		t.Errorf("TEXT lunch: want [1], got %v", got)
+	}
+}
+
+func TestSearch_OrContent(t *testing.T) {
+	s := newContentSession(t)
+	// (FROM alice) OR (BODY deploy) -> message 1 via from, message 2 via body.
+	got := searchUIDs(t, s, &imap.SearchCriteria{
+		Or: [][2]imap.SearchCriteria{{
+			{Header: []imap.SearchCriteriaHeaderField{{Key: "From", Value: "alice"}}},
+			{Body: []string{"deploy"}},
+		}},
+	})
+	if len(got) != 2 {
+		t.Errorf("OR: want both messages, got %v", got)
+	}
+}
+
+func TestSearch_NotContent(t *testing.T) {
+	s := newContentSession(t)
+	// NOT (BODY deploy) -> excludes message 2, keeps message 1.
+	got := searchUIDs(t, s, &imap.SearchCriteria{
+		Not: []imap.SearchCriteria{{Body: []string{"deploy"}}},
+	})
+	if len(got) != 1 || got[0] != 1 {
+		t.Errorf("NOT body deploy: want [1], got %v", got)
+	}
+}
+
+func TestSearch_ContentAndFlag(t *testing.T) {
+	store := newMockStore()
+	store.addInboxMessage("testuser@example.com", []string{"\\Seen"}, fullMsg("alice@example.com", "Lunch", "noon meet"))
+	store.addInboxMessage("testuser@example.com", nil, fullMsg("alice@example.com", "Dinner", "noon meet"))
+	s := newTestSession(t, store)
+	if _, err := s.Select("INBOX", nil); err != nil {
+		t.Fatal(err)
+	}
+	// BODY noon AND unseen -> only message 2.
+	got := searchUIDs(t, s, &imap.SearchCriteria{
+		Body:    []string{"noon"},
+		NotFlag: []imap.Flag{imap.FlagSeen},
+	})
+	if len(got) != 1 || got[0] != 2 {
+		t.Errorf("BODY+flag: want [2], got %v", got)
+	}
+}

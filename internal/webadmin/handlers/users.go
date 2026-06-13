@@ -176,7 +176,8 @@ func (h *UserHandler) HandleResetPassword(w http.ResponseWriter, r *http.Request
 	}
 
 	var req struct {
-		Password string `json:"password"`
+		Password       string `json:"password"`
+		RegenerateKeys bool   `json:"regenerate_keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -190,8 +191,39 @@ func (h *UserHandler) HandleResetPassword(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// An admin reset cannot re-seal a user's encryption key (the current
+	// password is unknown). Keyed users therefore require the explicit
+	// regenerate_keys confirmation: the keypair is replaced and previously
+	// encrypted mail becomes unreadable.
+	if req.RegenerateKeys {
+		fingerprint, err := h.ops.ResetPasswordRegenKeys(domain, username, req.Password)
+		if err != nil {
+			switch {
+			case errors.Is(err, admin.ErrDomainNotFound), errors.Is(err, admin.ErrUserNotFound):
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
+			default:
+				h.logger.Error("failed to update password", "user", username, "domain", domain, "error", err)
+				h.logAudit(r, "reset_password", username+"@"+domain, "failure", err.Error())
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to update password"})
+			}
+			return
+		}
+		h.logAudit(r, "reset_password_regen_keys", username+"@"+domain, "success", "fingerprint="+fingerprint)
+		resp := map[string]string{"username": username, "status": "password_updated"}
+		if fingerprint != "" {
+			resp["warning"] = "encryption keypair regenerated; previously encrypted mail is no longer readable"
+			resp["fingerprint"] = fingerprint
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
 	if err := h.ops.ResetPassword(domain, username, req.Password); err != nil {
 		switch {
+		case errors.Is(err, admin.ErrUserHasKeys):
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": "user has encryption keys: resetting the password requires regenerating them (previously encrypted mail becomes unreadable); confirm with regenerate_keys",
+			})
 		case errors.Is(err, admin.ErrDomainNotFound), errors.Is(err, admin.ErrUserNotFound):
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "user not found"})
 		default:

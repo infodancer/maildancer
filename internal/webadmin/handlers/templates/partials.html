@@ -99,6 +99,10 @@
           <button type="submit" style="margin-bottom:0">Reset</button>
           <button type="button" class="secondary" style="margin-bottom:0" onclick="this.closest('tr').remove()">Cancel</button>
         </div>
+        <label>
+          <input type="checkbox" name="regenerate_keys" value="true">
+          Regenerate encryption keys (required for users with keys; previously encrypted mail becomes unreadable)
+        </label>
       </form>
     </article>
   </td>

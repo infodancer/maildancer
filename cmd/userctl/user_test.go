@@ -113,3 +113,46 @@ func TestRunMigrateSubcommand(t *testing.T) {
 		t.Error("migrate bogus succeeded, want error")
 	}
 }
+
+// TestRunUserSubcommand_PasswdWithKeys covers the password flows for a user
+// with encryption keys: the default flow re-seals (two stdin lines: current,
+// new), a bare reset is refused, and --reset regenerates the keypair.
+func TestRunUserSubcommand_PasswdWithKeys(t *testing.T) {
+	p := testPaths(t)
+	if err := runDomainSubcommand([]string{"create", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runUserSubcommand([]string{"add", "alice@example.com", "--gen-keys", "--password-stdin"}, p, strings.NewReader("password123\n")); err != nil {
+		t.Fatalf("user add --gen-keys: %v", err)
+	}
+	before, err := p.UserKeyStatus("example.com", "alice")
+	if err != nil || !before.Exists || !before.HasPrivate {
+		t.Fatalf("keys not provisioned: %+v, %v", before, err)
+	}
+
+	// Re-seal flow: --password-stdin supplies current then new.
+	if err := runUserSubcommand([]string{"passwd", "alice@example.com", "--password-stdin"}, p, strings.NewReader("password123\nnewpassword1\n")); err != nil {
+		t.Fatalf("user passwd (re-seal): %v", err)
+	}
+	after, _ := p.UserKeyStatus("example.com", "alice")
+	if after.Fingerprint != before.Fingerprint {
+		t.Errorf("re-seal must preserve the keypair: fingerprint %s -> %s", before.Fingerprint, after.Fingerprint)
+	}
+
+	// Wrong current password is refused.
+	if err := runUserSubcommand([]string{"passwd", "alice@example.com", "--password-stdin"}, p, strings.NewReader("wrongpass99\nanotherpass1\n")); err == nil {
+		t.Error("re-seal with wrong current password must fail")
+	}
+
+	// Admin reset regenerates the keypair.
+	if err := runUserSubcommand([]string{"passwd", "alice@example.com", "--reset", "--password-stdin"}, p, strings.NewReader("resetpassword1\n")); err != nil {
+		t.Fatalf("user passwd --reset: %v", err)
+	}
+	regen, _ := p.UserKeyStatus("example.com", "alice")
+	if !regen.Exists || !regen.HasPrivate {
+		t.Fatal("keys missing after --reset")
+	}
+	if regen.Fingerprint == after.Fingerprint {
+		t.Error("--reset must regenerate the keypair, not reuse it")
+	}
+}

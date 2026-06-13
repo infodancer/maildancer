@@ -282,7 +282,7 @@ func usage() {
     userctl user add    <user@domain> [--gen-keys] [--password-stdin]
     userctl user del    <user@domain>
     userctl user list   <domain>
-    userctl user passwd <user@domain> [--password-stdin]
+    userctl user passwd <user@domain> [--reset] [--password-stdin]
     userctl user verify <user@domain>
     userctl user key    show|create|del <user@domain> [--password-stdin]
     (add/del/list/verify also work without the "user" prefix)

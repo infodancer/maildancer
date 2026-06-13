@@ -8,23 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/nacl/box"
-	"golang.org/x/crypto/nacl/secretbox"
-)
 
-const (
-	argon2Time    = 3
-	argon2Memory  = 64 * 1024
-	argon2Threads = 4
-	argon2KeyLen  = 32
-	saltSize      = 32
-	nonceSize     = 24
+	"github.com/infodancer/maildancer/auth/keyseal"
 )
 
 // GenerateKeypair generates a NaCl X25519 keypair and returns (pubKey, encryptedPrivKey, error).
-// The private key is encrypted with the password using argon2id key derivation + NaCl secretbox.
-// Format: salt(32B) || nonce(24B) || secretbox.Seal(privkey)
+// The private key is sealed under the password via auth/keyseal.
 func GenerateKeypair(password string) (pubKey, encryptedPrivKey []byte, err error) {
 	pub, priv, err := box.GenerateKey(rand.Reader)
 	if err != nil {
@@ -38,33 +28,11 @@ func GenerateKeypair(password string) (pubKey, encryptedPrivKey []byte, err erro
 	return pub[:], encPriv, nil
 }
 
-// EncryptPrivateKey seals a private key under a password.
-// Format: salt(32B) || nonce(24B) || secretbox.Seal(privkey) -- the same
-// layout auth/passwd reads at authentication time (pinned by the round-trip
-// test in internal/admin).
+// EncryptPrivateKey seals a private key under a password. The KDF and blob
+// layout are owned by auth/keyseal, the single source of truth shared with
+// auth/passwd's unseal path.
 func EncryptPrivateKey(privKey []byte, password string) ([]byte, error) {
-	salt := make([]byte, saltSize)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, fmt.Errorf("generate salt: %w", err)
-	}
-
-	var nonce [nonceSize]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return nil, fmt.Errorf("generate nonce: %w", err)
-	}
-
-	var key [32]byte
-	derived := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
-	copy(key[:], derived)
-
-	encrypted := secretbox.Seal(nil, privKey, &nonce, &key)
-
-	encPriv := make([]byte, 0, saltSize+nonceSize+len(encrypted))
-	encPriv = append(encPriv, salt...)
-	encPriv = append(encPriv, nonce[:]...)
-	encPriv = append(encPriv, encrypted...)
-
-	return encPriv, nil
+	return keyseal.Seal(privKey, password)
 }
 
 // SaveKeypair writes pubKey to dir/name.pub and encryptedPrivKey to dir/name.key.

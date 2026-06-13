@@ -2,20 +2,17 @@ package passwd
 
 import (
 	"bytes"
-	"crypto/rand"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/nacl/secretbox"
-
 	"github.com/infodancer/maildancer/auth/errors"
+	"github.com/infodancer/maildancer/auth/keyseal"
 )
 
-// writeKeyFiles writes a .pub file (pubKeyBytes) and an encrypted .key file
-// for username into keyDir, sealing plaintextPriv under password using the
-// same format as decryptPrivateKey: salt[saltSize] || nonce[nonceSize] || ciphertext.
+// writeKeyFiles writes a .pub file (pubKeyBytes) and a sealed .key file for
+// username into keyDir, sealing plaintextPriv under password via auth/keyseal
+// (the same path decryptPrivateKey unseals through).
 // To exercise the decrypt-failure branch, seal under a password other than the
 // user's login password -- the resulting blob will fail to decrypt.
 func writeKeyFiles(t *testing.T, keyDir, username, password string, pubKeyBytes, plaintextPriv []byte) {
@@ -27,27 +24,13 @@ func writeKeyFiles(t *testing.T, keyDir, username, password string, pubKeyBytes,
 		t.Fatalf("writeKeyFiles: write .pub: %v", err)
 	}
 
-	// Build encrypted .key: salt || nonce || secretbox.Seal(plaintext)
-	salt := make([]byte, saltSize)
-	if _, err := rand.Read(salt); err != nil {
-		t.Fatalf("writeKeyFiles: rand salt: %v", err)
+	// Seal the .key under the given password via the shared keyseal path.
+	// Passing a password other than the user's login password yields a blob
+	// that will fail to decrypt -- exercised by the hard-fail tests.
+	blob, err := keyseal.Seal(plaintextPriv, password)
+	if err != nil {
+		t.Fatalf("writeKeyFiles: seal: %v", err)
 	}
-
-	var nonce [nonceSize]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		t.Fatalf("writeKeyFiles: rand nonce: %v", err)
-	}
-
-	var key [32]byte
-	derived := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
-	copy(key[:], derived)
-
-	ciphertext := secretbox.Seal(nil, plaintextPriv, &nonce, &key)
-
-	blob := make([]byte, 0, saltSize+nonceSize+len(ciphertext))
-	blob = append(blob, salt...)
-	blob = append(blob, nonce[:]...)
-	blob = append(blob, ciphertext...)
 
 	privPath := filepath.Join(keyDir, username+privateKeyExt)
 	if err := os.WriteFile(privPath, blob, 0o640); err != nil {

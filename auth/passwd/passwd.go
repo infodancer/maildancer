@@ -14,10 +14,10 @@ import (
 	"sync"
 
 	"golang.org/x/crypto/argon2"
-	"golang.org/x/crypto/nacl/secretbox"
 
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/auth/errors"
+	"github.com/infodancer/maildancer/auth/keyseal"
 )
 
 const (
@@ -25,11 +25,10 @@ const (
 	privateKeyExt = ".key"
 	publicKeyExt  = ".pub"
 
-	// Encrypted key file format: salt (32B) || nonce (24B) || ciphertext
-	saltSize  = 32
-	nonceSize = 24
-
-	// Argon2id parameters for key derivation
+	// Argon2id parameters for password hashing (HashPassword / verify). The
+	// private-key seal KDF and blob layout live in auth/keyseal, the single
+	// source of truth shared with the key-generation producer.
+	saltSize      = 32
 	argon2Time    = 3
 	argon2Memory  = 64 * 1024 // 64 MB
 	argon2Threads = 4
@@ -317,28 +316,10 @@ func (a *Agent) loadKeys(username, password string) (publicKey, privateKey []byt
 	return publicKey, privateKey, nil
 }
 
-// decryptPrivateKey decrypts a private key using the user's password.
-// File format: salt (32B) || nonce (24B) || ciphertext
+// decryptPrivateKey unseals a private key using the user's password. The KDF
+// and blob layout are owned by auth/keyseal, the single source of truth shared
+// with the key-generation producer; Open returns the same auth/errors
+// sentinels this path returned before.
 func decryptPrivateKey(encryptedKey []byte, password string) ([]byte, error) {
-	if len(encryptedKey) < saltSize+nonceSize+secretbox.Overhead {
-		return nil, errors.ErrInvalidKeyFormat
-	}
-
-	salt := encryptedKey[:saltSize]
-	var nonce [nonceSize]byte
-	copy(nonce[:], encryptedKey[saltSize:saltSize+nonceSize])
-	ciphertext := encryptedKey[saltSize+nonceSize:]
-
-	// Derive key from password
-	var key [32]byte
-	derivedKey := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
-	copy(key[:], derivedKey)
-
-	// Decrypt using NaCl secretbox
-	plaintext, ok := secretbox.Open(nil, ciphertext, &nonce, &key)
-	if !ok {
-		return nil, errors.ErrKeyDecryptFailed
-	}
-
-	return plaintext, nil
+	return keyseal.Open(encryptedKey, password)
 }

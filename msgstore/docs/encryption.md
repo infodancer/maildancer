@@ -276,19 +276,41 @@ Argon2id provides defense against:
 10. On QUIT: Session key cleared from memory
 ```
 
-## Configuration
+## Activation and Per-Domain Mode
 
-### smtpd (encryption)
+At-rest encryption is **activated by recipient key presence**, not a global
+switch. The delivery pipeline (`internal/mail-session/deliver/encrypt.go`,
+stage 3.5) encrypts a message iff the recipient has a public key on file; a
+recipient with no key receives plaintext. Encryption happens in mail-session
+after Sieve evaluation and before any write, so every delivery path -- inbox
+keep, Sieve `fileinto`, redirect `:copy` -- stores the same ciphertext. (The
+older "smtpd encrypts / pop3d decrypts" framing above is historical: the
+protocol daemons hold no keys and no store access; encryption and decryption
+both happen in mail-session, reached over gRPC.)
+
+**Fail-closed:** a recipient who *has* a key whose bytes are unreadable or not
+a valid 32-byte key causes a temporary delivery failure -- never a silent
+plaintext write. A recipient with no key is the plaintext case, not a failure.
+
+Per domain, `encryption_mode` in the domain `config.toml` controls **key
+provisioning**, which is what activates encryption for new users:
 
 ```toml
-[encryption]
-enabled = true
-key_backend_type = "passwd"
-key_backend = "/etc/mail/keys"
-credential_backend = "/etc/mail/passwd"
+# Domain config.toml
+encryption_mode = "on"   # "off" (default) | "on"
 ```
 
-### pop3d (authentication)
+- `off` (default): new users are not provisioned a keypair, so their mail is
+  stored as plaintext.
+- `on`: `userctl user add` (and the webadmin user-create path) generate an
+  X25519 keypair for each new user, so their mail is encrypted at rest.
+
+The mode governs provisioning only -- not the runtime gate -- so setting a
+domain back to `off` does not remove existing users' keys or downgrade their
+stored mail to plaintext. A future `escrow` mode (recoverable via an admin
+recovery key) is reserved but not yet implemented.
+
+### Retrieval (pop3d / imapd)
 
 ```toml
 [auth]
@@ -296,6 +318,11 @@ type = "passwd"
 credential_backend = "/etc/mail/passwd"
 key_backend = "/etc/mail/keys"
 ```
+
+On login, the auth backend unseals the user's private key with their password
+and session-manager passes it to the per-user mail-session over an inherited
+file descriptor (fd 3). mail-session wraps the store in a `DecryptingStore`
+that decrypts on retrieval; the key is zeroed and released at session end.
 
 ## Implementation Files
 

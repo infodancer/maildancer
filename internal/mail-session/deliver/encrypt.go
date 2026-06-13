@@ -2,31 +2,40 @@ package deliver
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/auth/domain"
+	autherrors "github.com/infodancer/maildancer/auth/errors"
 	"github.com/infodancer/maildancer/msgstore"
 )
 
-// maybeEncrypt applies at-rest encryption when the request carries an
-// encryption key hint. It runs after Sieve evaluation (which needs plaintext)
-// and before any write, so every delivery path -- inbox keep, Sieve fileinto,
+// maybeEncrypt applies at-rest encryption when the recipient has an encryption
+// key on file. It runs after Sieve evaluation (which needs plaintext) and
+// before any write, so every delivery path -- inbox keep, Sieve fileinto,
 // redirect :copy -- writes the same encrypted blob. This is the seam coverage
 // required by issue #53: encrypting here, rather than inside a DeliveryAgent
 // wrapper, makes bypassing the seam structurally impossible.
 //
-// Returns the bytes to write and the encryption metadata for the envelope.
-// With no hint, the message passes through unchanged (encryption is
-// request-driven; smtpd does not set the hint yet).
+// The gate is recipient key presence (issue #65): a recipient whose domain has
+// provisioned them a public key gets encrypted mail; one without a key gets
+// plaintext. Per-domain "encryption mode" governs whether new users are
+// provisioned a key at all -- not this runtime decision -- so a user with
+// existing encrypted mail keeps getting encryption regardless of any later
+// domain-policy change.
 //
-// Fail-closed: when encryption is requested but cannot be performed (no key
-// provider, no key on file, encryption failure), the delivery is temp-failed
-// rather than ever falling back to a plaintext write. A missing key under an
-// explicit encryption request is a configuration error the admin must fix;
-// the sending MTA holds and retries meanwhile.
+// Returns the bytes to write and the encryption metadata for the envelope.
+//
+// Fail-closed: when the recipient HAS a key but encryption cannot be performed
+// (key backend read error, corrupt key, encryption failure), the delivery is
+// temp-failed rather than ever falling back to a plaintext write. A recipient
+// with no key is not an error -- that is the unencrypted case.
 func (dlvr *Deliverer) maybeEncrypt(ctx context.Context, dom *domain.Domain, req DeliverRequest, msg []byte) ([]byte, *msgstore.EncryptionInfo, *DeliverResponse) {
-	if req.EncryptionKeyHint == "" {
+	kp, ok := dom.AuthAgent.(auth.KeyProvider)
+	if !ok {
+		// Domain provides no key backend at all: at-rest encryption is not
+		// available here. Plaintext, not an error.
 		return msg, nil, nil
 	}
 
@@ -45,18 +54,19 @@ func (dlvr *Deliverer) maybeEncrypt(ctx context.Context, dom *domain.Domain, req
 		}
 	}
 
-	kp, ok := dom.AuthAgent.(auth.KeyProvider)
-	if !ok {
-		return failClosed("encryption requested but domain auth agent provides no keys", nil)
-	}
-
-	// The key hint requests encryption; the key itself is looked up by the
-	// recipient's base localpart, matching the KeyProvider contract used
-	// elsewhere (key backend files are per-username).
+	// The key is looked up by the recipient's base localpart, matching the
+	// KeyProvider contract used elsewhere (key backend files are per-username).
 	localpart, _ := splitAddress(msgstore.ParseRecipient(req.Recipient).Address)
 	pubKey, err := kp.GetPublicKey(ctx, localpart)
 	if err != nil {
-		return failClosed("encryption requested but no public key for recipient", err)
+		if errors.Is(err, autherrors.ErrKeyNotFound) || errors.Is(err, autherrors.ErrUserNotFound) {
+			// No key on file: the recipient is not an encryption user.
+			// Deliver plaintext. This is the gate, not a failure.
+			return msg, nil, nil
+		}
+		// A key backend read failure for a recipient who may well have a key:
+		// fail closed rather than risk a silent plaintext write.
+		return failClosed("reading recipient public key for at-rest encryption", err)
 	}
 
 	encrypted, err := msgstore.EncryptMessage(msg, pubKey)

@@ -31,6 +31,16 @@ type DomainConfig struct {
 	// "rcpt" = reject at RCPT TO (default); "data" = defer rejection to after DATA.
 	RecipientRejection string `toml:"recipient_rejection,omitempty"`
 
+	// EncryptionMode controls at-rest encryption key provisioning for this
+	// domain. "off" (default, empty) provisions no keypair for new users;
+	// "on" provisions an X25519 keypair at user creation so their mail is
+	// encrypted at rest. The mode governs provisioning only -- the
+	// delivery-time encrypt gate is recipient key presence (maildancer#65) --
+	// so setting a domain to "off" does not remove keys from existing users or
+	// stop encrypting their mail. "escrow" (a future recoverable mode with an
+	// admin recovery key) is not yet implemented and is rejected as a value.
+	EncryptionMode string `toml:"encryption_mode,omitempty"`
+
 	// Forwards maps localpart to comma-separated forwarding targets.
 	// The special key "*" is a catchall. A nil map means "not set" and allows
 	// the system default forwards to apply. An empty non-nil map (forwards = {})
@@ -113,6 +123,21 @@ type LimitsConfig struct {
 	// MaxSendsPerHour is the maximum messages an authenticated sender on this
 	// domain may send per hour. 0 means use the global default.
 	MaxSendsPerHour int `toml:"max_sends_per_hour,omitempty"`
+}
+
+// At-rest encryption modes for DomainConfig.EncryptionMode.
+const (
+	// EncryptionModeOff provisions no encryption keypair for new users.
+	EncryptionModeOff = "off"
+	// EncryptionModeOn provisions an X25519 keypair at user creation.
+	EncryptionModeOn = "on"
+)
+
+// ProvisionKeysByDefault reports whether user creation in this domain should
+// generate an encryption keypair by default (mode "on"). An unset or
+// unrecognized mode is treated as "off".
+func (c DomainConfig) ProvisionKeysByDefault() bool {
+	return c.EncryptionMode == EncryptionModeOn
 }
 
 // DomainsConfig holds per-domain configuration overrides from domains.toml.

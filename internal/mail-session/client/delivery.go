@@ -61,13 +61,12 @@ func (d *DeliveryClient) Close() error {
 
 // DeliveryMetadata holds the envelope information for a delivery request.
 type DeliveryMetadata struct {
-	Sender            string
-	Recipient         string
-	ClientIP          string
-	ClientHostname    string
-	Forwarded         bool
-	EncryptionKeyHint string
-	ReceivedTime      string
+	Sender         string
+	Recipient      string
+	ClientIP       string
+	ClientHostname string
+	Forwarded      bool
+	ReceivedTime   string
 }
 
 // Deliver sends a message through the delivery pipeline and returns the structured result.
@@ -82,13 +81,12 @@ func (d *DeliveryClient) Deliver(ctx context.Context, meta DeliveryMetadata, mes
 	if err := stream.Send(&pb.DeliverRequest{
 		Payload: &pb.DeliverRequest_Metadata{
 			Metadata: &pb.DeliverMetadata{
-				Sender:            meta.Sender,
-				Recipient:         meta.Recipient,
-				ClientIp:          meta.ClientIP,
-				ClientHostname:    meta.ClientHostname,
-				Forwarded:         meta.Forwarded,
-				EncryptionKeyHint: meta.EncryptionKeyHint,
-				ReceivedTime:      meta.ReceivedTime,
+				Sender:         meta.Sender,
+				Recipient:      meta.Recipient,
+				ClientIp:       meta.ClientIP,
+				ClientHostname: meta.ClientHostname,
+				Forwarded:      meta.Forwarded,
+				ReceivedTime:   meta.ReceivedTime,
 			},
 		},
 	}); err != nil {

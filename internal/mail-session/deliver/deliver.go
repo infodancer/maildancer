@@ -38,13 +38,12 @@ type DeliverResponse struct {
 
 // DeliverRequest holds the envelope information for delivery.
 type DeliverRequest struct {
-	Sender            string
-	Recipient         string
-	ClientIP          string
-	ClientHostname    string
-	Forwarded         bool
-	EncryptionKeyHint string
-	ReceivedTime      string
+	Sender         string
+	Recipient      string
+	ClientIP       string
+	ClientHostname string
+	Forwarded      bool
+	ReceivedTime   string
 }
 
 // Deliverer runs the delivery pipeline for a single message.

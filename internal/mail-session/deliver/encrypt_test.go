@@ -32,14 +32,15 @@ func setupEncryptedFixture(t *testing.T) (*Deliverer, *[32]byte) {
 	return dlvr, priv
 }
 
-// deliverAliceEncrypted runs a delivery to alice with the encryption key hint set.
+// deliverAliceEncrypted runs a delivery to alice. Encryption is gated on key
+// presence (issue #65): alice has a key in the fixture, so the result is
+// ciphertext -- no per-delivery hint is involved.
 func deliverAliceEncrypted(t *testing.T, dlvr *Deliverer) (DeliverResponse, error) {
 	t.Helper()
 	return dlvr.Deliver(context.Background(),
 		DeliverRequest{
-			Sender:            "sender@example.com",
-			Recipient:         "alice@example.com",
-			EncryptionKeyHint: "alice",
+			Sender:    "sender@example.com",
+			Recipient: "alice@example.com",
 		},
 		[]byte(minimalMsg))
 }
@@ -165,16 +166,65 @@ redirect :copy "bob@elsewhere.example.com";
 	assertEncryptedBlob(t, readSoleMessage(t, inboxPath(dlvr)), priv)
 }
 
-// TestEncrypt_MissingKeyFailsClosed: encryption explicitly requested but no
-// key on file must temp-fail, never silently deliver plaintext.
-func TestEncrypt_MissingKeyFailsClosed(t *testing.T) {
+// TestEncrypt_NoKeyStaysPlaintext: a recipient with no key on file is not an
+// encryption user. Delivery is plaintext, not a failure -- key presence is the
+// gate (issue #65).
+func TestEncrypt_NoKeyStaysPlaintext(t *testing.T) {
 	dlvr := setupDomainFixture(t, "") // no key provisioned
 
 	resp, err := dlvr.Deliver(context.Background(),
 		DeliverRequest{
-			Sender:            "sender@example.com",
-			Recipient:         "alice@example.com",
-			EncryptionKeyHint: "alice",
+			Sender:    "sender@example.com",
+			Recipient: "alice@example.com",
+		},
+		[]byte(minimalMsg))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Result != ResultDelivered {
+		t.Fatalf("want ResultDelivered, got %v (reason: %q)", resp.Result, resp.Reason)
+	}
+	if got := readSoleMessage(t, inboxPath(dlvr)); !bytes.Equal(got, []byte(minimalMsg)) {
+		t.Errorf("want plaintext delivery for keyless recipient, got %d bytes differing from original", len(got))
+	}
+}
+
+// TestEncrypt_KeyPresentEncrypts: a recipient with a key on file gets
+// ciphertext with no per-delivery signalling -- the key's existence is the
+// whole trigger (issue #65 activation).
+func TestEncrypt_KeyPresentEncrypts(t *testing.T) {
+	dlvr, priv := setupEncryptedFixture(t)
+
+	resp, err := dlvr.Deliver(context.Background(),
+		DeliverRequest{
+			Sender:    "sender@example.com",
+			Recipient: "alice@example.com",
+		},
+		[]byte(minimalMsg))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Result != ResultDelivered {
+		t.Fatalf("want ResultDelivered, got %v (reason: %q)", resp.Result, resp.Reason)
+	}
+	assertEncryptedBlob(t, readSoleMessage(t, inboxPath(dlvr)), priv)
+}
+
+// TestEncrypt_CorruptKeyFailsClosed: a recipient who HAS a key file that is
+// not a valid 32-byte public key must temp-fail, never silently deliver
+// plaintext. This is the fail-closed invariant under key-presence gating --
+// a present-but-unusable key is a configuration error, not the no-key case.
+func TestEncrypt_CorruptKeyFailsClosed(t *testing.T) {
+	dlvr := setupDomainFixture(t, "")
+	keyPath := filepath.Join(dlvr.cfg.DomainsPath, "example.com", "keys", "alice.pub")
+	if err := os.WriteFile(keyPath, []byte("not-a-valid-32-byte-key"), 0644); err != nil {
+		t.Fatalf("write corrupt public key: %v", err)
+	}
+
+	resp, err := dlvr.Deliver(context.Background(),
+		DeliverRequest{
+			Sender:    "sender@example.com",
+			Recipient: "alice@example.com",
 		},
 		[]byte(minimalMsg))
 	if err != nil {
@@ -188,19 +238,5 @@ func TestEncrypt_MissingKeyFailsClosed(t *testing.T) {
 	}
 	if n := countMessages(t, inboxPath(dlvr)); n != 0 {
 		t.Errorf("want 0 messages in inbox (no plaintext fallback), got %d", n)
-	}
-}
-
-// TestEncrypt_NoHintStaysPlaintext: without the hint, delivery is plaintext
-// even when the user has a key -- encryption happens only on request.
-func TestEncrypt_NoHintStaysPlaintext(t *testing.T) {
-	dlvr, _ := setupEncryptedFixture(t)
-
-	resp := deliverAlice(t, dlvr, false)
-	if resp.Result != ResultDelivered {
-		t.Fatalf("want ResultDelivered, got %v (reason: %q)", resp.Result, resp.Reason)
-	}
-	if got := readSoleMessage(t, inboxPath(dlvr)); !bytes.Equal(got, []byte(minimalMsg)) {
-		t.Errorf("want plaintext delivery without hint, got %d bytes differing from original", len(got))
 	}
 }

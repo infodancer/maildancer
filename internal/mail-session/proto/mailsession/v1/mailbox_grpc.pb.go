@@ -19,20 +19,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	MailboxService_List_FullMethodName         = "/mailsession.v1.MailboxService/List"
-	MailboxService_Stat_FullMethodName         = "/mailsession.v1.MailboxService/Stat"
-	MailboxService_Fetch_FullMethodName        = "/mailsession.v1.MailboxService/Fetch"
-	MailboxService_FetchHeaders_FullMethodName = "/mailsession.v1.MailboxService/FetchHeaders"
-	MailboxService_Append_FullMethodName       = "/mailsession.v1.MailboxService/Append"
-	MailboxService_Copy_FullMethodName         = "/mailsession.v1.MailboxService/Copy"
-	MailboxService_Move_FullMethodName         = "/mailsession.v1.MailboxService/Move"
-	MailboxService_SetFlags_FullMethodName     = "/mailsession.v1.MailboxService/SetFlags"
-	MailboxService_Expunge_FullMethodName      = "/mailsession.v1.MailboxService/Expunge"
-	MailboxService_Rescan_FullMethodName       = "/mailsession.v1.MailboxService/Rescan"
-	MailboxService_UIDValidity_FullMethodName  = "/mailsession.v1.MailboxService/UIDValidity"
-	MailboxService_Delete_FullMethodName       = "/mailsession.v1.MailboxService/Delete"
-	MailboxService_Undelete_FullMethodName     = "/mailsession.v1.MailboxService/Undelete"
-	MailboxService_Commit_FullMethodName       = "/mailsession.v1.MailboxService/Commit"
+	MailboxService_List_FullMethodName          = "/mailsession.v1.MailboxService/List"
+	MailboxService_Stat_FullMethodName          = "/mailsession.v1.MailboxService/Stat"
+	MailboxService_Fetch_FullMethodName         = "/mailsession.v1.MailboxService/Fetch"
+	MailboxService_FetchHeaders_FullMethodName  = "/mailsession.v1.MailboxService/FetchHeaders"
+	MailboxService_SearchContent_FullMethodName = "/mailsession.v1.MailboxService/SearchContent"
+	MailboxService_Append_FullMethodName        = "/mailsession.v1.MailboxService/Append"
+	MailboxService_Copy_FullMethodName          = "/mailsession.v1.MailboxService/Copy"
+	MailboxService_Move_FullMethodName          = "/mailsession.v1.MailboxService/Move"
+	MailboxService_SetFlags_FullMethodName      = "/mailsession.v1.MailboxService/SetFlags"
+	MailboxService_Expunge_FullMethodName       = "/mailsession.v1.MailboxService/Expunge"
+	MailboxService_Rescan_FullMethodName        = "/mailsession.v1.MailboxService/Rescan"
+	MailboxService_UIDValidity_FullMethodName   = "/mailsession.v1.MailboxService/UIDValidity"
+	MailboxService_Delete_FullMethodName        = "/mailsession.v1.MailboxService/Delete"
+	MailboxService_Undelete_FullMethodName      = "/mailsession.v1.MailboxService/Undelete"
+	MailboxService_Commit_FullMethodName        = "/mailsession.v1.MailboxService/Commit"
 )
 
 // MailboxServiceClient is the client API for MailboxService service.
@@ -52,6 +53,13 @@ type MailboxServiceClient interface {
 	Fetch(ctx context.Context, in *FetchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FetchResponse], error)
 	// FetchHeaders retrieves only the message headers (and optionally a few body lines).
 	FetchHeaders(ctx context.Context, in *FetchHeadersRequest, opts ...grpc.CallOption) (*FetchHeadersResponse, error)
+	// SearchContent evaluates content predicates server-side so that callers
+	// (e.g. imapd SEARCH) never pull full message bodies across the proxy.
+	// For each requested UID it returns the parsed header bytes (optional) and
+	// per-term match booleans. The matching is protocol-agnostic substring
+	// containment; callers compose their own query semantics (AND/OR/NOT) from
+	// the results.
+	SearchContent(ctx context.Context, in *SearchContentRequest, opts ...grpc.CallOption) (*SearchContentResponse, error)
 	// Append stores a new message in a folder. Client-streaming: the first chunk
 	// carries metadata (folder, flags, date), subsequent chunks carry message body.
 	Append(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[AppendRequest, AppendResponse], error)
@@ -126,6 +134,16 @@ func (c *mailboxServiceClient) FetchHeaders(ctx context.Context, in *FetchHeader
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FetchHeadersResponse)
 	err := c.cc.Invoke(ctx, MailboxService_FetchHeaders_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mailboxServiceClient) SearchContent(ctx context.Context, in *SearchContentRequest, opts ...grpc.CallOption) (*SearchContentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchContentResponse)
+	err := c.cc.Invoke(ctx, MailboxService_SearchContent_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -252,6 +270,13 @@ type MailboxServiceServer interface {
 	Fetch(*FetchRequest, grpc.ServerStreamingServer[FetchResponse]) error
 	// FetchHeaders retrieves only the message headers (and optionally a few body lines).
 	FetchHeaders(context.Context, *FetchHeadersRequest) (*FetchHeadersResponse, error)
+	// SearchContent evaluates content predicates server-side so that callers
+	// (e.g. imapd SEARCH) never pull full message bodies across the proxy.
+	// For each requested UID it returns the parsed header bytes (optional) and
+	// per-term match booleans. The matching is protocol-agnostic substring
+	// containment; callers compose their own query semantics (AND/OR/NOT) from
+	// the results.
+	SearchContent(context.Context, *SearchContentRequest) (*SearchContentResponse, error)
 	// Append stores a new message in a folder. Client-streaming: the first chunk
 	// carries metadata (folder, flags, date), subsequent chunks carry message body.
 	Append(grpc.ClientStreamingServer[AppendRequest, AppendResponse]) error
@@ -294,6 +319,9 @@ func (UnimplementedMailboxServiceServer) Fetch(*FetchRequest, grpc.ServerStreami
 }
 func (UnimplementedMailboxServiceServer) FetchHeaders(context.Context, *FetchHeadersRequest) (*FetchHeadersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method FetchHeaders not implemented")
+}
+func (UnimplementedMailboxServiceServer) SearchContent(context.Context, *SearchContentRequest) (*SearchContentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchContent not implemented")
 }
 func (UnimplementedMailboxServiceServer) Append(grpc.ClientStreamingServer[AppendRequest, AppendResponse]) error {
 	return status.Error(codes.Unimplemented, "method Append not implemented")
@@ -407,6 +435,24 @@ func _MailboxService_FetchHeaders_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(MailboxServiceServer).FetchHeaders(ctx, req.(*FetchHeadersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MailboxService_SearchContent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchContentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MailboxServiceServer).SearchContent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MailboxService_SearchContent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MailboxServiceServer).SearchContent(ctx, req.(*SearchContentRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -598,6 +644,10 @@ var MailboxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "FetchHeaders",
 			Handler:    _MailboxService_FetchHeaders_Handler,
+		},
+		{
+			MethodName: "SearchContent",
+			Handler:    _MailboxService_SearchContent_Handler,
 		},
 		{
 			MethodName: "Copy",

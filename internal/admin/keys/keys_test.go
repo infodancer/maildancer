@@ -8,15 +8,8 @@ import (
 	"regexp"
 	"testing"
 
+	"github.com/infodancer/maildancer/auth/keyseal"
 	"github.com/infodancer/maildancer/internal/admin/keys"
-)
-
-const (
-	saltSize  = 32
-	nonceSize = 24
-	// secretbox overhead is 16 bytes (Poly1305 MAC)
-	secretboxOverhead = 16
-	privKeySize       = 32
 )
 
 func TestGenerateKeypair(t *testing.T) {
@@ -27,9 +20,14 @@ func TestGenerateKeypair(t *testing.T) {
 	if len(pub) != 32 {
 		t.Errorf("pubKey length = %d, want 32", len(pub))
 	}
-	expectedEncLen := saltSize + nonceSize + secretboxOverhead + privKeySize
-	if len(encPriv) != expectedEncLen {
-		t.Errorf("encPrivKey length = %d, want %d", len(encPriv), expectedEncLen)
+	// The sealed key is now a keyring blob (not the legacy fixed-length
+	// layout); verify it opens to a 32-byte private key under the password.
+	priv, err := keyseal.Open(encPriv, "hunter2")
+	if err != nil {
+		t.Fatalf("Open sealed key: %v", err)
+	}
+	if len(priv) != 32 {
+		t.Errorf("opened private key length = %d, want 32", len(priv))
 	}
 }
 

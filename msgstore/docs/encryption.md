@@ -25,6 +25,50 @@ Messages are encrypted per-recipient before storage, ensuring that stored messag
 
 **Key principle**: msgstore never sees plaintext message content. smtpd encrypts before delivery; pop3d decrypts after retrieval.
 
+## Threat model and scope
+
+Be precise about what this protects against, because over-claiming is itself a
+security defect.
+
+**What at-rest encryption protects against:** disclosure of stored mail to an
+attacker who obtains the *data at rest* but not live credentials or a running
+session -- a stolen or improperly decommissioned disk, an exfiltrated backup or
+snapshot, or filesystem access without the user's password. In those cases the
+attacker holds ciphertext (and the sealed private key) but cannot derive the
+key, so the mail stays confidential.
+
+**What it does NOT protect against -- a live or compromised server.** With the
+legacy protocols (SMTP, IMAP, POP3) the server is necessarily a plaintext point:
+
+- **Inbound is cleartext to the server.** SMTP delivers the full RFC 5322
+  message in the clear; smtpd itself encrypts it to the recipient's public key.
+  The server has already seen the plaintext at delivery.
+- **Retrieval requires the server to decrypt.** A standard IMAP/POP client has
+  no cryptography; it authenticates with a password and expects plaintext
+  bodies. The server must therefore be the decryption point, and it unseals the
+  user's private key using the login password it receives at authentication.
+
+So an attacker who controls the running server (root, or a TLS-terminating
+position that logs credentials) can read mail -- by capturing it at delivery, by
+harvesting the password at login and unsealing the key, or by reading the
+decrypted session key from memory. At-rest encryption does not, and cannot,
+prevent this for dumb clients. "The server cannot read your mail" is **false**
+for the legacy path; the honest statement is "stored mail is protected against
+disk and backup compromise."
+
+**True opacity requires a crypto-capable client.** End-to-end confidentiality --
+where the server never sees plaintext at delivery or retrieval -- is the job of
+the next-gen protocol (SCMP), in which the client encrypts before handoff. The
+only way to get server-opaque mail through a legacy IMAP/POP client is to move
+the decryption point off the server into a client-controlled local bridge (a
+loopback IMAP proxy that holds the keys and speaks SCMP upstream); that bridge
+is a crypto-capable client wearing an IMAP costume, not a dumb client.
+
+The client keyring / KEK work (see the keyring design doc) is the structural
+on-ramp to that future -- it introduces a domain-separated keyring wrap-key and
+a wrap-slot format that device-key and escrow slots plug into without a format
+break -- but on the legacy path it does not change the scope above.
+
 ## Algorithms
 
 | Purpose | Algorithm | Library |
@@ -32,7 +76,9 @@ Messages are encrypted per-recipient before storage, ensuring that stored messag
 | Key exchange | X25519 (Curve25519 ECDH) | `golang.org/x/crypto/nacl/box` |
 | Message encryption | XSalsa20-Poly1305 | `golang.org/x/crypto/nacl/box` |
 | Key derivation (passwords) | Argon2id | `golang.org/x/crypto/argon2` |
-| Private key encryption | XSalsa20-Poly1305 | `golang.org/x/crypto/nacl/secretbox` |
+| Wrap-key domain separation | HKDF-SHA256 | `crypto/hkdf` |
+| Keyring / KEK sealing | XChaCha20-Poly1305 | `golang.org/x/crypto/chacha20poly1305` |
+| Private key encryption (legacy `.key`) | XSalsa20-Poly1305 | `golang.org/x/crypto/nacl/secretbox` |
 
 ## Message Encryption
 
@@ -140,54 +186,67 @@ Private keys are stored encrypted with the user's password:
 └── charlie.key
 ```
 
-#### Encrypted Private Key Format
+#### Sealed Keyring Format (current)
+
+A `.key` file holds a **sealed keyring** (see the keyring design doc): a JSON
+envelope the server stores but cannot read. The on-disk layout is owned by
+`auth/keyring`; `auth/keyseal` is the single seam between key producers
+(`internal/admin/keys`) and the consumer (`auth/passwd`).
 
 ```
-┌─────────────┬─────────────┬─────────────────────────────┐
-│    Salt     │    Nonce    │   Encrypted Private Key     │
-│  (32 bytes) │  (24 bytes) │       (32 + 16 bytes)       │
-└─────────────┴─────────────┴─────────────────────────────┘
+Sealed keyring (JSON):
+  version
+  doc_version            # monotonic counter (compare-and-swap)
+  kek_wrapped_blob       # XChaCha20-Poly1305(keyring, KEK), AAD = version||doc_version
+  wrap_slots[]:          # how the KEK is unlocked
+    slot_type            # passphrase | device | escrow
+    slot_id
+    wrapped_kek          # XChaCha20-Poly1305(KEK, slot_key), AAD = slot_id
+    kdf                  # self-describing argon2id params (passphrase slots)
 ```
 
-| Field | Offset | Size | Description |
-|-------|--------|------|-------------|
-| Salt | 0 | 32 bytes | Random salt for Argon2id |
-| Nonce | 32 | 24 bytes | Random nonce for secretbox |
-| Encrypted Key | 56 | 48 bytes | Private key (32) + Poly1305 tag (16) |
+The keyring itself (decrypted only inside the client or inside mail-session) is
+a *set* of entries, so rotated and archived private keys are retained and old
+mail stays readable. The degenerate case written for a new user is a one-entry,
+one-passphrase-slot keyring.
 
-**Total file size**: 104 bytes
+A random per-keyring **KEK** seals the keyring; the KEK is in turn wrapped to one
+or more slots. This is what distinguishes the trust postures: passphrase/device
+slots only -> the server cannot decrypt the keyring at rest; an additional
+escrow slot wrapped to a domain recovery key -> the server can decrypt and must
+disclose it. (Escrow activation -- recovery-key custody, the `escrow` mode, the
+published disclosure flag -- is reserved but not yet implemented.)
 
-#### Key Derivation
+#### Key Derivation (passphrase slot)
 
-The encryption key is derived from the user's password using Argon2id:
+The passphrase slot's wrap-key is derived from the password with Argon2id, then
+**domain-separated** with HKDF-SHA256 under a fixed info label so the keyring
+wrap-key is structurally independent of the auth verifier:
 
 ```go
-key := argon2.IDKey(
-    []byte(password),
-    salt,
-    time:    3,           // iterations
-    memory:  64 * 1024,   // 64 MB
-    threads: 4,           // parallelism
-    keyLen:  32,          // output length
-)
+ikm := argon2.IDKey(password, salt, t=3, m=64*1024, p=4, keyLen=32)
+wrapKey, _ := hkdf.Key(sha256.New, ikm, nil, "maildancer/keyring-wrap/v1", 32)
 ```
 
-These parameters provide strong resistance against:
-- Brute-force attacks (time cost)
-- GPU/ASIC attacks (memory cost)
-- Side-channel attacks (data-independent memory access)
+Caveat (see Threat model and scope): on the IMAP/POP path the server still
+receives the password at login and unwraps server-side, so domain separation is
+structural hygiene, not protection against a live server. Full protection needs
+client-side derivation (SCMP / OPAQUE).
 
-#### Encryption/Decryption
+#### AEAD
 
-Private keys are encrypted using NaCl secretbox:
+The keyring and each wrapped KEK use XChaCha20-Poly1305 (24-byte nonces, AAD
+binding) rather than NaCl secretbox, so associated data can bind `doc_version`
+(rollback protection) and the slot id (a wrapped KEK cannot be moved between
+slots).
 
-```go
-// Encryption
-ciphertext := secretbox.Seal(nil, privateKey, &nonce, &derivedKey)
+#### Legacy single-key format (read-only, migrating)
 
-// Decryption
-privateKey, ok := secretbox.Open(nil, ciphertext, &nonce, &derivedKey)
-```
+Pre-keyring `.key` files used a fixed 104-byte layout:
+`salt(32) || nonce(24) || secretbox.Seal(privKey)` keyed by Argon2id. `Open`
+still reads this format, and such files migrate to the sealed-keyring format
+opportunistically the next time they are re-sealed (a password change or key
+regeneration).
 
 ## Password File Format
 

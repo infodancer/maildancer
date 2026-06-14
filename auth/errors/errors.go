@@ -36,4 +36,8 @@ var (
 
 	// ErrEncryptionNotEnabled indicates encryption is not enabled for the user.
 	ErrEncryptionNotEnabled = errors.New("encryption not enabled")
+
+	// ErrNoActiveKey indicates a keyring was opened but holds no active
+	// encryption entry to use.
+	ErrNoActiveKey = errors.New("no active encryption key in keyring")
 )

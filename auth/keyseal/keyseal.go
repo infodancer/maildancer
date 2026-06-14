@@ -1,28 +1,39 @@
-// Package keyseal is the single source of truth for sealing a user's private
-// key under their password. The producer (key generation in
-// internal/admin/keys) and the consumer (authentication in auth/passwd) both
-// go through Seal/Open here, so the argon2id KDF parameters and the on-disk
-// blob layout cannot drift between them -- a drift would silently render every
-// sealed key unreadable.
+// Package keyseal is the single seam between key producers (key generation in
+// internal/admin/keys) and the key consumer (authentication in auth/passwd).
+// Both go through Seal/Open here, so the at-rest representation cannot drift
+// between them.
 //
-// Blob layout: salt(32) || nonce(24) || secretbox.Seal(privKey). The argon2id
-// password-derived key keys an XSalsa20-Poly1305 secretbox.
+// As of maildancer#71, Seal/Open delegate to auth/keyring: Seal produces a
+// sealed *keyring* (a one-entry, one-passphrase-slot keyring -- the degenerate
+// case of the general format), and Open returns the active encryption private
+// key. Open also still reads the legacy single-key blob
+// (salt(32) || nonce(24) || secretbox.Seal(privKey)) so existing .key files
+// keep working; they migrate to the keyring format opportunistically the next
+// time they are re-sealed (e.g. on a password change or key regeneration).
 //
-// These parameters are the key-seal KDF, deliberately independent of the
-// password-hashing parameters in auth/passwd (which are self-describing in the
-// stored hash string). Keep them separate so the two costs stay independent.
+// Scope note: at-rest encryption protects mail against disk/backup compromise.
+// It does not make mail opaque to a live or compromised server -- legacy
+// IMAP/POP clients require the server to be the decryption point, and SMTP
+// delivery is already cleartext to the server. True opacity requires SCMP /
+// sender-side encryption. See msgstore/docs/encryption.md.
 package keyseal
 
 import (
+	"bytes"
 	"crypto/rand"
 	"fmt"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/nacl/secretbox"
 
 	autherrors "github.com/infodancer/maildancer/auth/errors"
+	"github.com/infodancer/maildancer/auth/keyring"
 )
 
+// Legacy single-key seal parameters. Retained for reading pre-keyring .key
+// files (and for the back-compat test that produces them). New seals use the
+// keyring format, which owns its own KDF parameters in auth/keyring.
 const (
 	argon2Time    = 3
 	argon2Memory  = 64 * 1024 // 64 MiB
@@ -32,15 +43,55 @@ const (
 	nonceSize     = 24
 )
 
-// Seal encrypts privKey under password. Each call uses a fresh random salt and
-// nonce, so identical inputs never produce identical output. The result is
-// salt(32) || nonce(24) || ciphertext.
+// Seal encrypts privKey under password as a new sealed keyring holding a single
+// active X25519 encryption entry. The public key is derived from privKey.
 func Seal(privKey []byte, password string) ([]byte, error) {
+	if len(privKey) != 32 {
+		return nil, autherrors.ErrInvalidKeyFormat
+	}
+	pub, err := curve25519.X25519(privKey, curve25519.Basepoint)
+	if err != nil {
+		return nil, fmt.Errorf("derive public key: %w", err)
+	}
+	return keyring.Create(pub, privKey, password)
+}
+
+// Open returns the active encryption private key from a sealed blob. It accepts
+// both the keyring format (current) and the legacy single-key format (so old
+// .key files keep working). A keyring with no active encryption entry yields
+// autherrors.ErrNoActiveKey; a malformed blob yields ErrInvalidKeyFormat; a
+// wrong password or tampering yields ErrKeyDecryptFailed.
+func Open(sealed []byte, password string) ([]byte, error) {
+	if isKeyring(sealed) {
+		kr, err := keyring.OpenWithPassword(sealed, password)
+		if err != nil {
+			return nil, err
+		}
+		e, ok := kr.ActiveEncryptionKey()
+		if !ok {
+			return nil, autherrors.ErrNoActiveKey
+		}
+		return e.PrivateKey, nil
+	}
+	return openLegacy(sealed, password)
+}
+
+// isKeyring reports whether the blob is the JSON keyring envelope rather than
+// the legacy binary single-key layout. The legacy blob begins with 32 bytes of
+// random salt, so a leading '{' reliably distinguishes the two.
+func isKeyring(sealed []byte) bool {
+	t := bytes.TrimLeft(sealed, " \t\r\n")
+	return len(t) > 0 && t[0] == '{'
+}
+
+// sealLegacy produces the pre-keyring single-key blob. Retained so the
+// back-compat read path stays exercised by tests; production seals use the
+// keyring format via Seal.
+func sealLegacy(privKey []byte, password string) ([]byte, error) {
 	salt := make([]byte, saltSize)
 	if _, err := rand.Read(salt); err != nil {
 		return nil, fmt.Errorf("generate salt: %w", err)
 	}
-
 	var nonce [nonceSize]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, fmt.Errorf("generate nonce: %w", err)
@@ -59,11 +110,8 @@ func Seal(privKey []byte, password string) ([]byte, error) {
 	return sealed, nil
 }
 
-// Open reverses Seal, deriving the key from password and the embedded salt.
-// Returns autherrors.ErrInvalidKeyFormat for a blob too short to hold the
-// header, and autherrors.ErrKeyDecryptFailed when authentication fails (wrong
-// password or tampering).
-func Open(sealed []byte, password string) ([]byte, error) {
+// openLegacy reverses the pre-keyring single-key seal.
+func openLegacy(sealed []byte, password string) ([]byte, error) {
 	if len(sealed) < saltSize+nonceSize+secretbox.Overhead {
 		return nil, autherrors.ErrInvalidKeyFormat
 	}

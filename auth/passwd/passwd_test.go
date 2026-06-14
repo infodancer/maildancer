@@ -73,7 +73,10 @@ func TestAuthenticate_KeyLoading(t *testing.T) {
 	)
 
 	fakePub := []byte("fake-public-key-bytes")
-	fakePri := []byte("fake-private-key-bytes")
+	// Seal now derives the X25519 public key from the private scalar, so the
+	// private key must be a valid 32-byte key. The public key file is read
+	// back verbatim by loadKeys, so it can stay an opaque placeholder.
+	fakePri := bytes.Repeat([]byte{0x42}, 32)
 
 	t.Run("BranchA_KeysPresent_CorrectPassword", func(t *testing.T) {
 		agent, _, keyDir := setupAgent(t, username, password)

@@ -11,25 +11,42 @@ import (
 	"github.com/infodancer/maildancer/msgstore"
 )
 
-// forwardChain holds the three-level forwarding lookup hierarchy.
-// Resolution order: user-level -> domain-level -> system default.
+// forwardChain holds the forwarding lookup hierarchy. Admins must be able to
+// control where mail goes, so resolution is top-down with the admin tier first:
 //
-//   - User-level:     {domainPath}/user_forwards/{localpart}  (plain list, read on demand)
-//   - Domain-level:   per-domain config.toml [forwards] table
-//   - System default: {basePath}/config.toml [forwards] table
+//  1. Admin override: per-domain config.toml [forwards] table (userctl/webadmin)
+//  2. Domain:         {domainPath}/forwards file
+//  3. User:           {domainPath}/user_forwards/{localpart}  (read on demand)
+//  4. System default: {basePath}/config.toml [forwards] table (final fallback)
 //
-// User-level files are read on every lookup so changes take effect without
-// restart. Domain and default maps are loaded from the [forwards] tables at
-// domain init time.
+// Within a tier an exact localpart match beats the catchall (*); the first tier
+// with any match wins. A higher tier's catchall therefore shadows lower tiers --
+// e.g. a domain catchall funnels mail a user-level forward would otherwise
+// catch. That is deliberate: admins/domains win over users.
+//
+// The admin, domain, and default maps are loaded at domain-init time; user-level
+// files are read on every lookup so changes take effect without a restart.
 type forwardChain struct {
-	userForwardsDir string
+	adminForwards   *forwards.ForwardMap
 	domainForwards  *forwards.ForwardMap
+	userForwardsDir string
 	defaultForwards *forwards.ForwardMap
 }
 
-// resolve returns forwarding targets for localpart, walking the chain in priority order.
+// resolve returns forwarding targets for localpart, walking the tiers in
+// priority order (admin -> domain -> user -> system default).
 func (c *forwardChain) resolve(localpart string) ([]string, bool) {
-	// 1. User-level: {userForwardsDir}/{localpart}
+	// 1. Admin override: per-domain config.toml [forwards]
+	if targets, ok := c.adminForwards.Resolve(localpart); ok {
+		return targets, true
+	}
+
+	// 2. Domain: the forwards file
+	if targets, ok := c.domainForwards.Resolve(localpart); ok {
+		return targets, true
+	}
+
+	// 3. User: {userForwardsDir}/{localpart}
 	if c.userForwardsDir != "" {
 		targets, err := forwards.LoadTargets(filepath.Join(c.userForwardsDir, localpart))
 		if err == nil && len(targets) > 0 {
@@ -37,12 +54,7 @@ func (c *forwardChain) resolve(localpart string) ([]string, bool) {
 		}
 	}
 
-	// 2. Domain-level
-	if targets, ok := c.domainForwards.Resolve(localpart); ok {
-		return targets, true
-	}
-
-	// 3. System default
+	// 4. System default: {basePath}/config.toml [forwards]
 	if targets, ok := c.defaultForwards.Resolve(localpart); ok {
 		return targets, true
 	}

@@ -46,6 +46,21 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 		recipientDomain = d
 	}
 
+	// Resolve forwarding here, as root, before the credential lookup and
+	// privilege drop. This is the single forwarding decision point: a forward
+	// must be able to re-send (only smtpd can), and the admin/domain tiers live
+	// in the config tree that the privilege-dropped mail-session cannot read.
+	// Resolving before DeliverySession also means forward-only addresses (no
+	// mailbox, hence no uid) are redirected instead of failing credential lookup.
+	//
+	// meta.Forwarded marks a re-submitted forward (smtpd's followRedirect): do
+	// not resolve again, enforcing the 1-hop ceiling.
+	if !meta.GetForwarded() {
+		if targets, ok := p.mgr.ResolveForward(stream.Context(), meta.Recipient); ok {
+			return p.respondForward(stream, meta, recipientDomain, targets)
+		}
+	}
+
 	// Spawn oneshot mail-session for this recipient.
 	deliveryCl, cleanup, err := p.mgr.DeliverySession(stream.Context(), meta.Recipient)
 	if err != nil {
@@ -94,6 +109,57 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 			return err
 		}
 		if err := upstream.Send(req); err != nil {
+			return err
+		}
+	}
+}
+
+// respondForward answers a delivery that resolved to a forward, without
+// spawning a mail-session. smtpd's followRedirect performs the actual re-send;
+// here we only return the verdict. The inbound body stream is drained and
+// discarded first so the client's CloseAndRecv completes cleanly -- the forward
+// decision is recipient-based and never needs the body.
+//
+// Forwarding is strictly 1:1. A multi-target rule is a configuration error;
+// like the former mail-session path, we temp-fail (the sending MTA holds and
+// retries while the admin corrects it) rather than fan out.
+func (p *deliveryProxy) respondForward(stream pb.DeliveryService_DeliverServer, meta *pb.DeliverMetadata, recipientDomain string, targets []string) error {
+	if err := drainDeliverStream(stream); err != nil {
+		return err
+	}
+
+	if len(targets) > 1 {
+		slog.Error("forwarding misconfiguration: multiple forward targets configured (1:1 required)",
+			"msgid", meta.GetMsgid(),
+			"to", meta.Recipient,
+			"target_count", len(targets))
+		p.metrics.DeliveryProxyCompleted(recipientDomain, "error")
+		return stream.SendAndClose(&pb.DeliverResponse{
+			Result:    pb.DeliverResult_DELIVER_RESULT_REJECTED,
+			Temporary: true,
+			Reason:    fmt.Sprintf("forwarding misconfiguration: only one forward destination allowed, %d configured", len(targets)),
+		})
+	}
+
+	slog.Info("delivery forwarded",
+		"msgid", meta.GetMsgid(),
+		"to", meta.Recipient,
+		"target", targets[0])
+	p.metrics.DeliveryProxyCompleted(recipientDomain, "forwarded")
+	return stream.SendAndClose(&pb.DeliverResponse{
+		Result:            pb.DeliverResult_DELIVER_RESULT_REDIRECTED,
+		RedirectAddresses: targets,
+	})
+}
+
+// drainDeliverStream reads and discards remaining inbound chunks until EOF.
+func drainDeliverStream(stream pb.DeliveryService_DeliverServer) error {
+	for {
+		_, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
 			return err
 		}
 	}

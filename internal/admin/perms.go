@@ -53,7 +53,10 @@ type PermReport struct {
 	// Allocated lists ids the fix allocated before applying perms, e.g.
 	// "example.com gid=10013" or "alice@example.com uid=10025".
 	Allocated []string
-	Entries   []PermResult
+	// Warnings lists non-fatal configuration problems found during the fix,
+	// e.g. a real user whose mail is shadowed by a forward.
+	Warnings []string
+	Entries  []PermResult
 }
 
 // PermResult is the per-path outcome of an apply.
@@ -241,6 +244,7 @@ func (p Paths) FixDomain(domain string) (PermReport, error) {
 	report := applyPlan(plan, true)
 	report.Domain = domain
 	report.Allocated = allocated
+	report.Warnings = p.shadowWarnings(domain)
 	return report, report.firstError()
 }
 

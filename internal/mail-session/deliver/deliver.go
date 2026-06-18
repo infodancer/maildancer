@@ -133,37 +133,13 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 		}, nil
 	}
 
-	// ── 1. Forwarding resolution ─────────────────────────────────────────────
-	if !req.Forwarded && dom.AuthAgent != nil {
-		if targets, ok := dom.AuthAgent.ResolveForward(ctx, localpart); ok {
-			if len(targets) > 1 {
-				// A multi-target forward is a configuration error: forwarding is
-				// strictly 1:1. Temp-fail (not perm-fail) so the sending MTA holds
-				// and retries while the admin fixes the misconfiguration; the
-				// sending MTA's own retry window is the eventual permanent backstop.
-				// We deliberately do NOT build stateful temp->perm escalation here.
-				slog.Error("forwarding misconfiguration: multiple forward targets configured (1:1 required)",
-					slog.String("msgid", req.MsgID),
-					slog.String("recipient", req.Recipient),
-					slog.Int("target_count", len(targets)))
-				return DeliverResponse{
-					Result:    ResultRejected,
-					Temporary: true,
-					Reason:    fmt.Sprintf("forwarding misconfiguration: only one forward destination allowed, %d configured", len(targets)),
-				}, nil
-			}
-			slog.Debug("forwarding message",
-				slog.String("msgid", req.MsgID),
-				slog.String("recipient", req.Recipient),
-				slog.String("target", targets[0]))
-			return DeliverResponse{
-				Result:            ResultRedirected,
-				RedirectAddresses: targets,
-			}, nil
-		}
-	}
+	// Forwarding is resolved upstream in session-manager (as root, before the
+	// privilege drop), not here: this process runs as the recipient uid, cannot
+	// read the config-tree forward tiers, and cannot re-send. A message reaching
+	// this pipeline is always destined for a local mailbox. See
+	// manager.ResolveForward and issue #95.
 
-	// ── 2. Per-domain size check ─────────────────────────────────────────────
+	// ── 1. Per-domain size check ─────────────────────────────────────────────
 	if dom.MaxMessageSize > 0 && int64(len(msg)) > dom.MaxMessageSize {
 		return DeliverResponse{
 			Result:    ResultRejected,
@@ -172,13 +148,13 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 		}, nil
 	}
 
-	// ── 3. Sieve script ──────────────────────────────────────────────────────
+	// ── 2. Sieve script ──────────────────────────────────────────────────────
 	// A script decides the message's fate (fileinto, redirect, discard,
 	// reject, keep). No script -- or any script failure -- falls through to
 	// stage 4 (implicit keep). Sieve evaluates the plaintext message.
 	outcome, sieveRan := dlvr.runSieve(ctx, dom, req, msg)
 
-	// ── 3.5. At-rest encryption ──────────────────────────────────────────────
+	// ── 2.5. At-rest encryption ──────────────────────────────────────────────
 	// After Sieve (which needs plaintext), before any write, so that every
 	// write path below -- keep, fileinto, redirect :copy -- stores the same
 	// encrypted blob. Fail-closed: a requested encryption that cannot be
@@ -192,7 +168,7 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 		return dlvr.applySieve(ctx, dom, req, outcome, writeMsg, encInfo)
 	}
 
-	// ── 4. Deliver to maildir ────────────────────────────────────────────────
+	// ── 3. Deliver to maildir ────────────────────────────────────────────────
 	return dlvr.deliverLocal(ctx, dom, req, writeMsg, encInfo)
 }
 

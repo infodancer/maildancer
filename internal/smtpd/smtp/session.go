@@ -625,6 +625,19 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
+	// Mint one correlation id for this accepted message and thread it through
+	// every delivery path (local, forward, remote enqueue) so the message is
+	// traceable by a single id in the logs.
+	msgid, err := newMsgID()
+	if err != nil {
+		s.logger.Error("could not generate message id", slog.String("error", err.Error()))
+		return &smtp.SMTPError{
+			Code:         451,
+			EnhancedCode: smtp.EnhancedCode{4, 3, 0},
+			Message:      "Temporary failure, try again later",
+		}
+	}
+
 	// Local delivery (synchronous; failures reject at SMTP time).
 	if len(s.recipients) > 0 {
 		now := time.Now()
@@ -634,7 +647,7 @@ func (s *Session) Data(r io.Reader) error {
 		// rules are resolved by the mail-session delivery path, which signals a
 		// configured forward by returning a *RedirectError.
 		deliverErr := s.backend.smDelivery.Deliver(ctx,
-			s.from, s.recipients[0], s.clientIP, s.helo, now, false, tmp.reader())
+			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, tmp.reader())
 
 		var redirectErr *RedirectError
 		redirected := errors.As(deliverErr, &redirectErr)
@@ -642,11 +655,12 @@ func (s *Session) Data(r io.Reader) error {
 			// A configured forward. Re-route each target as a fresh recipient
 			// (local Deliver with Forwarded=true, or remote Enqueue). This is
 			// the only delivery path that can reach external forward targets.
-			deliverErr = s.followRedirect(ctx, redirectErr, tmp)
+			deliverErr = s.followRedirect(ctx, redirectErr, tmp, msgid)
 		}
 
 		if deliverErr != nil {
 			s.logger.Warn("local delivery failed",
+				slog.String("msgid", msgid),
 				slog.String("from", s.from),
 				slog.String("to", s.recipients[0]),
 				slog.String("error", deliverErr.Error()))
@@ -683,6 +697,7 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		s.logger.Info("local delivery complete",
+			slog.String("msgid", msgid),
 			slog.String("from", s.from),
 			slog.String("to", s.recipients[0]),
 			slog.Int64("size", counter.n))
@@ -711,9 +726,10 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		ctx := context.Background()
-		msgID, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, tmp.reader())
+		_, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, msgid, tmp.reader())
 		if err != nil {
 			s.logger.Warn("enqueue failed",
+				slog.String("msgid", msgid),
 				slog.String("from", s.from),
 				slog.Any("to", s.remoteRecipients),
 				slog.String("error", err.Error()))
@@ -736,7 +752,7 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		s.logger.Info("enqueued for remote delivery",
-			slog.String("msg_id", msgID),
+			slog.String("msgid", msgid),
 			slog.String("from", s.from),
 			slog.Any("to", s.remoteRecipients),
 			slog.Int64("size", counter.n))
@@ -758,7 +774,7 @@ func (s *Session) Data(r io.Reader) error {
 // temp-failed -- smtpd follows at most one redirect.
 //
 // Returns nil on success, or an error that the caller maps to a 451.
-func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer) error {
+func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer, msgid string) error {
 	if len(redirect.Addresses) == 0 {
 		s.logger.Error("forward resolved to no targets",
 			slog.String("from", s.from),
@@ -777,7 +793,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 
 		if !vr.DomainIsLocal {
 			// External forward target: enqueue for outbound delivery.
-			msgID, err := s.backend.smDelivery.Enqueue(ctx, s.from, []string{target}, tmp.reader())
+			_, err = s.backend.smDelivery.Enqueue(ctx, s.from, []string{target}, msgid, tmp.reader())
 			if err != nil {
 				s.logger.Warn("forward enqueue failed",
 					slog.String("target", target),
@@ -787,7 +803,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 			s.logger.Info("forward enqueued for remote delivery",
 				slog.String("from", s.from),
 				slog.String("target", target),
-				slog.String("msg_id", msgID))
+				slog.String("msgid", msgid))
 			continue
 		}
 
@@ -796,7 +812,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 		// here is a configuration error.
 		now := time.Now()
 		err = s.backend.smDelivery.Deliver(ctx,
-			s.from, target, s.clientIP, s.helo, now, true, tmp.reader())
+			s.from, target, s.clientIP, s.helo, now, true, msgid, tmp.reader())
 
 		var nested *RedirectError
 		if errors.As(err, &nested) {

@@ -185,7 +185,7 @@ func TestFollowRedirect_LocalTarget(t *testing.T) {
 	s := newRedirectSession(t, agent)
 
 	redirect := &RedirectError{Addresses: []string{"bob@example.com"}}
-	if err := s.followRedirect(context.Background(), redirect, memBuf("test body")); err != nil {
+	if err := s.followRedirect(context.Background(), redirect, memBuf("test body"), ""); err != nil {
 		t.Fatalf("followRedirect returned error: %v", err)
 	}
 
@@ -223,7 +223,7 @@ func TestFollowRedirect_ExternalTarget(t *testing.T) {
 	s := newRedirectSession(t, agent)
 
 	redirect := &RedirectError{Addresses: []string{"matthew@gmail.com"}}
-	if err := s.followRedirect(context.Background(), redirect, memBuf("test body")); err != nil {
+	if err := s.followRedirect(context.Background(), redirect, memBuf("test body"), ""); err != nil {
 		t.Fatalf("followRedirect returned error: %v", err)
 	}
 
@@ -257,7 +257,7 @@ func TestFollowRedirect_OneHopCeiling(t *testing.T) {
 	s := newRedirectSession(t, agent)
 
 	redirect := &RedirectError{Addresses: []string{"bob@example.com"}}
-	err := s.followRedirect(context.Background(), redirect, memBuf("test body"))
+	err := s.followRedirect(context.Background(), redirect, memBuf("test body"), "")
 	if err == nil {
 		t.Fatal("expected error for second redirect (1-hop limit), got nil")
 	}

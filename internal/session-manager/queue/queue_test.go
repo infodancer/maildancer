@@ -30,7 +30,7 @@ func TestWriteCreatesFiles(t *testing.T) {
 	recipients := []string{"bob@gmail.com", "carol@yahoo.com"}
 	body := strings.NewReader("From: alice@example.com\r\nTo: bob@gmail.com\r\n\r\nHello\r\n")
 
-	msgid, err := Write(cfg, from, recipients, body)
+	msgid, err := Write(cfg, from, recipients, "", body)
 	if err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestNoTmpFilesAfterWrite(t *testing.T) {
 	cfg := testConfig(t)
 	body := strings.NewReader("Subject: test\r\n\r\nbody\r\n")
 
-	if _, err := Write(cfg, "sender@example.com", []string{"rcpt@gmail.com"}, body); err != nil {
+	if _, err := Write(cfg, "sender@example.com", []string{"rcpt@gmail.com"}, "", body); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestBodyWriteFailLeavesNoEnvelope(t *testing.T) {
 	cfg := testConfig(t)
 	errReader := &errAfterNReader{n: 0, err: io.ErrUnexpectedEOF}
 
-	_, err := Write(cfg, "sender@example.com", []string{"rcpt@gmail.com"}, errReader)
+	_, err := Write(cfg, "sender@example.com", []string{"rcpt@gmail.com"}, "", errReader)
 	if err == nil {
 		t.Fatal("expected Write to fail, got nil")
 	}
@@ -220,7 +220,7 @@ func TestWriteValidatesAddresses(t *testing.T) {
 			parentDir := filepath.Dir(cfg.Dir)
 
 			body := strings.NewReader("Subject: test\r\n\r\nbody\r\n")
-			_, err := Write(cfg, tc.from, tc.recipients, body)
+			_, err := Write(cfg, tc.from, tc.recipients, "", body)
 
 			if tc.wantErr {
 				if err == nil {
@@ -294,7 +294,7 @@ func TestWriteWithDKIM(t *testing.T) {
 	}
 
 	body := strings.NewReader("From: alice@example.com\r\nTo: bob@gmail.com\r\nSubject: test\r\n\r\nHello\r\n")
-	if _, err := Write(cfg, "alice@example.com", []string{"bob@gmail.com"}, body); err != nil {
+	if _, err := Write(cfg, "alice@example.com", []string{"bob@gmail.com"}, "", body); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -330,7 +330,7 @@ func TestWriteWithoutDKIM(t *testing.T) {
 	}
 
 	body := strings.NewReader("From: alice@example.com\r\nTo: bob@gmail.com\r\n\r\nHello\r\n")
-	if _, err := Write(cfg, "alice@example.com", []string{"bob@gmail.com"}, body); err != nil {
+	if _, err := Write(cfg, "alice@example.com", []string{"bob@gmail.com"}, "", body); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -434,4 +434,46 @@ func (r *errAfterNReader) Read(p []byte) (int, error) {
 	}
 	r.n -= len(p)
 	return len(p), nil
+}
+
+// TestWriteReusesPresetMsgID verifies that a preset hex id (minted at smtpd
+// ingress) is reused verbatim instead of the queue generating its own, so a
+// message keeps one id across the inbound->outbound boundary.
+func TestWriteReusesPresetMsgID(t *testing.T) {
+	cfg := testConfig(t)
+	const preset = "0123456789abcdef0123456789abcdef"
+
+	msgid, err := Write(cfg, "alice@example.com", []string{"bob@gmail.com"}, preset,
+		strings.NewReader("From: alice@example.com\r\n\r\nHello\r\n"))
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if want := preset + "@example.com"; msgid != want {
+		t.Errorf("returned msgid %q, want %q", msgid, want)
+	}
+
+	// The body file is named by the preset hex, not a freshly-generated one.
+	bodies := readDir(t, filepath.Join(cfg.Dir, "msg", "com", "example"))
+	if len(bodies) != 1 || bodies[0] != preset {
+		t.Fatalf("body files = %v, want exactly [%s]", bodies, preset)
+	}
+}
+
+// TestWriteRejectsInvalidPresetMsgID verifies a malformed preset id is rejected
+// (it would otherwise land in a filesystem path) rather than silently accepted.
+func TestWriteRejectsInvalidPresetMsgID(t *testing.T) {
+	cfg := testConfig(t)
+	for _, bad := range []string{
+		"nothex-nothex-nothex-nothex-xxxx",   // 32 chars but not hex
+		"abcd",                               // too short
+		"0123456789abcdef0123456789abcdef00", // too long
+		"../../etc/passwd",                   // path traversal attempt
+	} {
+		_, err := Write(cfg, "alice@example.com", []string{"bob@gmail.com"}, bad,
+			strings.NewReader("body"))
+		if err == nil {
+			t.Errorf("Write accepted invalid preset msgid %q, want error", bad)
+		}
+	}
 }

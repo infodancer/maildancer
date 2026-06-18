@@ -177,7 +177,13 @@ type DeliverMetadata struct {
 	// When true, forwarding resolution is skipped (1-hop limit enforcement).
 	Forwarded bool `protobuf:"varint,5,opt,name=forwarded,proto3" json:"forwarded,omitempty"`
 	// When the message was accepted by the upstream daemon (RFC 3339).
-	ReceivedTime  string `protobuf:"bytes,7,opt,name=received_time,json=receivedTime,proto3" json:"received_time,omitempty"`
+	ReceivedTime string `protobuf:"bytes,7,opt,name=received_time,json=receivedTime,proto3" json:"received_time,omitempty"`
+	// Internal correlation id: 16 crypto/rand bytes, hex-encoded. Minted at
+	// smtpd ingress and threaded through every delivery stage so a message is
+	// traceable by id (no content) in the logs. The same bytes are the RFC5322
+	// Message-ID and, for next-gen protocols, the message_id. Not derived from
+	// the inbound Message-ID header (sender-chosen).
+	Msgid         string `protobuf:"bytes,8,opt,name=msgid,proto3" json:"msgid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -250,6 +256,13 @@ func (x *DeliverMetadata) GetForwarded() bool {
 func (x *DeliverMetadata) GetReceivedTime() string {
 	if x != nil {
 		return x.ReceivedTime
+	}
+	return ""
+}
+
+func (x *DeliverMetadata) GetMsgid() string {
+	if x != nil {
+		return x.Msgid
 	}
 	return ""
 }
@@ -336,14 +349,15 @@ const file_mailsession_v1_delivery_proto_rawDesc = "" +
 	"\x0eDeliverRequest\x12=\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x1f.mailsession.v1.DeliverMetadataH\x00R\bmetadata\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +
-	"\apayload\"\xeb\x01\n" +
+	"\apayload\"\x81\x02\n" +
 	"\x0fDeliverMetadata\x12\x16\n" +
 	"\x06sender\x18\x01 \x01(\tR\x06sender\x12\x1c\n" +
 	"\trecipient\x18\x02 \x01(\tR\trecipient\x12\x1b\n" +
 	"\tclient_ip\x18\x03 \x01(\tR\bclientIp\x12'\n" +
 	"\x0fclient_hostname\x18\x04 \x01(\tR\x0eclientHostname\x12\x1c\n" +
 	"\tforwarded\x18\x05 \x01(\bR\tforwarded\x12#\n" +
-	"\rreceived_time\x18\a \x01(\tR\freceivedTimeJ\x04\b\x06\x10\aR\x13encryption_key_hint\"\xad\x01\n" +
+	"\rreceived_time\x18\a \x01(\tR\freceivedTime\x12\x14\n" +
+	"\x05msgid\x18\b \x01(\tR\x05msgidJ\x04\b\x06\x10\aR\x13encryption_key_hint\"\xad\x01\n" +
 	"\x0fDeliverResponse\x125\n" +
 	"\x06result\x18\x01 \x01(\x0e2\x1d.mailsession.v1.DeliverResultR\x06result\x12\x1c\n" +
 	"\ttemporary\x18\x02 \x01(\bR\ttemporary\x12\x16\n" +

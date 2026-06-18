@@ -135,7 +135,7 @@ func (a *SessionManagerDeliveryAgent) ValidateRecipient(ctx context.Context, add
 // forwarded marks this delivery as the result of resolving a forward. When
 // true, the mail-session delivery path will not re-resolve forwarding rules
 // for the recipient, which closes the 1-hop gap and prevents mail loops.
-func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, forwarded bool, message io.Reader) error {
+func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, forwarded bool, msgid string, message io.Reader) error {
 	stream, err := a.delivery.Deliver(ctx)
 	if err != nil {
 		return fmt.Errorf("session-manager delivery: open stream: %w", err)
@@ -147,6 +147,7 @@ func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recip
 		ClientIp:       clientIP,
 		ClientHostname: clientHostname,
 		Forwarded:      forwarded,
+		Msgid:          msgid,
 	}
 	if !receivedTime.IsZero() {
 		meta.ReceivedTime = receivedTime.Format(time.RFC3339)
@@ -220,18 +221,21 @@ func (a *SessionManagerDeliveryAgent) Close() error {
 
 // Enqueue sends a message to the session-manager's OutboundService for queue
 // injection. The session-manager handles DKIM signing and envelope generation.
-func (a *SessionManagerDeliveryAgent) Enqueue(ctx context.Context, sender string, recipients []string, message io.Reader) (string, error) {
+func (a *SessionManagerDeliveryAgent) Enqueue(ctx context.Context, sender string, recipients []string, msgid string, message io.Reader) (string, error) {
 	stream, err := a.outbound.Enqueue(ctx)
 	if err != nil {
 		return "", fmt.Errorf("session-manager enqueue: open stream: %w", err)
 	}
 
-	// Send metadata.
+	// Send metadata. msgid, when set, is the id minted at smtpd ingress; the
+	// queue reuses it so the message keeps one id across the inbound->outbound
+	// boundary.
 	if err := stream.Send(&pb.EnqueueRequest{
 		Payload: &pb.EnqueueRequest_Metadata{
 			Metadata: &pb.EnqueueMetadata{
 				Sender:     sender,
 				Recipients: recipients,
+				Msgid:      msgid,
 			},
 		},
 	}); err != nil {

@@ -86,6 +86,7 @@ func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req Del
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			slog.Warn("opening sieve script",
+				slog.String("msgid", req.MsgID),
 				slog.String("mailbox", mailbox),
 				slog.String("error", err.Error()))
 		}
@@ -96,12 +97,14 @@ func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req Del
 	raw, err := io.ReadAll(io.LimitReader(rc, maxSieveScriptSize+1))
 	if err != nil {
 		slog.Warn("reading sieve script",
+			slog.String("msgid", req.MsgID),
 			slog.String("mailbox", mailbox),
 			slog.String("error", err.Error()))
 		return nil, false
 	}
 	if len(raw) > maxSieveScriptSize {
 		slog.Warn("sieve script exceeds size cap, ignoring",
+			slog.String("msgid", req.MsgID),
 			slog.String("mailbox", mailbox),
 			slog.Int("cap_bytes", maxSieveScriptSize))
 		return nil, false
@@ -110,6 +113,7 @@ func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req Del
 	script, err := sieve.Load(bytes.NewReader(raw), sieve.DefaultOptions())
 	if err != nil {
 		slog.Warn("parsing sieve script",
+			slog.String("msgid", req.MsgID),
 			slog.String("mailbox", mailbox),
 			slog.String("error", err.Error()))
 		return nil, false
@@ -118,6 +122,7 @@ func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req Del
 	hdr, err := textproto.NewReader(bufio.NewReader(bytes.NewReader(msg))).ReadMIMEHeader()
 	if err != nil && !errors.Is(err, io.EOF) {
 		slog.Warn("parsing message headers for sieve",
+			slog.String("msgid", req.MsgID),
 			slog.String("mailbox", mailbox),
 			slog.String("error", err.Error()))
 		return nil, false
@@ -130,6 +135,7 @@ func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req Del
 
 	if err := script.Execute(ctx, data); err != nil {
 		slog.Warn("executing sieve script",
+			slog.String("msgid", req.MsgID),
 			slog.String("mailbox", mailbox),
 			slog.String("error", err.Error()))
 		return nil, false
@@ -137,6 +143,7 @@ func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req Del
 
 	outcome := digestActions(data)
 	slog.Debug("sieve script executed",
+		slog.String("msgid", req.MsgID),
 		slog.String("mailbox", mailbox),
 		slog.Int("fileinto", len(outcome.fileinto)),
 		slog.Int("redirects", len(outcome.redirects)),
@@ -193,6 +200,7 @@ func (dlvr *Deliverer) applySieve(ctx context.Context, dom *domain.Domain, req D
 	if outcome.rejectReason != "" {
 		if outcome.keep || len(outcome.fileinto) > 0 || len(outcome.redirects) > 0 {
 			slog.Warn("sieve script combined reject with delivery actions; rejecting",
+				slog.String("msgid", req.MsgID),
 				slog.String("recipient", req.Recipient))
 		}
 		return DeliverResponse{
@@ -245,6 +253,7 @@ func (dlvr *Deliverer) deliverToFolder(ctx context.Context, dom *domain.Domain, 
 		// No folder support in this store: fall back to the inbox rather
 		// than losing the message.
 		slog.Warn("sieve fileinto unsupported by message store, delivering to inbox",
+			slog.String("msgid", req.MsgID),
 			slog.String("recipient", req.Recipient),
 			slog.String("folder", target.folder))
 		_, err := dlvr.deliverLocal(ctx, dom, req, msg, encInfo)

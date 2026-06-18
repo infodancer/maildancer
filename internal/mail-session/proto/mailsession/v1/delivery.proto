@@ -50,6 +50,13 @@ message DeliverMetadata {
 
   // When the message was accepted by the upstream daemon (RFC 3339).
   string received_time = 7;
+
+  // Internal correlation id: 16 crypto/rand bytes, hex-encoded. Minted at
+  // smtpd ingress and threaded through every delivery stage so a message is
+  // traceable by id (no content) in the logs. The same bytes are the RFC5322
+  // Message-ID and, for next-gen protocols, the message_id. Not derived from
+  // the inbound Message-ID header (sender-chosen).
+  string msgid = 8;
 }
 
 // DeliverResponse is the outcome of the delivery pipeline.

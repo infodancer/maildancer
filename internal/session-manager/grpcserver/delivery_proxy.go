@@ -37,6 +37,7 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 	}
 
 	slog.Info("delivery request",
+		"msgid", meta.GetMsgid(),
 		"to", meta.Recipient,
 		"from", meta.Sender)
 
@@ -49,6 +50,7 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 	deliveryCl, cleanup, err := p.mgr.DeliverySession(stream.Context(), meta.Recipient)
 	if err != nil {
 		slog.Warn("delivery session failed",
+			"msgid", meta.GetMsgid(),
 			"to", meta.Recipient,
 			"error", err)
 		p.metrics.DeliveryProxyCompleted(recipientDomain, "error")
@@ -74,6 +76,7 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 			resp, err := upstream.CloseAndRecv()
 			if err != nil {
 				slog.Warn("delivery failed",
+					"msgid", meta.GetMsgid(),
 					"to", meta.Recipient,
 					"from", meta.Sender,
 					"error", err)
@@ -81,6 +84,7 @@ func (p *deliveryProxy) Deliver(stream pb.DeliveryService_DeliverServer) error {
 				return err
 			}
 			slog.Info("delivery complete",
+				"msgid", meta.GetMsgid(),
 				"to", meta.Recipient,
 				"from", meta.Sender)
 			p.metrics.DeliveryProxyCompleted(recipientDomain, "success")

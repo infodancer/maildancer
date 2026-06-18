@@ -1,9 +1,12 @@
 package deliver
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "github.com/infodancer/maildancer/auth/passwd"
@@ -101,6 +104,42 @@ func TestDeliver_HappyPath(t *testing.T) {
 	}
 	if resp.Result != ResultDelivered {
 		t.Errorf("want ResultDelivered, got %v (reason: %q)", resp.Result, resp.Reason)
+	}
+}
+
+// TestDeliver_LogsMsgID verifies the ingress correlation id threads into the
+// delivery pipeline's log output, so a message is traceable by id (no content).
+func TestDeliver_LogsMsgID(t *testing.T) {
+	dlvr := setupDomainFixture(t, "")
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const id = "0123456789abcdef0123456789abcdef"
+	resp, err := dlvr.Deliver(context.Background(),
+		DeliverRequest{Sender: "sender@example.com", Recipient: "alice@example.com", MsgID: id},
+		[]byte(minimalMsg))
+	if err != nil || resp.Result != ResultDelivered {
+		t.Fatalf("deliver: err=%v result=%v", err, resp.Result)
+	}
+	if !strings.Contains(buf.String(), `"msgid":"`+id+`"`) {
+		t.Errorf("expected msgid %q in delivery logs, got:\n%s", id, buf.String())
+	}
+}
+
+// TestDeliverResultString pins the log tokens used in the result line.
+func TestDeliverResultString(t *testing.T) {
+	for r, want := range map[DeliverResult]string{
+		ResultDelivered:   "delivered",
+		ResultRejected:    "rejected",
+		ResultRedirected:  "redirected",
+		DeliverResult(99): "unknown",
+	} {
+		if got := r.String(); got != want {
+			t.Errorf("DeliverResult(%d).String() = %q, want %q", int(r), got, want)
+		}
 	}
 }
 

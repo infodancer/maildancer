@@ -660,6 +660,7 @@ func (s *Session) Data(r io.Reader) error {
 
 		if deliverErr != nil {
 			s.logger.Warn("local delivery failed",
+				slog.String("msgid", msgid),
 				slog.String("from", s.from),
 				slog.String("to", s.recipients[0]),
 				slog.String("error", deliverErr.Error()))
@@ -696,6 +697,7 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		s.logger.Info("local delivery complete",
+			slog.String("msgid", msgid),
 			slog.String("from", s.from),
 			slog.String("to", s.recipients[0]),
 			slog.Int64("size", counter.n))
@@ -727,6 +729,7 @@ func (s *Session) Data(r io.Reader) error {
 		_, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, msgid, tmp.reader())
 		if err != nil {
 			s.logger.Warn("enqueue failed",
+				slog.String("msgid", msgid),
 				slog.String("from", s.from),
 				slog.Any("to", s.remoteRecipients),
 				slog.String("error", err.Error()))

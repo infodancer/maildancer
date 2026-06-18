@@ -28,6 +28,20 @@ const (
 	ResultRedirected
 )
 
+// String renders the result for logging (stable, lowercase tokens).
+func (r DeliverResult) String() string {
+	switch r {
+	case ResultDelivered:
+		return "delivered"
+	case ResultRejected:
+		return "rejected"
+	case ResultRedirected:
+		return "redirected"
+	default:
+		return "unknown"
+	}
+}
+
 // DeliverResponse holds the outcome of a delivery pipeline run.
 type DeliverResponse struct {
 	Result            DeliverResult
@@ -129,6 +143,7 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 				// sending MTA's own retry window is the eventual permanent backstop.
 				// We deliberately do NOT build stateful temp->perm escalation here.
 				slog.Error("forwarding misconfiguration: multiple forward targets configured (1:1 required)",
+					slog.String("msgid", req.MsgID),
 					slog.String("recipient", req.Recipient),
 					slog.Int("target_count", len(targets)))
 				return DeliverResponse{
@@ -138,6 +153,7 @@ func (dlvr *Deliverer) Deliver(ctx context.Context, req DeliverRequest, msg []by
 				}, nil
 			}
 			slog.Debug("forwarding message",
+				slog.String("msgid", req.MsgID),
 				slog.String("recipient", req.Recipient),
 				slog.String("target", targets[0]))
 			return DeliverResponse{
@@ -216,7 +232,9 @@ func (dlvr *Deliverer) deliverLocal(ctx context.Context, dom *domain.Domain, req
 		return DeliverResponse{}, fmt.Errorf("maildir delivery to %s: %w", req.Recipient, err)
 	}
 
-	slog.Debug("message delivered", slog.String("recipient", req.Recipient))
+	slog.Debug("message delivered to inbox",
+		slog.String("msgid", req.MsgID),
+		slog.String("recipient", req.Recipient))
 	return DeliverResponse{
 		Result: ResultDelivered,
 	}, nil

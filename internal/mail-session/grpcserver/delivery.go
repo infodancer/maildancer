@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"io"
+	"log/slog"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -56,6 +57,12 @@ func (d *DeliveryServer) Deliver(stream pb.DeliveryService_DeliverServer) error 
 
 	resp, err := d.srv.deliverer.Deliver(stream.Context(), req, body)
 	if err != nil {
+		// Pipeline error (not a clean reject): log it here -- the caller only
+		// sees a gRPC status -- so the failure is traceable by msgid.
+		slog.Error("delivery pipeline failed",
+			slog.String("msgid", req.MsgID),
+			slog.String("recipient", req.Recipient),
+			slog.String("error", err.Error()))
 		return status.Errorf(codes.Internal, "delivery failed: %v", err)
 	}
 
@@ -72,6 +79,21 @@ func (d *DeliveryServer) Deliver(stream pb.DeliveryService_DeliverServer) error 
 	case deliver.ResultRedirected:
 		pbResp.Result = pb.DeliverResult_DELIVER_RESULT_REDIRECTED
 	}
+
+	// One authoritative result line per delivery, keyed by msgid, regardless of
+	// which pipeline path (keep, fileinto, redirect, reject) produced it.
+	attrs := []any{
+		slog.String("msgid", req.MsgID),
+		slog.String("recipient", req.Recipient),
+		slog.String("result", resp.Result.String()),
+	}
+	if resp.Result == deliver.ResultRejected {
+		attrs = append(attrs, slog.Bool("temporary", resp.Temporary), slog.String("reason", resp.Reason))
+	}
+	if resp.Result == deliver.ResultRedirected {
+		attrs = append(attrs, slog.Int("redirects", len(resp.RedirectAddresses)))
+	}
+	slog.Info("delivery result", attrs...)
 
 	return stream.SendAndClose(pbResp)
 }

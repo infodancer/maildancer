@@ -40,7 +40,7 @@ func (dlvr *Deliverer) maybeEncrypt(ctx context.Context, dom *domain.Domain, req
 	}
 
 	failClosed := func(logMsg string, err error) ([]byte, *msgstore.EncryptionInfo, *DeliverResponse) {
-		attrs := []any{slog.String("recipient", req.Recipient)}
+		attrs := []any{slog.String("msgid", req.MsgID), slog.String("recipient", req.Recipient)}
 		if err != nil {
 			attrs = append(attrs, slog.String("error", err.Error()))
 		}
@@ -75,6 +75,7 @@ func (dlvr *Deliverer) maybeEncrypt(ctx context.Context, dom *domain.Domain, req
 	}
 
 	slog.Debug("message encrypted for at-rest storage",
+		slog.String("msgid", req.MsgID),
 		slog.String("recipient", req.Recipient),
 		slog.Int("plaintext_bytes", len(msg)),
 		slog.Int("encrypted_bytes", len(encrypted)))

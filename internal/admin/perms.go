@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/infodancer/maildancer/auth/identity"
 	"github.com/infodancer/maildancer/auth/passwd"
 )
 
@@ -79,9 +80,6 @@ func (p Paths) domainPermPlan(domain string) ([]permEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve gid: %w", err)
 	}
-	if gid == 0 {
-		return nil, fmt.Errorf("domain %s has no gid allocated", domain)
-	}
 
 	dataDir := filepath.Join(p.Data, domain)
 	usersDir := filepath.Join(dataDir, "users")
@@ -90,18 +88,24 @@ func (p Paths) domainPermPlan(domain string) ([]permEntry, error) {
 		{Path: usersDir, UID: rootUID, GID: int(gid), Mode: sharedDirMode},
 	}
 
-	// Each user with an allocated uid gets their own directory owned uid:gid.
+	// Each user gets their own directory owned uid:gid. The uid is the
+	// authoritative one from {config}/{domain}/uid.toml; a passwd entry without
+	// an allocated uid yet (ErrNoUID) is skipped -- nothing to own.
 	users, err := passwd.ListUsers(filepath.Join(p.Config, domain, "passwd"))
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
 	for _, u := range users {
-		if u.Uid == 0 {
-			continue // pre-migration entry with no uid; nothing to own
+		uid, err := identity.UserUID(p.Config, domain, u.Username)
+		if errors.Is(err, identity.ErrNoUID) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("resolve uid for %s: %w", u.Username, err)
 		}
 		plan = append(plan, permEntry{
 			Path: filepath.Join(usersDir, u.Username),
-			UID:  int(u.Uid),
+			UID:  int(uid),
 			GID:  int(gid),
 			Mode: userDirMode,
 		})

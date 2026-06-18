@@ -7,11 +7,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/infodancer/maildancer/auth/identity"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
@@ -59,20 +59,12 @@ func TestMigrateUIDs_BaredomainGetsConfig(t *testing.T) {
 		t.Errorf("expected no errors, got %v", result.Errors)
 	}
 
-	// Verify gid was written to data volume config.toml.
-	dataConfigPath := filepath.Join(dataDir, "example.com", "config.toml")
-	data, err := os.ReadFile(dataConfigPath)
-	if err != nil {
-		t.Fatalf("data config.toml not created: %v", err)
-	}
-	gidStr := extractTOMLValue(string(data), "gid", "domain")
-	if gidStr == "" {
-		t.Error("expected [domain] gid in data config.toml, not found")
-	}
-	gid, err := strconv.ParseUint(gidStr, 10, 32)
+	// Verify gid was written to the authoritative {config}/gid.toml.
+	gid, err := identity.DomainGID(configDir, "example.com")
 	if err != nil || gid == 0 {
-		t.Errorf("expected nonzero gid, got %q", gidStr)
+		t.Errorf("expected a gid in gid.toml, got gid=%d err=%v", gid, err)
 	}
+	_ = dataDir
 }
 
 func TestMigrateUIDs_ExistingAuthConfigIsPreservedGidGoesToDataVolume(t *testing.T) {
@@ -112,7 +104,7 @@ base_path = "users"
 		t.Errorf("expected 1 domain migrated, got %d", result.DomainsMigrated)
 	}
 
-	// Auth config.toml in config volume must be untouched.
+	// Auth config.toml in config volume must be untouched and carry no gid.
 	authData, err := os.ReadFile(filepath.Join(domainConfigDir, "config.toml"))
 	if err != nil {
 		t.Fatal(err)
@@ -120,20 +112,15 @@ base_path = "users"
 	if !strings.Contains(string(authData), `type = "passwd"`) {
 		t.Error("auth config.toml in config volume was modified")
 	}
-	if extractTOMLValue(string(authData), "gid", "domain") != "" {
-		t.Error("gid should not be in the config volume config.toml")
+	if strings.Contains(string(authData), "gid") {
+		t.Error("gid must not be in the per-domain config.toml")
 	}
 
-	// Gid must be in data volume config.toml.
-	dataConfigPath := filepath.Join(dataDir, "example.com", "config.toml")
-	dataBytes, err := os.ReadFile(dataConfigPath)
-	if err != nil {
-		t.Fatalf("data config.toml not created: %v", err)
+	// Gid lives in the authoritative {config}/gid.toml.
+	if gid, err := identity.DomainGID(configDir, "example.com"); err != nil || gid == 0 {
+		t.Errorf("expected a gid in gid.toml after migration, got gid=%d err=%v", gid, err)
 	}
-	gidStr := extractTOMLValue(string(dataBytes), "gid", "domain")
-	if gidStr == "" {
-		t.Error("expected gid in data volume config.toml after migration")
-	}
+	_ = dataDir
 }
 
 func TestMigrateUIDs_PasswdUsersGet3FieldsAllocatedUID(t *testing.T) {
@@ -143,18 +130,15 @@ func TestMigrateUIDs_PasswdUsersGet3FieldsAllocatedUID(t *testing.T) {
 	if err := os.MkdirAll(domainConfigDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	// Two users: one with 3 fields (needs uid), one with 4 fields (already has uid).
+	// Two users: alice has no uid anywhere; bob carries a legacy passwd uid.
 	passwd := "alice:hash1:alice\nbob:hash2:bob:10001\n"
 	if err := os.WriteFile(filepath.Join(domainConfigDir, "passwd"), []byte(passwd), 0o640); err != nil {
 		t.Fatal(err)
 	}
 
-	// Pre-seed gid in data volume so domain migration is skipped.
-	domainDataDir := filepath.Join(dataDir, "example.com")
-	if err := os.MkdirAll(domainDataDir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(domainDataDir, "config.toml"), []byte("[domain]\ngid = 10000\n"), 0o640); err != nil {
+	// Pre-seed the gid in the authoritative gid.toml so domain migration is
+	// skipped and only the user uids migrate.
+	if err := identity.NewManager(configDir, dataDir).SetDomainGID("example.com", 10000); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,34 +154,26 @@ func TestMigrateUIDs_PasswdUsersGet3FieldsAllocatedUID(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if result.UsersMigrated != 1 {
-		t.Errorf("expected 1 user migrated, got %d", result.UsersMigrated)
+	// Both users gain a uid.toml entry: alice allocated, bob's passwd uid adopted.
+	if result.UsersMigrated != 2 {
+		t.Errorf("expected 2 users migrated, got %d", result.UsersMigrated)
 	}
 	if result.DomainsMigrated != 0 {
 		t.Errorf("expected 0 domain migrations (gid already present), got %d", result.DomainsMigrated)
 	}
 
-	// Verify alice now has a uid field; bob's uid is unchanged.
-	data, err := os.ReadFile(filepath.Join(domainConfigDir, "passwd"))
-	if err != nil {
-		t.Fatal(err)
+	// uid is authoritative in uid.toml; the passwd file is left untouched
+	// (still 3-field for alice). bob's legacy uid is adopted unchanged.
+	aliceUID, err := identity.UserUID(configDir, "example.com", "alice")
+	if err != nil || aliceUID == 0 {
+		t.Errorf("alice has no uid in uid.toml: uid=%d err=%v", aliceUID, err)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, ":", 4)
-		if len(parts) < 4 {
-			t.Errorf("line missing uid field: %q", line)
-			continue
-		}
-		uid, err := strconv.ParseUint(parts[3], 10, 32)
-		if err != nil || uid == 0 {
-			t.Errorf("expected nonzero uid for user %s, got %q", parts[0], parts[3])
-		}
-		if parts[0] == "bob" && parts[3] != "10001" {
-			t.Errorf("bob's uid should be unchanged (10001), got %s", parts[3])
-		}
+	bobUID, err := identity.UserUID(configDir, "example.com", "bob")
+	if err != nil || bobUID != 10001 {
+		t.Errorf("bob's adopted uid = %d (err=%v), want 10001", bobUID, err)
+	}
+	if pw, _ := os.ReadFile(filepath.Join(domainConfigDir, "passwd")); !strings.Contains(string(pw), "alice:hash1:alice\n") {
+		t.Errorf("alice's passwd line should be unchanged 3-field, got:\n%s", pw)
 	}
 }
 
@@ -221,10 +197,12 @@ func TestMigrateUIDs_Idempotent(t *testing.T) {
 		t.Fatalf("decode result1: %v", err)
 	}
 
-	// Record gid from first run (stored in data volume).
-	dataConfigPath := filepath.Join(dataDir, "example.com", "config.toml")
-	data1, _ := os.ReadFile(dataConfigPath)
-	gid1 := extractTOMLValue(string(data1), "gid", "domain")
+	// Record gid from first run (stored in {config}/gid.toml).
+	gid1, err := identity.DomainGID(configDir, "example.com")
+	if err != nil {
+		t.Fatalf("gid after first run: %v", err)
+	}
+	_ = dataDir
 
 	// Second run.
 	req2 := httptest.NewRequest(http.MethodPost, "/api/migrate/uids", nil)
@@ -244,9 +222,11 @@ func TestMigrateUIDs_Idempotent(t *testing.T) {
 	}
 
 	// gid must not change.
-	data2, _ := os.ReadFile(dataConfigPath)
-	gid2 := extractTOMLValue(string(data2), "gid", "domain")
+	gid2, err := identity.DomainGID(configDir, "example.com")
+	if err != nil {
+		t.Fatalf("gid after second run: %v", err)
+	}
 	if gid1 != gid2 {
-		t.Errorf("gid changed between runs: %s -> %s", gid1, gid2)
+		t.Errorf("gid changed between runs: %d -> %d", gid1, gid2)
 	}
 }

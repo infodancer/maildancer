@@ -7,8 +7,8 @@ import (
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/infodancer/maildancer/auth/identity"
 	"github.com/infodancer/maildancer/auth/passwd"
-	"github.com/infodancer/maildancer/internal/admin/uidalloc"
 )
 
 // DomainInfo describes a domain's effective admin-visible state.
@@ -32,14 +32,6 @@ key_backend = "keys"
 type = "maildir"
 base_path = "users"
 `
-
-// dataVolumeConfig models the data-volume {data}/{domain}/config.toml,
-// which records the domain's allocated gid.
-type dataVolumeConfig struct {
-	Domain struct {
-		Gid uint32 `toml:"gid"`
-	} `toml:"domain"`
-}
 
 // DomainExists reports whether the domain directory exists in the config volume.
 func (p Paths) DomainExists(name string) bool {
@@ -75,18 +67,14 @@ func (p Paths) CreateDomain(name string) (uint32, error) {
 		return 0, fmt.Errorf("write passwd: %w", err)
 	}
 
-	gid, err := uidalloc.Allocate(p.Data)
+	// Identity allocation goes through the single identity code path, which
+	// records the gid in the authoritative {config}/gid.toml -- not the data
+	// tree. Allocate-once; a re-create of an existing domain is refused above.
+	gid, err := p.idMgr().AllocateDomainGID(name)
 	if err != nil {
 		return 0, fmt.Errorf("allocate domain gid: %w", err)
 	}
 	dataDir := filepath.Join(p.Data, name)
-	if err := os.MkdirAll(dataDir, 0o750); err != nil {
-		return 0, fmt.Errorf("create data directory: %w", err)
-	}
-	dataConfig := fmt.Sprintf("[domain]\ngid = %d\n", gid)
-	if err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(dataConfig), 0o640); err != nil {
-		return 0, fmt.Errorf("write data config: %w", err)
-	}
 	if err := os.MkdirAll(filepath.Join(dataDir, "users"), 0o750); err != nil {
 		return 0, fmt.Errorf("create users directory: %w", err)
 	}
@@ -192,11 +180,8 @@ func (p Paths) GetDomain(name string) (*DomainInfo, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	if data, err := os.ReadFile(filepath.Join(p.Data, name, "config.toml")); err == nil {
-		var cfg dataVolumeConfig
-		if err := toml.Unmarshal(data, &cfg); err == nil {
-			info.GID = cfg.Domain.Gid
-		}
+	if gid, err := identity.DomainGID(p.Config, name); err == nil {
+		info.GID = gid
 	}
 
 	users, err := passwd.ListUsers(filepath.Join(p.Config, name, "passwd"))

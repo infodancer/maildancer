@@ -1,14 +1,16 @@
 package admin
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/infodancer/maildancer/auth/identity"
 	"github.com/infodancer/maildancer/auth/passwd"
-	"github.com/infodancer/maildancer/internal/admin/uidalloc"
 )
 
 // MigrateResult summarizes a MigrateUIDs run.
@@ -21,9 +23,11 @@ type MigrateResult struct {
 	Errors []string
 }
 
-// MigrateUIDs walks every domain, allocating a gid for domains without one
-// and a uid for passwd entries without one. Per-domain failures are recorded
-// in the result rather than aborting the walk.
+// MigrateUIDs walks every domain, ensuring each has a gid in gid.toml and each
+// passwd user has a uid in uid.toml. Existing ids are adopted (so the on-disk
+// mail is never re-chowned out from under itself); only genuinely unallocated
+// domains/users draw a fresh id. Per-domain failures are recorded rather than
+// aborting the walk.
 func (p Paths) MigrateUIDs() (*MigrateResult, error) {
 	result := &MigrateResult{Details: []string{}, Errors: []string{}}
 
@@ -53,83 +57,139 @@ func (p Paths) MigrateUIDs() (*MigrateResult, error) {
 	return result, nil
 }
 
-// migrateDomain ensures one domain has a gid and all its users have uids.
+// migrateDomain ensures one domain has a gid (gid.toml) and all its users have
+// uids (uid.toml), adopting any value already authoritative under the old
+// layout before allocating a fresh one.
 func (p Paths) migrateDomain(name string) (domainMigrated bool, usersMigrated int, details, errs []string) {
-	// Gid lives in the data volume config.toml.
-	dataDir := filepath.Join(p.Data, name)
-	dataConfigPath := filepath.Join(dataDir, "config.toml")
+	mgr := p.idMgr()
 
-	var gid uint32
-	if data, err := os.ReadFile(dataConfigPath); err == nil {
-		var cfg dataVolumeConfig
-		if err := toml.Unmarshal(data, &cfg); err == nil {
-			gid = cfg.Domain.Gid
+	// GID: adopt an existing value or allocate a fresh one.
+	if _, err := identity.DomainGID(p.Config, name); errors.Is(err, identity.ErrNoGID) {
+		if gid, src := p.adoptDomainGID(name); gid != 0 {
+			if err := mgr.SetDomainGID(name, gid); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: record adopted gid: %v", name, err))
+			} else {
+				domainMigrated = true
+				details = append(details, fmt.Sprintf("%s gid=%d (adopted from %s)", name, gid, src))
+			}
+		} else {
+			gid, err := mgr.AllocateDomainGID(name)
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: allocate gid: %v", name, err))
+			} else {
+				domainMigrated = true
+				details = append(details, fmt.Sprintf("%s gid=%d (allocated)", name, gid))
+			}
 		}
+	} else if err != nil {
+		errs = append(errs, fmt.Sprintf("%s: read gid: %v", name, err))
 	}
 
-	if gid == 0 {
-		allocated, err := uidalloc.Allocate(p.Data)
-		if err != nil {
-			return false, 0, details, append(errs, fmt.Sprintf("%s: allocate gid: %v", name, err))
-		}
-		if err := os.MkdirAll(dataDir, 0o750); err != nil {
-			return false, 0, details, append(errs, fmt.Sprintf("%s: create data dir: %v", name, err))
-		}
-		dataConfig := fmt.Sprintf("[domain]\ngid = %d\n", allocated)
-		if err := os.WriteFile(dataConfigPath, []byte(dataConfig), 0o640); err != nil {
-			return false, 0, details, append(errs, fmt.Sprintf("%s: write data config.toml: %v", name, err))
-		}
-		domainMigrated = true
-		details = append(details, fmt.Sprintf("%s gid=%d", name, allocated))
-	}
-
-	migrated, userDetails, err := p.migratePasswdUIDs(name)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s: migrate passwd: %v", name, err))
-	}
-	return domainMigrated, migrated, append(details, userDetails...), errs
+	migrated, userDetails, uerrs := p.migrateUserUIDs(name)
+	usersMigrated = migrated
+	details = append(details, userDetails...)
+	errs = append(errs, uerrs...)
+	return domainMigrated, usersMigrated, details, errs
 }
 
-// migratePasswdUIDs allocates uids for passwd entries that lack one.
-func (p Paths) migratePasswdUIDs(domain string) (int, []string, error) {
+// migrateUserUIDs ensures every passwd user has a uid in uid.toml, adopting the
+// legacy passwd-4th-field uid when present, else allocating fresh.
+func (p Paths) migrateUserUIDs(domain string) (migrated int, details, errs []string) {
 	passwdPath := filepath.Join(p.Config, domain, "passwd")
-
 	users, err := passwd.ListUsers(passwdPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0, nil, nil
 		}
-		return 0, nil, err
+		return 0, nil, []string{fmt.Sprintf("%s: list users: %v", domain, err)}
 	}
 
-	var needsUID []string
+	mgr := p.idMgr()
 	for _, u := range users {
-		if u.Uid == 0 {
-			needsUID = append(needsUID, u.Username)
+		if _, err := identity.UserUID(p.Config, domain, u.Username); !errors.Is(err, identity.ErrNoUID) {
+			continue // already allocated (or a read error we leave to perms)
 		}
-	}
-	if len(needsUID) == 0 {
-		return 0, nil, nil
-	}
-
-	unlock, err := p.lockDomain(domain)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer unlock()
-
-	migrated := 0
-	var details []string
-	for _, username := range needsUID {
-		uid, err := uidalloc.Allocate(p.Data)
+		if u.Uid != 0 {
+			if err := mgr.SetUserUID(domain, u.Username, u.Uid); err != nil {
+				errs = append(errs, fmt.Sprintf("%s@%s: record adopted uid: %v", u.Username, domain, err))
+				continue
+			}
+			migrated++
+			details = append(details, fmt.Sprintf("%s@%s uid=%d (adopted from passwd)", u.Username, domain, u.Uid))
+			continue
+		}
+		uid, err := mgr.AllocateUserUID(domain, u.Username)
 		if err != nil {
-			return migrated, details, fmt.Errorf("allocate uid for %s: %w", username, err)
-		}
-		if err := passwd.SetUID(passwdPath, username, uid); err != nil {
-			return migrated, details, fmt.Errorf("set uid for %s: %w", username, err)
+			errs = append(errs, fmt.Sprintf("%s@%s: allocate uid: %v", u.Username, domain, err))
+			continue
 		}
 		migrated++
-		details = append(details, fmt.Sprintf("%s@%s uid=%d", username, domain, uid))
+		details = append(details, fmt.Sprintf("%s@%s uid=%d (allocated)", u.Username, domain, uid))
 	}
-	return migrated, details, nil
+	return migrated, details, errs
+}
+
+// adoptDomainGID finds a domain's authoritative gid under the pre-identity-map
+// layout, in priority order, and reports the source. Returns 0 when none is
+// found (the caller then allocates fresh).
+//
+// The on-disk group of the data directory wins: adopting it means the reconcile
+// chown is a no-op, so a live domain's mail is never re-grouped out from under
+// the running daemons. Below that come the retired record locations.
+func (p Paths) adoptDomainGID(domain string) (gid uint32, source string) {
+	dataDir := filepath.Join(p.Data, domain)
+
+	// 1. Actual group ownership of the data directory.
+	if info, err := os.Stat(dataDir); err == nil {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Gid >= firstReservedGID {
+			return st.Gid, "data dir group"
+		}
+	}
+	// 2. Retired data-tree config.toml `[domain] gid`.
+	if g := tomlDomainGID(filepath.Join(dataDir, "config.toml")); g != 0 {
+		return g, "data-tree config.toml"
+	}
+	// 3. Retired config-tree config.toml top-level `gid`.
+	if g := tomlTopLevelGID(filepath.Join(p.Config, domain, "config.toml")); g != 0 {
+		return g, "config-tree config.toml"
+	}
+	return 0, ""
+}
+
+// firstReservedGID is the lowest gid the allocator hands out; a data dir owned
+// by a lower gid (e.g. root) is not a real domain allocation to adopt.
+const firstReservedGID = uint32(10000)
+
+// tomlDomainGID reads `[domain] gid` from a TOML file; 0 if absent/unreadable.
+func tomlDomainGID(path string) uint32 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var c struct {
+		Domain struct {
+			Gid uint32 `toml:"gid"`
+		} `toml:"domain"`
+	}
+	if err := toml.Unmarshal(data, &c); err != nil {
+		return 0
+	}
+	return c.Domain.Gid
+}
+
+// tomlTopLevelGID reads a top-level `gid` from a TOML file; 0 if absent. The
+// gid field was removed from DomainConfig (maildancer#101); this ad-hoc parse
+// exists only to adopt the legacy value during migration.
+func tomlTopLevelGID(path string) uint32 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var c struct {
+		Gid uint32 `toml:"gid"`
+	}
+	if err := toml.Unmarshal(data, &c); err != nil {
+		return 0
+	}
+	return c.Gid
 }

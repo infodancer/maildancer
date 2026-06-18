@@ -5,9 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pelletier/go-toml/v2"
-
-	"github.com/infodancer/maildancer/auth/passwd"
+	"github.com/infodancer/maildancer/auth/identity"
 	"github.com/infodancer/maildancer/internal/admin/keys"
 )
 
@@ -204,7 +202,7 @@ func (p Paths) applyKeyringOwnership(domain, username, dir string) string {
 	if os.Geteuid() != 0 {
 		return ""
 	}
-	uid, err := passwd.LookupUID(filepath.Join(p.Config, domain, "passwd"), username)
+	uid, err := identity.UserUID(p.Config, domain, username)
 	if err != nil {
 		return fmt.Sprintf("keyring ownership: lookup uid: %v", err)
 	}
@@ -224,17 +222,11 @@ func (p Paths) applyKeyringOwnership(domain, username, dir string) string {
 	return ""
 }
 
-// domainGid reads the domain's allocated gid from the data-volume config.toml.
+// domainGid reads the domain's allocated gid from the authoritative gid.toml
+// map (via the identity package). Returns identity.ErrNoGID when the domain has
+// no allocation yet.
 func (p Paths) domainGid(domain string) (uint32, error) {
-	data, err := os.ReadFile(filepath.Join(p.Data, domain, "config.toml"))
-	if err != nil {
-		return 0, err
-	}
-	var cfg dataVolumeConfig
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return 0, err
-	}
-	return cfg.Domain.Gid, nil
+	return identity.DomainGID(p.Config, domain)
 }
 
 // keyStatus reads keypair presence and fingerprint for a key-file basename in

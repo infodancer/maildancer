@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -148,6 +149,11 @@ func runDomainSubcommand(args []string, paths admin.Paths, stdin io.Reader) erro
 
 func cmdDomainCreate(paths admin.Paths, name string) error {
 	gid, err := paths.CreateDomain(name)
+	if errors.Is(err, admin.ErrDomainExists) {
+		// Idempotent for IaC reconcile: an existing domain is left untouched.
+		fmt.Printf("Domain %s already exists; skipping\n", name)
+		return nil
+	}
 	if err != nil {
 		return err
 	}

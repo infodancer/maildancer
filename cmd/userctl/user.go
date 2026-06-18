@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -118,6 +119,12 @@ func cmdUserAdd(paths admin.Paths, domainName, username string, genKeys, passwor
 	}
 
 	result, err := paths.CreateUser(domainName, username, password, genKeys)
+	if errors.Is(err, admin.ErrUserExists) {
+		// Idempotent for IaC reconcile: an existing user is left untouched
+		// (no password reset, no key regen). Skip, success.
+		fmt.Printf("User %s@%s already exists; skipping\n", username, domainName)
+		return nil
+	}
 	if err != nil {
 		return err
 	}

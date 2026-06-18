@@ -43,8 +43,15 @@ not maildancer's to repackage. The all-in-one is "one image" for *our* code.
 
 ## Volumes / config
 
-Identical to the per-container deployment; the shared `config.toml` already has
-a section per daemon:
+A complete reference config is baked in at
+`/usr/share/maildancer/config.toml.example` -- it binds every standard mail port
+(25/465/587, 110/995, 143/993, 8080) with TLS, so a bare run is turnkey once you
+copy it to `/etc/infodancer/config.toml` and set the hostname and cert paths. It
+lives under `/usr/share` rather than `/etc/infodancer` so a mounted config
+volume does not shadow it.
+
+Identical volume layout to the per-container deployment; the shared `config.toml`
+already has a section per daemon:
 
 - `/etc/infodancer` -- config (`config.toml`, `domains/`)
 - `/opt/infodancer/domains` -- mail data

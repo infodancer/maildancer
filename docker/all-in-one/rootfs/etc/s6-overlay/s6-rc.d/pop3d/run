@@ -1,0 +1,2 @@
+#!/command/with-contenv sh
+exec /pop3d serve -config /etc/infodancer/config.toml

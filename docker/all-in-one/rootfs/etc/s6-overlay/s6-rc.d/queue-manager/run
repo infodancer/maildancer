@@ -1,0 +1,3 @@
+#!/command/with-contenv sh
+exec /queue-manager --config /etc/infodancer/config.toml \
+    --queue /var/spool/mail-queue --binary /mail-remote

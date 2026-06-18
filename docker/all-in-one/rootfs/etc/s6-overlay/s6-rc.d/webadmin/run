@@ -1,0 +1,2 @@
+#!/command/with-contenv sh
+exec /webadmin -config /etc/infodancer/config.toml

@@ -101,7 +101,7 @@ func (s *outboundServer) Enqueue(stream pb.OutboundService_EnqueueServer) error 
 	s.metrics.EnqueueSize(senderDomain, int64(bodySize))
 
 	slog.Info("message enqueued",
-		"msg_id", msgID,
+		"msgid", msgID,
 		"from", meta.Sender,
 		"to", meta.Recipients,
 		"size", bodySize)

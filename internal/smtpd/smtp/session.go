@@ -736,7 +736,7 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		s.logger.Info("enqueued for remote delivery",
-			slog.String("msg_id", msgID),
+			slog.String("msgid", msgID),
 			slog.String("from", s.from),
 			slog.Any("to", s.remoteRecipients),
 			slog.Int64("size", counter.n))
@@ -787,7 +787,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 			s.logger.Info("forward enqueued for remote delivery",
 				slog.String("from", s.from),
 				slog.String("target", target),
-				slog.String("msg_id", msgID))
+				slog.String("msgid", msgID))
 			continue
 		}
 

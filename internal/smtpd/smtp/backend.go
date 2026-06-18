@@ -1,8 +1,10 @@
 package smtp
 
 import (
+	"context"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-smtp"
@@ -108,11 +110,29 @@ func (b *Backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 	}
 
 	return &Session{
-		backend:  b,
-		conn:     c,
-		clientIP: clientIP,
-		logger:   logging.WithConnection(b.logger, remoteAddr),
+		backend:        b,
+		conn:           c,
+		clientIP:       clientIP,
+		clientHostname: reverseDNS(clientIP),
+		logger:         logging.WithConnection(b.logger, remoteAddr),
 	}, nil
+}
+
+// reverseDNS resolves the PTR record for ip for the RFC 5321 section 4.4 trace
+// "from" clause. It is best-effort with a short timeout so a slow or missing
+// PTR never stalls the connection; an empty result is rendered as "unknown".
+// The single returned name is trimmed of its trailing dot.
+func reverseDNS(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	names, err := net.DefaultResolver.LookupAddr(ctx, ip)
+	if err != nil || len(names) == 0 {
+		return ""
+	}
+	return strings.TrimSuffix(names[0], ".")
 }
 
 // extractIPFromConn extracts the IP address string from a net.Conn.

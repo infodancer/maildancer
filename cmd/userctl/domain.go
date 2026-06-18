@@ -221,6 +221,9 @@ func printPermReport(report admin.PermReport) {
 	if skippedChown {
 		fmt.Println("  note: ownership changes need root; re-run as root to apply uid:gid")
 	}
+	for _, w := range report.Warnings {
+		fmt.Printf("  warning: %s\n", w)
+	}
 }
 
 func cmdDomainDel(paths admin.Paths, name string, force bool) error {

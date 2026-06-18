@@ -85,10 +85,11 @@ func (p Paths) CreateUser(domain, username, password string, generateKeys bool) 
 	// presence, so provisioning a key here is what turns on at-rest encryption
 	// for this user (maildancer#65).
 	if generateKeys || p.domainProvisionsKeys(domain) {
-		if err := p.createKeypair(domain, username, password); err != nil {
+		if warns, err := p.createUserKeypair(domain, username, password); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("generate keys: %v", err))
 		} else {
 			result.KeysGenerated = true
+			result.Warnings = append(result.Warnings, warns...)
 		}
 	}
 
@@ -134,7 +135,9 @@ func (p Paths) DeleteUser(domain, username string) error {
 		return fmt.Errorf("remove passwd entry: %w", err)
 	}
 
-	// Key removal is best-effort, matching prior webadmin behavior.
+	// Key removal is best-effort, matching prior webadmin behavior. Remove the
+	// data-tree keyring and any legacy config-tree key files.
+	_ = keys.DeleteKeypair(p.userKeyringDir(domain, username), keyringName)
 	_ = keys.DeleteKeypair(filepath.Join(domainPath, "keys"), username)
 
 	return nil
@@ -170,7 +173,7 @@ func (p Paths) ResetPassword(domain, username, password string) error {
 	if !userExists(passwdPath, username) {
 		return ErrUserNotFound
 	}
-	if status := p.keyStatus(domain, username); status.Exists && status.HasPrivate {
+	if status := p.userKeyStatus(domain, username); status.Exists && status.HasPrivate {
 		return ErrUserHasKeys
 	}
 	if err := passwd.SetPassword(passwdPath, username, password); err != nil {
@@ -194,15 +197,13 @@ func (p Paths) ListUsers(domain string) ([]UserSummary, error) {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
 
-	keysDir := filepath.Join(domainPath, "keys")
 	summaries := []UserSummary{}
 	for _, u := range users {
-		_, pubErr := keys.LoadPublicKey(keysDir, u.Username)
 		summaries = append(summaries, UserSummary{
 			Username: u.Username,
 			Mailbox:  u.Mailbox,
 			UID:      u.Uid,
-			HasKeys:  pubErr == nil,
+			HasKeys:  p.userKeyStatus(domain, u.Username).Exists,
 		})
 	}
 	return summaries, nil

@@ -1,9 +1,30 @@
 package main
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/infodancer/maildancer/auth"
+	"github.com/infodancer/maildancer/auth/passwd"
+	"github.com/infodancer/maildancer/internal/admin"
 )
+
+// authenticateUser runs a passwd-agent authentication against the test paths,
+// wiring the data-tree keyring base as the daemons do.
+func authenticateUser(t *testing.T, p admin.Paths, domain, username, password string) (*auth.AuthSession, error) {
+	t.Helper()
+	agent, err := passwd.NewAgent(
+		filepath.Join(p.Config, domain, "passwd"),
+		filepath.Join(p.Config, domain, "keys"))
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	agent = agent.WithUserKeyringBase(filepath.Join(p.Data, domain, "users"))
+	defer func() { _ = agent.Close() }()
+	return agent.Authenticate(context.Background(), username, password)
+}
 
 func TestRunUserSubcommand_Lifecycle(t *testing.T) {
 	p := testPaths(t)
@@ -154,5 +175,42 @@ func TestRunUserSubcommand_PasswdWithKeys(t *testing.T) {
 	}
 	if regen.Fingerprint == after.Fingerprint {
 		t.Error("--reset must regenerate the keypair, not reuse it")
+	}
+}
+
+// TestRunUserSubcommand_AddIdempotent verifies the IaC reconcile contract:
+// re-adding an existing user succeeds (exit 0) and does NOT alter the existing
+// user -- the password is unchanged (still authenticates with the original).
+func TestRunUserSubcommand_AddIdempotent(t *testing.T) {
+	p := testPaths(t)
+	if err := runDomainSubcommand([]string{"create", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runUserSubcommand([]string{"add", "alice@example.com", "--gen-keys", "--password-stdin"}, p, strings.NewReader("password123\n")); err != nil {
+		t.Fatalf("first add: %v", err)
+	}
+
+	// Second add of the same user: must succeed (skip), not error.
+	if err := runUserSubcommand([]string{"add", "alice@example.com", "--gen-keys", "--password-stdin"}, p, strings.NewReader("differentpw9\n")); err != nil {
+		t.Fatalf("idempotent re-add must succeed, got: %v", err)
+	}
+
+	// The original password still authenticates -- the re-add did not reset it.
+	session, err := authenticateUser(t, p, "example.com", "alice", "password123")
+	if err != nil {
+		t.Fatalf("original password broken after idempotent re-add: %v", err)
+	}
+	session.Clear()
+}
+
+// TestRunDomainSubcommand_CreateIdempotent verifies re-creating an existing
+// domain succeeds (skip) rather than erroring.
+func TestRunDomainSubcommand_CreateIdempotent(t *testing.T) {
+	p := testPaths(t)
+	if err := runDomainSubcommand([]string{"create", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDomainSubcommand([]string{"create", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatalf("idempotent re-create must succeed, got: %v", err)
 	}
 }

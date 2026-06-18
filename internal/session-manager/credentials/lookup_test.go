@@ -4,41 +4,50 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/infodancer/maildancer/auth/identity"
 )
 
-func TestLookup_ValidUser(t *testing.T) {
-	// Set up a temporary domain directory with config.toml and passwd file.
-	domainsDir := t.TempDir()
-	domainDir := filepath.Join(domainsDir, "example.com")
-	if err := os.MkdirAll(domainDir, 0755); err != nil {
+// setupDomain writes a domain config + identity maps under a fresh config tree
+// and returns the config-tree root and domain dir.
+func setupDomain(t *testing.T, domainName, configTOML string, gid uint32, users map[string]uint32) (configDir, domainDir string) {
+	t.Helper()
+	configDir = t.TempDir()
+	domainDir = filepath.Join(configDir, domainName)
+	if err := os.MkdirAll(domainDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if configTOML != "" {
+		if err := os.WriteFile(filepath.Join(domainDir, "config.toml"), []byte(configTOML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := identity.NewManager(configDir, t.TempDir())
+	if err := m.SetDomainGID(domainName, gid); err != nil {
+		t.Fatal(err)
+	}
+	for u, uid := range users {
+		if err := m.SetUserUID(domainName, u, uid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return configDir, domainDir
+}
 
-	// Write domain config.
-	configContent := `gid = 5000
-
-[msgstore]
+func TestLookup_ValidUser(t *testing.T) {
+	cfg := `[msgstore]
 base_path = "users"
 type = "maildir"
 
 [auth]
 credential_backend = "passwd"
 `
-	if err := os.WriteFile(filepath.Join(domainDir, "config.toml"), []byte(configContent), 0644); err != nil {
-		t.Fatal(err)
-	}
+	configDir, domainDir := setupDomain(t, "example.com", cfg, 5000, map[string]uint32{"alice": 1001})
 
-	// Write passwd file with a test user. Format: user:hash:mailbox:uid
-	passwdContent := "alice:$argon2id$v=19$m=65536,t=3,p=4$salt$hash:alice@example.com:1001\n"
-	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwdContent), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	info, err := Lookup(domainsDir, "", "alice", "example.com")
+	info, err := Lookup(configDir, "", "alice", "example.com")
 	if err != nil {
 		t.Fatalf("Lookup() error: %v", err)
 	}
-
 	if info.UID != 1001 {
 		t.Errorf("UID = %d, want 1001", info.UID)
 	}
@@ -48,176 +57,91 @@ credential_backend = "passwd"
 	if info.StoreType != "maildir" {
 		t.Errorf("StoreType = %q, want %q", info.StoreType, "maildir")
 	}
-	expectedBase := filepath.Join(domainDir, "users")
-	if info.BasePath != expectedBase {
-		t.Errorf("BasePath = %q, want %q", info.BasePath, expectedBase)
+	if want := filepath.Join(domainDir, "users"); info.BasePath != want {
+		t.Errorf("BasePath = %q, want %q", info.BasePath, want)
 	}
 }
 
-func TestLookup_MissingUser(t *testing.T) {
-	domainsDir := t.TempDir()
-	domainDir := filepath.Join(domainsDir, "example.com")
-	if err := os.MkdirAll(domainDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Write empty passwd file.
-	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(""), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := Lookup(domainsDir, "", "nonexistent", "example.com")
-	if err == nil {
-		t.Fatal("expected error for nonexistent user")
+// TestLookup_MissingUID: a user with no uid.toml entry is a hard error, never a
+// default. (Identity is not subject to fallback.)
+func TestLookup_MissingUID(t *testing.T) {
+	configDir, _ := setupDomain(t, "example.com", "", 5000, nil)
+	if _, err := Lookup(configDir, "", "nonexistent", "example.com"); err == nil {
+		t.Fatal("expected hard error for user with no uid allocation")
 	}
 }
 
-func TestLookup_Defaults(t *testing.T) {
-	// Test that defaults are applied when config.toml is missing.
-	domainsDir := t.TempDir()
-	domainDir := filepath.Join(domainsDir, "example.com")
-	if err := os.MkdirAll(domainDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// No config.toml -- defaults should be used (gid=0, type=maildir, base=users).
-	passwdContent := "bob:$argon2id$v=19$m=65536,t=3,p=4$salt$hash:bob@example.com:2001\n"
-	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwdContent), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	info, err := Lookup(domainsDir, "", "bob", "example.com")
-	if err != nil {
-		t.Fatalf("Lookup() error: %v", err)
-	}
-
-	if info.UID != 2001 {
-		t.Errorf("UID = %d, want 2001", info.UID)
-	}
-	if info.GID != 0 {
-		t.Errorf("GID = %d, want 0 (default)", info.GID)
-	}
-	if info.StoreType != "maildir" {
-		t.Errorf("StoreType = %q, want %q", info.StoreType, "maildir")
-	}
-}
-
-// TestLookup_SplitTreeDataGID pins the split-tree gid resolution: the gid lives
-// in the DATA-tree config.toml as `[domain] gid` (where `userctl domain create`
-// writes it) and the config tree carries none. Lookup must resolve it from the
-// data tree, or mail-session spawns with gid 0 and cannot traverse the
-// 2750 root:{gid} data dirs (the homelab "permission denied" bug).
-func TestLookup_SplitTreeDataGID(t *testing.T) {
+// TestLookup_MissingGID: a domain with no gid.toml entry is a hard error. This
+// is the inverse of the homelab bug -- spawning with an unresolved gid is
+// refused outright rather than defaulting to 0.
+func TestLookup_MissingGID(t *testing.T) {
 	configDir := t.TempDir()
+	domainDir := filepath.Join(configDir, "example.com")
+	if err := os.MkdirAll(domainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// uid allocated, but no gid for the domain.
+	m := identity.NewManager(configDir, t.TempDir())
+	if err := m.SetUserUID("example.com", "bob", 2001); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Lookup(configDir, "", "bob", "example.com"); err == nil {
+		t.Fatal("expected hard error for domain with no gid allocation")
+	}
+}
+
+// TestLookup_DataPath: a relative base_path resolves against the data tree, not
+// the config tree, when domainsDataPath is set.
+func TestLookup_DataPath(t *testing.T) {
+	configDir, _ := setupDomain(t, "example.com", "", 10013, map[string]uint32{"dave": 4001})
 	dataDir := t.TempDir()
-
-	// Config tree: no gid (read-only operator config).
-	domainConfigDir := filepath.Join(configDir, "example.com")
-	if err := os.MkdirAll(domainConfigDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(domainConfigDir, "config.toml"),
-		[]byte("[auth]\ncredential_backend = \"passwd\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(domainConfigDir, "passwd"),
-		[]byte("dave:$argon2id$v=19$m=65536,t=3,p=4$salt$hash:dave@example.com:4001\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	// Data tree: gid recorded as `[domain] gid`.
-	domainDataDir := filepath.Join(dataDir, "example.com")
-	if err := os.MkdirAll(domainDataDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(domainDataDir, "config.toml"),
-		[]byte("[domain]\ngid = 10013\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	info, err := Lookup(configDir, dataDir, "dave", "example.com")
 	if err != nil {
 		t.Fatalf("Lookup() error: %v", err)
 	}
 	if info.GID != 10013 {
-		t.Errorf("GID = %d, want 10013 (from data-tree [domain] gid)", info.GID)
+		t.Errorf("GID = %d, want 10013", info.GID)
 	}
 	if info.UID != 4001 {
 		t.Errorf("UID = %d, want 4001", info.UID)
 	}
-	wantBase := filepath.Join(domainDataDir, "users")
-	if info.BasePath != wantBase {
-		t.Errorf("BasePath = %q, want %q", info.BasePath, wantBase)
+	if want := filepath.Join(dataDir, "example.com", "users"); info.BasePath != want {
+		t.Errorf("BasePath = %q, want %q", info.BasePath, want)
 	}
 }
 
-func TestLookup_PostmasterOverridesGID(t *testing.T) {
-	domainsDir := t.TempDir()
-	domainDir := filepath.Join(domainsDir, "example.com")
-	if err := os.MkdirAll(domainDir, 0755); err != nil {
+// TestLookup_PostmasterIgnoredForGID pins the contract: a stray postmaster file
+// (the retired gid source) does NOT override the authoritative gid.toml. This
+// is exactly the layering that locked out the live mailbox.
+func TestLookup_PostmasterIgnoredForGID(t *testing.T) {
+	configDir, _ := setupDomain(t, "example.com", "", 5000, map[string]uint32{"carol": 3001})
+
+	// A leftover postmaster file claiming a different gid must be ignored.
+	postmaster := "postmaster@example.com:9000:6000:/var/mail/example.com\n"
+	if err := os.WriteFile(filepath.Join(configDir, "postmaster"), []byte(postmaster), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// config.toml has gid=5000; postmaster should override with 6000.
-	configContent := "gid = 5000\n"
-	if err := os.WriteFile(filepath.Join(domainDir, "config.toml"), []byte(configContent), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	passwdContent := "carol:$argon2id$v=19$m=65536,t=3,p=4$salt$hash:carol@example.com:3001\n"
-	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwdContent), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	postmasterContent := "postmaster@example.com:9000:6000:/var/mail/example.com\n"
-	if err := os.WriteFile(filepath.Join(domainsDir, "postmaster"), []byte(postmasterContent), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	info, err := Lookup(domainsDir, "", "carol", "example.com")
+	info, err := Lookup(configDir, "", "carol", "example.com")
 	if err != nil {
 		t.Fatalf("Lookup() error: %v", err)
 	}
-
-	if info.GID != 6000 {
-		t.Errorf("GID = %d, want 6000 (from postmaster)", info.GID)
-	}
-	// DataPath from postmaster: base_path default "users" resolved under /var/mail/example.com
-	expectedBase := "/var/mail/example.com/users"
-	if info.BasePath != expectedBase {
-		t.Errorf("BasePath = %q, want %q", info.BasePath, expectedBase)
+	if info.GID != 5000 {
+		t.Errorf("GID = %d, want 5000 from gid.toml (postmaster 6000 must be ignored)", info.GID)
 	}
 }
 
-func TestLookup_PostmasterDataPath(t *testing.T) {
-	domainsDir := t.TempDir()
-	dataDir := t.TempDir()
-	domainDir := filepath.Join(domainsDir, "example.com")
-	if err := os.MkdirAll(domainDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// No config.toml -- defaults apply, but postmaster provides data path.
-	passwdContent := "dave:$argon2id$v=19$m=65536,t=3,p=4$salt$hash:dave@example.com:4001\n"
-	if err := os.WriteFile(filepath.Join(domainDir, "passwd"), []byte(passwdContent), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	postmasterContent := "postmaster@example.com:9001:7000:" + dataDir + "\n"
-	if err := os.WriteFile(filepath.Join(domainsDir, "postmaster"), []byte(postmasterContent), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	info, err := Lookup(domainsDir, "", "dave", "example.com")
+// TestLookup_ConfigGIDIgnored pins that a stray top-level gid in the per-domain
+// config.toml does not influence the resolved gid -- identity comes only from
+// gid.toml.
+func TestLookup_ConfigGIDIgnored(t *testing.T) {
+	configDir, _ := setupDomain(t, "example.com", "gid = 9999\n", 5000, map[string]uint32{"erin": 3501})
+	info, err := Lookup(configDir, "", "erin", "example.com")
 	if err != nil {
 		t.Fatalf("Lookup() error: %v", err)
 	}
-
-	if info.GID != 7000 {
-		t.Errorf("GID = %d, want 7000", info.GID)
-	}
-	expectedBase := filepath.Join(dataDir, "users")
-	if info.BasePath != expectedBase {
-		t.Errorf("BasePath = %q, want %q", info.BasePath, expectedBase)
+	if info.GID != 5000 {
+		t.Errorf("GID = %d, want 5000 from gid.toml (config.toml gid=9999 must be ignored)", info.GID)
 	}
 }

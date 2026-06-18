@@ -1,0 +1,6 @@
+#!/command/with-contenv sh
+# session-manager owns the per-user mail-session lifecycle and the unix socket
+# the protocol daemons proxy through. It must come up first; the socket lives
+# inside this container, so the directory is created here rather than shared.
+mkdir -p /run/session-manager
+exec /session-manager -config /etc/infodancer/config.toml

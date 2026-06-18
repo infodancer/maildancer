@@ -1,0 +1,191 @@
+# maildancer all-in-one reference configuration.
+#
+# Baked into the image at /usr/share/maildancer/config.toml.example (it lives
+# here, not under /etc/infodancer, so a mounted config volume does not shadow
+# it). Copy it to /etc/infodancer/config.toml and edit hostname/cert paths.
+#
+# A single config file drives every daemon in the container; each section below
+# is read by the matching service. Ports shown are the IANA-standard mail ports
+# and are all bound by default -- the TLS variants (465/587/993/995) require the
+# cert files referenced below to exist (mount them at /etc/letsencrypt).
+
+[server]
+hostname = "mail.example.com"
+domains_path = "/etc/infodancer/domains"
+maildir = "/opt/infodancer/domains"
+
+[server.tls]
+cert_file = "/etc/letsencrypt/live/mail.example.com/fullchain.pem"
+key_file = "/etc/letsencrypt/live/mail.example.com/privkey.pem"
+min_version = "1.2"
+
+# Redis -- runs as a compose sidecar (not inside this image). db 1 keeps the
+# mail stack clear of rspamd's db 0.
+[redis]
+url = "redis://redis:6379/1"
+
+# --- SMTP server (ports 25 / 465 smtps / 587 submission) ---
+[smtpd]
+hostname = "mail.example.com"
+log_level = "info"
+domains_path = "/etc/infodancer/domains"
+domains_data_path = "/opt/infodancer/domains"
+
+[[smtpd.listeners]]
+address = ":25"
+mode = "smtp"
+
+[[smtpd.listeners]]
+address = ":465"
+mode = "smtps"
+
+[[smtpd.listeners]]
+address = ":587"
+mode = "submission"
+
+[smtpd.tls]
+cert_file = "/etc/letsencrypt/live/mail.example.com/fullchain.pem"
+key_file = "/etc/letsencrypt/live/mail.example.com/privkey.pem"
+min_version = "1.2"
+
+[smtpd.limits]
+max_message_size = 26214400
+max_recipients = 100
+max_sends_per_hour = 100
+
+[smtpd.timeouts]
+connection = "5m"
+command = "1m"
+
+[smtpd.metrics]
+enabled = true
+address = ":9100"
+path = "/metrics"
+
+# --- POP3 server (ports 110 / 995 pop3s) ---
+[pop3d]
+hostname = "mail.example.com"
+log_level = "info"
+domains_path = "/etc/infodancer/domains"
+domains_data_path = "/opt/infodancer/domains"
+
+[[pop3d.listeners]]
+address = ":110"
+mode = "pop3"
+
+[[pop3d.listeners]]
+address = ":995"
+mode = "pop3s"
+
+[pop3d.tls]
+cert_file = "/etc/letsencrypt/live/mail.example.com/fullchain.pem"
+key_file = "/etc/letsencrypt/live/mail.example.com/privkey.pem"
+min_version = "1.2"
+
+[pop3d.timeouts]
+connection = "10m"
+command = "1m"
+idle = "30m"
+
+[pop3d.limits]
+max_connections = 100
+
+# --- IMAP server (ports 143 / 993 imaps) ---
+[imapd]
+hostname = "mail.example.com"
+log_level = "info"
+domains_path = "/etc/infodancer/domains"
+domains_data_path = "/opt/infodancer/domains"
+
+[[imapd.listeners]]
+address = ":143"
+mode = "imap"
+
+[[imapd.listeners]]
+address = ":993"
+mode = "imaps"
+
+[imapd.tls]
+cert_file = "/etc/letsencrypt/live/mail.example.com/fullchain.pem"
+key_file = "/etc/letsencrypt/live/mail.example.com/privkey.pem"
+min_version = "1.2"
+
+[imapd.timeouts]
+connection = "10m"
+command = "1m"
+idle = "30m"
+
+[imapd.limits]
+max_connections = 200
+
+[imapd.metrics]
+enabled = true
+address = ":9102"
+path = "/metrics"
+
+[imapd.rspamd]
+controller = "http://rspamd:11334"
+junk_folder = "Junk"
+
+# --- mail-session (spawned per-connection by the daemons) ---
+[mail-session]
+rescan_interval = "30s"
+
+# --- session manager (auth + per-user session lifecycle) ---
+[session-manager]
+socket = "/run/session-manager/session-manager.sock"
+mail_session_cmd = "/mail-session"
+domains_path = "/etc/infodancer/domains"
+domains_data_path = "/opt/infodancer/domains"
+idle_timeout = "5m"
+
+# key_backend is what makes at-rest encryption available: on login the agent
+# unseals the user's private key with their password and hands it to
+# mail-session over fd 3. Per-domain encryption is enabled by setting
+# encryption_mode = "on" in that domain's config.toml (which provisions a
+# keypair for new users); the runtime gate is key presence.
+[session-manager.auth]
+agent_type = "passwd"
+credential_backend = "passwd"
+key_backend = "keys"
+
+[session-manager.queue]
+dir = "/var/spool/mail-queue"
+message_ttl = "168h"
+hostname = "mail.example.com"
+
+# --- spam check ---
+[spamcheck]
+enabled = true
+
+[[spamcheck.checkers]]
+type = "rspamd"
+url = "http://rspamd:11333"
+
+# --- queue manager (outbound delivery driver) ---
+[queue-manager]
+hostname = "mail.example.com"
+domain_config_path = "/opt/infodancer/domains"
+
+[queue-manager.session-manager]
+socket = "/run/session-manager/session-manager.sock"
+
+# --- outbound transport (smarthost example; DNS/MX delivery is per-domain) ---
+[outbound]
+strategy = "smarthost"
+smarthost = "smtp.example-relay.com:587"
+smarthost_user_file = "relay-token"
+password_file = "relay-token"
+
+# --- web admin (port 8080) ---
+[webadmin]
+listen_address = "0.0.0.0:8080"
+domains_path = "/etc/infodancer/domains"
+data_path = "/opt/infodancer/domains"
+log_level = "info"
+
+[webadmin.auth]
+passwd_file = "/etc/infodancer/admin-passwd"
+
+[webadmin.session]
+timeout_minutes = 30

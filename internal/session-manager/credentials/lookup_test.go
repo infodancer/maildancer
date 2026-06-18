@@ -102,6 +102,55 @@ func TestLookup_Defaults(t *testing.T) {
 	}
 }
 
+// TestLookup_SplitTreeDataGID pins the split-tree gid resolution: the gid lives
+// in the DATA-tree config.toml as `[domain] gid` (where `userctl domain create`
+// writes it) and the config tree carries none. Lookup must resolve it from the
+// data tree, or mail-session spawns with gid 0 and cannot traverse the
+// 2750 root:{gid} data dirs (the homelab "permission denied" bug).
+func TestLookup_SplitTreeDataGID(t *testing.T) {
+	configDir := t.TempDir()
+	dataDir := t.TempDir()
+
+	// Config tree: no gid (read-only operator config).
+	domainConfigDir := filepath.Join(configDir, "example.com")
+	if err := os.MkdirAll(domainConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(domainConfigDir, "config.toml"),
+		[]byte("[auth]\ncredential_backend = \"passwd\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(domainConfigDir, "passwd"),
+		[]byte("dave:$argon2id$v=19$m=65536,t=3,p=4$salt$hash:dave@example.com:4001\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Data tree: gid recorded as `[domain] gid`.
+	domainDataDir := filepath.Join(dataDir, "example.com")
+	if err := os.MkdirAll(domainDataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(domainDataDir, "config.toml"),
+		[]byte("[domain]\ngid = 10013\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := Lookup(configDir, dataDir, "dave", "example.com")
+	if err != nil {
+		t.Fatalf("Lookup() error: %v", err)
+	}
+	if info.GID != 10013 {
+		t.Errorf("GID = %d, want 10013 (from data-tree [domain] gid)", info.GID)
+	}
+	if info.UID != 4001 {
+		t.Errorf("UID = %d, want 4001", info.UID)
+	}
+	wantBase := filepath.Join(domainDataDir, "users")
+	if info.BasePath != wantBase {
+		t.Errorf("BasePath = %q, want %q", info.BasePath, wantBase)
+	}
+}
+
 func TestLookup_PostmasterOverridesGID(t *testing.T) {
 	domainsDir := t.TempDir()
 	domainDir := filepath.Join(domainsDir, "example.com")

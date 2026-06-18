@@ -53,9 +53,9 @@ func (p Paths) DomainExists(name string) bool {
 //	{config}/{domain}/           config.toml, empty passwd, keys/
 //	{data}/{domain}/             config.toml recording the gid, users/ maildir root
 //
-// Note: directory ownership (root:{gid} with setgid per the mail security
-// model) is applied by the deployment's privileged helper; this function
-// creates structure and allocates identifiers.
+// Directory ownership for the data tree (root:{gid} with setgid per the mail
+// security model) is applied here when running as root; off-root the structure
+// and modes are created and ownership is left to FixDomainPerms.
 func (p Paths) CreateDomain(name string) (uint32, error) {
 	if !ValidDomainName(name) {
 		return 0, ErrInvalidDomainName
@@ -89,6 +89,13 @@ func (p Paths) CreateDomain(name string) (uint32, error) {
 	}
 	if err := os.MkdirAll(filepath.Join(dataDir, "users"), 0o750); err != nil {
 		return 0, fmt.Errorf("create users directory: %w", err)
+	}
+
+	// Apply the security model to the shared data directories now (root:{gid}
+	// 2750), so the tree is correct at creation and needs no post-hoc repair.
+	// Ownership is a no-op off-root; modes still apply.
+	if err := p.provisionDomainDataDirs(name); err != nil {
+		return 0, fmt.Errorf("set data directory ownership: %w", err)
 	}
 
 	return gid, nil

@@ -2,7 +2,6 @@ package admin
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 
 	domainpkg "github.com/infodancer/maildancer/auth/domain"
@@ -72,11 +71,11 @@ func (p Paths) CreateUser(domain, username, password string, generateKeys bool) 
 
 	result := &CreateUserResult{UID: uid}
 
-	// Maildir creation is non-fatal: the passwd entry is already durable, and
-	// delivery creates maildirs on demand. Ownership (uid:gid) is applied by
-	// the deployment's privileged helper.
-	maildirPath := filepath.Join(p.Data, domain, "users", username)
-	if err := os.MkdirAll(maildirPath, 0o700); err != nil {
+	// Create the user's data directory owned uid:gid 0700 (the security model),
+	// so the privilege-separated mail-session can open its own maildir. Non-fatal:
+	// the passwd entry is already durable and delivery creates maildirs on demand,
+	// but a wrong owner here is the classic "permission denied" trap, so surface it.
+	if err := p.provisionUserDataDir(domain, username, uid); err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("create maildir: %v", err))
 	}
 

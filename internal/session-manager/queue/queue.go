@@ -54,16 +54,30 @@ type Config struct {
 // queue-manager's extractMsgID (which does LastIndex("@") on envelope filenames)
 // continues to work correctly. The full RFC 5322 msgid is stored in the MSGID
 // envelope field and the Message-ID header.
-func Write(cfg Config, from string, recipients []string, body io.Reader) (string, error) {
+// presetMsgIDHex, when non-empty, is the hex correlation id minted upstream at
+// smtpd ingress; the queue reuses it instead of generating its own so the
+// message keeps one id across the inbound->outbound boundary. Empty for
+// queue-originated messages (e.g. DSNs), which mint their own.
+func Write(cfg Config, from string, recipients []string, presetMsgIDHex string, body io.Reader) (string, error) {
 	fromDomain := extractDomain(from)
 
 	if !validAddressComponent(fromDomain) {
 		return "", fmt.Errorf("queue: invalid sender domain %q", fromDomain)
 	}
 
-	msgid, msgidHex, err := newMsgID(fromDomain)
-	if err != nil {
-		return "", fmt.Errorf("queue: generate msgid: %w", err)
+	var msgid, msgidHex string
+	if presetMsgIDHex != "" {
+		if !validMsgIDHex(presetMsgIDHex) {
+			return "", fmt.Errorf("queue: invalid preset msgid %q", presetMsgIDHex)
+		}
+		msgidHex = presetMsgIDHex
+		msgid = msgidHex + "@" + fromDomain
+	} else {
+		var err error
+		msgid, msgidHex, err = newMsgID(fromDomain)
+		if err != nil {
+			return "", fmt.Errorf("queue: generate msgid: %w", err)
+		}
 	}
 
 	now := time.Now().UTC()
@@ -139,6 +153,17 @@ func validAddressComponent(s string) bool {
 	return s != "" &&
 		!strings.ContainsAny(s, "/\\") &&
 		!strings.Contains(s, "..")
+}
+
+// validMsgIDHex reports whether s is a 16-byte (32-char) hex string, the form
+// minted at smtpd ingress. The id is used in queue filenames, so this both
+// rejects malformed input and keeps paths filesystem-safe.
+func validMsgIDHex(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 // newMsgID generates a msgid in RFC 5322 format: {hex}@{hostname}.

@@ -113,7 +113,12 @@ type EnqueueMetadata struct {
 	Sender string `protobuf:"bytes,1,opt,name=sender,proto3" json:"sender,omitempty"`
 	// Recipients is the list of RCPT TO addresses (remote only).
 	// One envelope per recipient is written to the queue.
-	Recipients    []string `protobuf:"bytes,2,rep,name=recipients,proto3" json:"recipients,omitempty"`
+	Recipients []string `protobuf:"bytes,2,rep,name=recipients,proto3" json:"recipients,omitempty"`
+	// Internal correlation id (16 crypto/rand bytes, hex), minted at smtpd
+	// ingress. When set, the queue reuses it instead of generating its own, so a
+	// message keeps one id across the inbound->outbound boundary. Empty for
+	// queue-originated messages (e.g. DSNs), which mint their own.
+	Msgid         string `protobuf:"bytes,3,opt,name=msgid,proto3" json:"msgid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -160,6 +165,13 @@ func (x *EnqueueMetadata) GetRecipients() []string {
 		return x.Recipients
 	}
 	return nil
+}
+
+func (x *EnqueueMetadata) GetMsgid() string {
+	if x != nil {
+		return x.Msgid
+	}
+	return ""
 }
 
 // EnqueueResponse is the outcome of queue injection.
@@ -216,12 +228,13 @@ const file_mailsession_v1_outbound_proto_rawDesc = "" +
 	"\x0eEnqueueRequest\x12=\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x1f.mailsession.v1.EnqueueMetadataH\x00R\bmetadata\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +
-	"\apayload\"I\n" +
+	"\apayload\"_\n" +
 	"\x0fEnqueueMetadata\x12\x16\n" +
 	"\x06sender\x18\x01 \x01(\tR\x06sender\x12\x1e\n" +
 	"\n" +
 	"recipients\x18\x02 \x03(\tR\n" +
-	"recipients\"0\n" +
+	"recipients\x12\x14\n" +
+	"\x05msgid\x18\x03 \x01(\tR\x05msgid\"0\n" +
 	"\x0fEnqueueResponse\x12\x1d\n" +
 	"\n" +
 	"message_id\x18\x01 \x01(\tR\tmessageId2_\n" +

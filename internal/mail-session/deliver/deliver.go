@@ -44,6 +44,9 @@ type DeliverRequest struct {
 	ClientHostname string
 	Forwarded      bool
 	ReceivedTime   string
+	// MsgID is the correlation id minted at smtpd ingress, threaded through for
+	// log traceability (no content). May be empty for callers that do not set it.
+	MsgID string
 }
 
 // Deliverer runs the delivery pipeline for a single message.

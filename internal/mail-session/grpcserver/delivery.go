@@ -51,6 +51,7 @@ func (d *DeliveryServer) Deliver(stream pb.DeliveryService_DeliverServer) error 
 		ClientHostname: meta.GetClientHostname(),
 		Forwarded:      meta.GetForwarded(),
 		ReceivedTime:   meta.GetReceivedTime(),
+		MsgID:          meta.GetMsgid(),
 	}
 
 	resp, err := d.srv.deliverer.Deliver(stream.Context(), req, body)

@@ -86,8 +86,9 @@ func (s *outboundServer) Enqueue(stream pb.OutboundService_EnqueueServer) error 
 		s.metrics.DKIMSignCompleted(senderDomain, "skipped")
 	}
 
-	// Write to queue.
-	msgID, err := queue.Write(cfg, meta.Sender, meta.Recipients, &body)
+	// Write to queue. meta.Msgid (when set) is the id minted at smtpd ingress;
+	// the queue reuses it so the message keeps one id end-to-end.
+	msgID, err := queue.Write(cfg, meta.Sender, meta.Recipients, meta.GetMsgid(), &body)
 	if err != nil {
 		slog.Warn("queue write failed",
 			"from", meta.Sender,

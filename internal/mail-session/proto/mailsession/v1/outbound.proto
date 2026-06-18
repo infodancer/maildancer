@@ -35,6 +35,12 @@ message EnqueueMetadata {
   // Recipients is the list of RCPT TO addresses (remote only).
   // One envelope per recipient is written to the queue.
   repeated string recipients = 2;
+
+  // Internal correlation id (16 crypto/rand bytes, hex), minted at smtpd
+  // ingress. When set, the queue reuses it instead of generating its own, so a
+  // message keeps one id across the inbound->outbound boundary. Empty for
+  // queue-originated messages (e.g. DSNs), which mint their own.
+  string msgid = 3;
 }
 
 // EnqueueResponse is the outcome of queue injection.

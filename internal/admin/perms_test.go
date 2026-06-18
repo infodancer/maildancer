@@ -79,9 +79,9 @@ func TestDomainPermPlan_NoGID(t *testing.T) {
 	}
 }
 
-// TestFixDomainPerms_CreatesModesAndIsIdempotent checks the doctor sets dir
+// TestFixDomain_CreatesModesAndIsIdempotent checks the doctor sets dir
 // modes (chown is root-only and skipped off-root) and runs clean twice.
-func TestFixDomainPerms_CreatesModesAndIsIdempotent(t *testing.T) {
+func TestFixDomain_CreatesModesAndIsIdempotent(t *testing.T) {
 	p := newTestPaths(t)
 	if _, err := p.CreateDomain("example.com"); err != nil {
 		t.Fatal(err)
@@ -90,9 +90,9 @@ func TestFixDomainPerms_CreatesModesAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := p.FixDomainPerms("example.com")
+	report, err := p.FixDomain("example.com")
 	if err != nil {
-		t.Fatalf("FixDomainPerms: %v", err)
+		t.Fatalf("FixDomain: %v", err)
 	}
 	if report.Domain != "example.com" {
 		t.Errorf("report domain = %q", report.Domain)
@@ -111,7 +111,37 @@ func TestFixDomainPerms_CreatesModesAndIsIdempotent(t *testing.T) {
 	}
 
 	// Idempotent: a second run also succeeds.
-	if _, err := p.FixDomainPerms("example.com"); err != nil {
-		t.Fatalf("FixDomainPerms second run: %v", err)
+	if _, err := p.FixDomain("example.com"); err != nil {
+		t.Fatalf("FixDomain second run: %v", err)
+	}
+}
+
+// TestFixDomain_AllocatesMissingGID is the regression for the homelab failure:
+// fix-perms errored on a domain whose data-tree config.toml had no gid. FixDomain
+// now allocates the missing gid (and any missing uids) before applying perms,
+// so it succeeds and reports the allocation.
+func TestFixDomain_AllocatesMissingGID(t *testing.T) {
+	p := newTestPaths(t)
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a domain with no allocated gid by blanking the data config.
+	dataCfg := filepath.Join(p.Data, "example.com", "config.toml")
+	if err := os.WriteFile(dataCfg, []byte("[domain]\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := p.FixDomain("example.com")
+	if err != nil {
+		t.Fatalf("FixDomain must allocate the missing gid, got: %v", err)
+	}
+	if len(report.Allocated) == 0 {
+		t.Errorf("expected an allocation to be reported, got none")
+	}
+
+	// The gid is now persisted in the data-tree config.
+	gid, err := p.domainGid("example.com")
+	if err != nil || gid == 0 {
+		t.Errorf("gid not allocated: gid=%d err=%v", gid, err)
 	}
 }

@@ -87,6 +87,7 @@ type Session struct {
 	backend                  *Backend
 	conn                     *smtp.Conn
 	clientIP                 string
+	clientHostname           string // validated reverse DNS (PTR) of clientIP, "" if none
 	helo                     string
 	from                     string
 	mailFromSeen             bool     // true once MAIL FROM is accepted (from may be "" for bounces)
@@ -638,16 +639,39 @@ func (s *Session) Data(r io.Reader) error {
 		}
 	}
 
+	// RFC 5321 section 4.4: prepend an ingress trace header to every accepted
+	// message. The "for" clause is included only when there is a single
+	// recipient (the RFC limits it to one address; with several we omit it
+	// rather than disclose the other recipients).
+	now := time.Now()
+	var forRcpt string
+	if len(s.recipients)+len(s.remoteRecipients) == 1 {
+		if len(s.recipients) == 1 {
+			forRcpt = s.recipients[0]
+		} else {
+			forRcpt = s.remoteRecipients[0]
+		}
+	}
+	tlsState, isTLS := sessionConnTLSState(s.conn)
+	received := buildReceivedHeader(ReceivedInfo{
+		Helo:           s.helo,
+		ClientHostname: s.clientHostname,
+		ClientIP:       s.clientIP,
+		Hostname:       s.backend.hostname,
+		Proto:          receivedProto(isTLS, s.authUser != ""),
+		TLSComment:     tlsComment(tlsState, isTLS),
+		MsgID:          msgid,
+		ForRcpt:        forRcpt,
+	}, now)
+
 	// Local delivery (synchronous; failures reject at SMTP time).
 	if len(s.recipients) > 0 {
-		now := time.Now()
-
 		// Session-manager is the only delivery path. The initial delivery is
 		// never itself a forward (forwarded=false); the recipient's forwarding
 		// rules are resolved by the mail-session delivery path, which signals a
 		// configured forward by returning a *RedirectError.
 		deliverErr := s.backend.smDelivery.Deliver(ctx,
-			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, tmp.reader())
+			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, withHeaders(received, tmp))
 
 		var redirectErr *RedirectError
 		redirected := errors.As(deliverErr, &redirectErr)
@@ -655,7 +679,7 @@ func (s *Session) Data(r io.Reader) error {
 			// A configured forward. Re-route each target as a fresh recipient
 			// (local Deliver with Forwarded=true, or remote Enqueue). This is
 			// the only delivery path that can reach external forward targets.
-			deliverErr = s.followRedirect(ctx, redirectErr, tmp, msgid)
+			deliverErr = s.followRedirect(ctx, redirectErr, tmp, msgid, received)
 		}
 
 		if deliverErr != nil {
@@ -726,7 +750,7 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		ctx := context.Background()
-		_, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, msgid, tmp.reader())
+		_, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, msgid, withHeaders(received, tmp))
 		if err != nil {
 			s.logger.Warn("enqueue failed",
 				slog.String("msgid", msgid),
@@ -774,13 +798,17 @@ func (s *Session) Data(r io.Reader) error {
 // temp-failed -- smtpd follows at most one redirect.
 //
 // Returns nil on success, or an error that the caller maps to a 451.
-func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer, msgid string) error {
+func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer, msgid, received string) error {
 	if len(redirect.Addresses) == 0 {
 		s.logger.Error("forward resolved to no targets",
 			slog.String("from", s.from),
 			slog.String("to", s.recipients[0]))
 		return errors.New("forward resolved to no targets")
 	}
+
+	// Forward-hop trace (RFC 5321 section 3.9.2): record the alias expansion
+	// above the ingress trace, with an X-Original-To marker naming the alias.
+	fwdHeaders := buildForwardReceivedHeader(s.backend.hostname, s.recipients[0], msgid, time.Now()) + received
 
 	for _, target := range redirect.Addresses {
 		vr, err := s.backend.smDelivery.ValidateRecipient(ctx, target)
@@ -793,7 +821,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 
 		if !vr.DomainIsLocal {
 			// External forward target: enqueue for outbound delivery.
-			_, err = s.backend.smDelivery.Enqueue(ctx, s.from, []string{target}, msgid, tmp.reader())
+			_, err = s.backend.smDelivery.Enqueue(ctx, s.from, []string{target}, msgid, withHeaders(fwdHeaders, tmp))
 			if err != nil {
 				s.logger.Warn("forward enqueue failed",
 					slog.String("target", target),
@@ -812,7 +840,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 		// here is a configuration error.
 		now := time.Now()
 		err = s.backend.smDelivery.Deliver(ctx,
-			s.from, target, s.clientIP, s.helo, now, true, msgid, tmp.reader())
+			s.from, target, s.clientIP, s.helo, now, true, msgid, withHeaders(fwdHeaders, tmp))
 
 		var nested *RedirectError
 		if errors.As(err, &nested) {
@@ -917,4 +945,22 @@ func sessionConnIsTLS(c *smtp.Conn) bool {
 		}
 	}
 	return false
+}
+
+// sessionConnTLSState returns the TLS connection state, handling the notifyConn
+// wrapper the same way sessionConnIsTLS does. ok is false for a plaintext
+// connection.
+func sessionConnTLSState(c *smtp.Conn) (tls.ConnectionState, bool) {
+	if c == nil {
+		return tls.ConnectionState{}, false
+	}
+	if st, ok := c.TLSConnectionState(); ok {
+		return st, true
+	}
+	if nc, ok := c.Conn().(*notifyConn); ok {
+		if tc, tlsOK := nc.Conn.(*tls.Conn); tlsOK {
+			return tc.ConnectionState(), true
+		}
+	}
+	return tls.ConnectionState{}, false
 }

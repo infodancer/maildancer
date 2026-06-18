@@ -23,11 +23,13 @@ import (
 type deliverCall struct {
 	recipient string
 	forwarded bool
+	body      string
 }
 
 // enqueueCall records a single OutboundService.Enqueue invocation.
 type enqueueCall struct {
 	recipients []string
+	body       string
 }
 
 // combinedMockServer implements DeliveryService, OutboundService, and
@@ -86,6 +88,7 @@ func (s *combinedMockServer) Deliver(stream grpc.ClientStreamingServer[pb.Delive
 	s.delivers = append(s.delivers, deliverCall{
 		recipient: meta.GetRecipient(),
 		forwarded: meta.GetForwarded(),
+		body:      body.String(),
 	})
 	s.mu.Unlock()
 
@@ -113,6 +116,7 @@ func (s *combinedMockServer) Deliver(stream grpc.ClientStreamingServer[pb.Delive
 
 func (s *combinedMockServer) Enqueue(stream grpc.ClientStreamingServer[pb.EnqueueRequest, pb.EnqueueResponse]) error {
 	var recipients []string
+	var body bytes.Buffer
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
@@ -121,13 +125,16 @@ func (s *combinedMockServer) Enqueue(stream grpc.ClientStreamingServer[pb.Enqueu
 		if err != nil {
 			return err
 		}
-		if m, ok := req.Payload.(*pb.EnqueueRequest_Metadata); ok {
-			recipients = m.Metadata.GetRecipients()
+		switch p := req.Payload.(type) {
+		case *pb.EnqueueRequest_Metadata:
+			recipients = p.Metadata.GetRecipients()
+		case *pb.EnqueueRequest_Data:
+			body.Write(p.Data)
 		}
 	}
 
 	s.mu.Lock()
-	s.enqueues = append(s.enqueues, enqueueCall{recipients: recipients})
+	s.enqueues = append(s.enqueues, enqueueCall{recipients: recipients, body: body.String()})
 	s.mu.Unlock()
 
 	return stream.SendAndClose(&pb.EnqueueResponse{MessageId: "msg-1"})
@@ -184,8 +191,9 @@ func TestFollowRedirect_LocalTarget(t *testing.T) {
 	agent := startCombinedMockServer(t, mock)
 	s := newRedirectSession(t, agent)
 
+	ingress := "Received: from upstream (unknown [203.0.113.9])\r\n\tby mail.example.com with ESMTP id abc;\r\n\tMon, 02 Jan 2006 15:04:05 -0700\r\n"
 	redirect := &RedirectError{Addresses: []string{"bob@example.com"}}
-	if err := s.followRedirect(context.Background(), redirect, memBuf("test body"), ""); err != nil {
+	if err := s.followRedirect(context.Background(), redirect, memBuf("Subject: x\r\n\r\nbody"), "msgid1", ingress); err != nil {
 		t.Fatalf("followRedirect returned error: %v", err)
 	}
 
@@ -200,6 +208,17 @@ func TestFollowRedirect_LocalTarget(t *testing.T) {
 			found = true
 			if !c.forwarded {
 				t.Errorf("forward re-delivery to %q had Forwarded=false, want true", c.recipient)
+			}
+			// The forward hop adds its own trace + X-Original-To marker above the
+			// preserved ingress Received.
+			if !strings.Contains(c.body, "X-Original-To: alias@example.com") {
+				t.Errorf("forwarded message missing X-Original-To marker; body=%q", c.body)
+			}
+			if !strings.Contains(c.body, "(forwarding for <alias@example.com>)") {
+				t.Errorf("forwarded message missing forward-hop Received; body=%q", c.body)
+			}
+			if !strings.Contains(c.body, ingress) {
+				t.Errorf("forwarded message dropped the ingress Received; body=%q", c.body)
 			}
 		}
 	}
@@ -222,8 +241,9 @@ func TestFollowRedirect_ExternalTarget(t *testing.T) {
 	agent := startCombinedMockServer(t, mock)
 	s := newRedirectSession(t, agent)
 
+	ingress := "Received: from upstream (unknown [203.0.113.9])\r\n\tby mail.example.com with ESMTP id abc;\r\n\tMon, 02 Jan 2006 15:04:05 -0700\r\n"
 	redirect := &RedirectError{Addresses: []string{"matthew@gmail.com"}}
-	if err := s.followRedirect(context.Background(), redirect, memBuf("test body"), ""); err != nil {
+	if err := s.followRedirect(context.Background(), redirect, memBuf("Subject: x\r\n\r\nbody"), "msgid1", ingress); err != nil {
 		t.Fatalf("followRedirect returned error: %v", err)
 	}
 
@@ -235,6 +255,13 @@ func TestFollowRedirect_ExternalTarget(t *testing.T) {
 	}
 	if len(mock.enqueues[0].recipients) != 1 || mock.enqueues[0].recipients[0] != "matthew@gmail.com" {
 		t.Errorf("enqueue recipients = %v, want [matthew@gmail.com]", mock.enqueues[0].recipients)
+	}
+	// The enqueued (external) forward carries the same forward-hop trace.
+	if !strings.Contains(mock.enqueues[0].body, "X-Original-To: alias@example.com") {
+		t.Errorf("enqueued forward missing X-Original-To marker; body=%q", mock.enqueues[0].body)
+	}
+	if !strings.Contains(mock.enqueues[0].body, ingress) {
+		t.Errorf("enqueued forward dropped the ingress Received; body=%q", mock.enqueues[0].body)
 	}
 	// External target must not be delivered locally.
 	for _, c := range mock.delivers {
@@ -257,7 +284,7 @@ func TestFollowRedirect_OneHopCeiling(t *testing.T) {
 	s := newRedirectSession(t, agent)
 
 	redirect := &RedirectError{Addresses: []string{"bob@example.com"}}
-	err := s.followRedirect(context.Background(), redirect, memBuf("test body"), "")
+	err := s.followRedirect(context.Background(), redirect, memBuf("Subject: x\r\n\r\nbody"), "msgid1", "Received: from x\r\n")
 	if err == nil {
 		t.Fatal("expected error for second redirect (1-hop limit), got nil")
 	}

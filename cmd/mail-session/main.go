@@ -140,11 +140,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	runGRPC(sess, *mode, *socketPath, *idleTimeoutStr, *domainsPath, *domainsDataPath, rescanInterval)
+	runGRPC(sess, *mode, *socketPath, *idleTimeoutStr, *domainsPath, *domainsDataPath, *basePath, rescanInterval)
 }
 
 // runGRPC starts mail-session in daemon or oneshot gRPC mode.
-func runGRPC(sess *session.Session, mode, socketPath, idleTimeoutStr, domainsPath, domainsDataPath string, rescanInterval time.Duration) {
+func runGRPC(sess *session.Session, mode, socketPath, idleTimeoutStr, domainsPath, domainsDataPath, storeBasePath string, rescanInterval time.Duration) {
 	if socketPath == "" {
 		slog.Error("--socket is required")
 		os.Exit(2)
@@ -172,6 +172,7 @@ func runGRPC(sess *session.Session, mode, socketPath, idleTimeoutStr, domainsPat
 		dlvr, err = deliver.New(deliver.Config{
 			DomainsPath:     domainsPath,
 			DomainsDataPath: domainsDataPath,
+			StoreBasePath:   storeBasePath,
 		})
 		if err != nil {
 			slog.Error("delivery pipeline init", "error", err)

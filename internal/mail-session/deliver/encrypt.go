@@ -3,41 +3,46 @@ package deliver
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"log/slog"
+	"os"
+	"path/filepath"
 
-	"github.com/infodancer/maildancer/auth"
 	"github.com/infodancer/maildancer/auth/domain"
-	autherrors "github.com/infodancer/maildancer/auth/errors"
 	"github.com/infodancer/maildancer/msgstore"
 )
+
+// keyringPubFile is the recipient's public-key file inside their user-store
+// directory. It matches the layout auth/passwd and internal/admin use:
+// {StoreBasePath}/{localpart}/keyring.pub (maildancer#82, maildancer#86).
+const keyringPubFile = "keyring.pub"
 
 // maybeEncrypt applies at-rest encryption when the recipient has an encryption
 // key on file. It runs after Sieve evaluation (which needs plaintext) and
 // before any write, so every delivery path -- inbox keep, Sieve fileinto,
-// redirect :copy -- writes the same encrypted blob. This is the seam coverage
-// required by issue #53: encrypting here, rather than inside a DeliveryAgent
-// wrapper, makes bypassing the seam structurally impossible.
+// redirect :copy -- writes the same encrypted blob. Encrypting here, rather
+// than inside a DeliveryAgent wrapper, makes bypassing the seam structurally
+// impossible (issue #53).
 //
-// The gate is recipient key presence (issue #65): a recipient whose domain has
-// provisioned them a public key gets encrypted mail; one without a key gets
-// plaintext. Per-domain "encryption mode" governs whether new users are
-// provisioned a key at all -- not this runtime decision -- so a user with
-// existing encrypted mail keeps getting encryption regardless of any later
-// domain-policy change.
+// The recipient public key is read directly from the recipient's own user-store
+// directory ({StoreBasePath}/{localpart}/keyring.pub). This is the data tree the
+// recipient owns and the delivery process -- running as the recipient uid -- can
+// read. The key is deliberately NOT resolved through the domain provider /
+// auth agent: that path reads the config tree (config.toml, passwd), which the
+// recipient uid cannot access, so it returned "no key" and silently delivered
+// plaintext (maildancer#86).
 //
-// Returns the bytes to write and the encryption metadata for the envelope.
+// The gate is recipient key presence (issue #65): a recipient with a keyring
+// gets encrypted mail; one without gets plaintext. Per-domain "encryption mode"
+// governs whether new users are provisioned a key -- not this runtime decision.
 //
-// Fail-closed: when the recipient HAS a key but encryption cannot be performed
-// (key backend read error, corrupt key, encryption failure), the delivery is
-// temp-failed rather than ever falling back to a plaintext write. A recipient
-// with no key is not an error -- that is the unencrypted case.
+// Fail-closed: when the keyring is present but cannot be read or used (read
+// error other than not-exist, encryption failure), the delivery is temp-failed
+// rather than ever falling back to a plaintext write. A recipient with no
+// keyring is not an error -- that is the unencrypted case.
 func (dlvr *Deliverer) maybeEncrypt(ctx context.Context, dom *domain.Domain, req DeliverRequest, msg []byte) ([]byte, *msgstore.EncryptionInfo, *DeliverResponse) {
-	kp, ok := dom.AuthAgent.(auth.KeyProvider)
-	if !ok {
-		// Domain provides no key backend at all: at-rest encryption is not
-		// available here. Plaintext, not an error.
-		return msg, nil, nil
-	}
+	_ = ctx
+	_ = dom
 
 	failClosed := func(logMsg string, err error) ([]byte, *msgstore.EncryptionInfo, *DeliverResponse) {
 		attrs := []any{slog.String("msgid", req.MsgID), slog.String("recipient", req.Recipient)}
@@ -54,19 +59,26 @@ func (dlvr *Deliverer) maybeEncrypt(ctx context.Context, dom *domain.Domain, req
 		}
 	}
 
-	// The key is looked up by the recipient's base localpart, matching the
-	// KeyProvider contract used elsewhere (key backend files are per-username).
+	if dlvr.cfg.StoreBasePath == "" {
+		// No store base configured: at-rest encryption is not available here.
+		// Plaintext, not an error.
+		return msg, nil, nil
+	}
+
+	// The keyring is keyed by the recipient's base localpart, beside the maildir.
 	localpart, _ := splitAddress(msgstore.ParseRecipient(req.Recipient).Address)
-	pubKey, err := kp.GetPublicKey(ctx, localpart)
+	keyringPath := filepath.Join(dlvr.cfg.StoreBasePath, localpart, keyringPubFile)
+
+	pubKey, err := os.ReadFile(keyringPath)
 	if err != nil {
-		if errors.Is(err, autherrors.ErrKeyNotFound) || errors.Is(err, autherrors.ErrUserNotFound) {
-			// No key on file: the recipient is not an encryption user.
+		if errors.Is(err, fs.ErrNotExist) {
+			// No keyring on file: the recipient is not an encryption user.
 			// Deliver plaintext. This is the gate, not a failure.
 			return msg, nil, nil
 		}
-		// A key backend read failure for a recipient who may well have a key:
-		// fail closed rather than risk a silent plaintext write.
-		return failClosed("reading recipient public key for at-rest encryption", err)
+		// Present-but-unreadable (or any other read error) for a recipient who
+		// may well have a key: fail closed rather than risk a plaintext write.
+		return failClosed("reading recipient keyring for at-rest encryption", err)
 	}
 
 	encrypted, err := msgstore.EncryptMessage(msg, pubKey)

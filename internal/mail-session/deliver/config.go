@@ -11,6 +11,14 @@ type Config struct {
 	// Defaults to DomainsPath when empty.
 	DomainsDataPath string `toml:"domains_data_path"`
 
+	// StoreBasePath is the recipient's user-store root ({data}/{domain}/users),
+	// resolved by session-manager (as root) and passed to mail-session via
+	// --basepath. At-rest encryption reads the recipient's keyring directly from
+	// here ({StoreBasePath}/{localpart}/keyring.pub) -- the recipient owns and
+	// can read it -- instead of via the config-tree-dependent domain provider,
+	// which the recipient uid cannot reach (maildancer#86).
+	StoreBasePath string `toml:"-"`
+
 	// MaxMessageSize is the maximum message body size in bytes.
 	// Defaults to 50 MiB when zero.
 	MaxMessageSize int64 `toml:"max_message_size"`

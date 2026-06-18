@@ -14,9 +14,10 @@ import (
 )
 
 // setupEncryptedFixture builds the standard domain fixture and provisions an
-// NaCl box keypair for alice: the public key goes into the domain key backend
-// (keys/alice.pub, raw 32 bytes), the private key is returned for decryption
-// assertions.
+// NaCl box keypair for alice: the public key goes into alice's user-store
+// keyring ({StoreBasePath}/alice/keyring.pub, raw 32 bytes) -- the location the
+// delivery process (running as the recipient) reads directly (maildancer#86).
+// The private key is returned for decryption assertions.
 func setupEncryptedFixture(t *testing.T) (*Deliverer, *[32]byte) {
 	t.Helper()
 	dlvr := setupDomainFixture(t, "")
@@ -25,7 +26,7 @@ func setupEncryptedFixture(t *testing.T) (*Deliverer, *[32]byte) {
 	if err != nil {
 		t.Fatalf("generate keypair: %v", err)
 	}
-	keyPath := filepath.Join(dlvr.cfg.DomainsPath, "example.com", "keys", "alice.pub")
+	keyPath := filepath.Join(dlvr.cfg.StoreBasePath, "alice", keyringPubFile)
 	if err := os.WriteFile(keyPath, pub[:], 0644); err != nil {
 		t.Fatalf("write public key: %v", err)
 	}
@@ -216,7 +217,7 @@ func TestEncrypt_KeyPresentEncrypts(t *testing.T) {
 // a present-but-unusable key is a configuration error, not the no-key case.
 func TestEncrypt_CorruptKeyFailsClosed(t *testing.T) {
 	dlvr := setupDomainFixture(t, "")
-	keyPath := filepath.Join(dlvr.cfg.DomainsPath, "example.com", "keys", "alice.pub")
+	keyPath := filepath.Join(dlvr.cfg.StoreBasePath, "alice", keyringPubFile)
 	if err := os.WriteFile(keyPath, []byte("not-a-valid-32-byte-key"), 0644); err != nil {
 		t.Fatalf("write corrupt public key: %v", err)
 	}

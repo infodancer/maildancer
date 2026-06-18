@@ -81,6 +81,29 @@ func runDomainSubcommand(args []string, paths admin.Paths, stdin io.Reader) erro
 			return fmt.Errorf("domain set: expected <domain> <key> [<value>] (omit value to unset)")
 		}
 
+	case "fix-perms":
+		all := false
+		var names []string
+		for _, a := range rest {
+			if a == "--all" {
+				all = true
+			} else {
+				names = append(names, a)
+			}
+		}
+		if all {
+			if len(names) != 0 {
+				domainUsage()
+				return fmt.Errorf("domain fix-perms: --all takes no domain argument")
+			}
+			return cmdDomainFixPermsAll(paths)
+		}
+		if len(names) != 1 {
+			domainUsage()
+			return fmt.Errorf("domain fix-perms: expected <domain> or --all")
+		}
+		return cmdDomainFixPerms(paths, strings.ToLower(strings.TrimSpace(names[0])))
+
 	case "key":
 		return runDomainKeyAction(rest, paths, stdin)
 
@@ -132,6 +155,62 @@ func cmdDomainCreate(paths admin.Paths, name string) error {
 	fmt.Printf("  config: %s\n", filepath.Join(paths.Config, name))
 	fmt.Printf("  data:   %s\n", filepath.Join(paths.Data, name))
 	return nil
+}
+
+func cmdDomainFixPerms(paths admin.Paths, name string) error {
+	report, err := paths.FixDomainPerms(name)
+	printPermReport(report)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func cmdDomainFixPermsAll(paths admin.Paths) error {
+	domains, err := paths.ListDomains()
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	for _, d := range domains {
+		report, err := paths.FixDomainPerms(d.Name)
+		printPermReport(report)
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// printPermReport renders a fix-perms report. Off-root, chown is skipped; the
+// note makes that explicit so an operator does not mistake it for success.
+func printPermReport(report admin.PermReport) {
+	if report.Domain == "" && len(report.Entries) == 0 {
+		return
+	}
+	if report.Domain != "" {
+		fmt.Printf("domain %s:\n", report.Domain)
+	}
+	skippedChown := false
+	for _, e := range report.Entries {
+		status := "ok"
+		switch {
+		case e.Err != "":
+			status = "ERROR: " + e.Err
+		case e.Skipped && e.Changed:
+			status = "mode set (chown skipped)"
+			skippedChown = true
+		case e.Skipped:
+			status = "chown skipped"
+			skippedChown = true
+		case e.Changed:
+			status = "fixed"
+		}
+		fmt.Printf("  %-60s %d:%d %04o  %s\n", e.Path, e.UID, e.GID, e.Mode.Perm(), status)
+	}
+	if skippedChown {
+		fmt.Println("  note: ownership changes need root; re-run as root to apply uid:gid")
+	}
 }
 
 func cmdDomainDel(paths admin.Paths, name string, force bool) error {
@@ -363,6 +442,8 @@ func domainUsage() {
   userctl domain key    show   <domain>             show domain encryption key
   userctl domain key    create <domain> [--password-stdin]
   userctl domain key    del    <domain>
+  userctl domain fix-perms <domain> | --all         repair data-dir ownership/modes per the
+                                                    security model (run as root to apply uid:gid)
   userctl domain dkim   create <domain> [--selector <s>] [--force]
                                                     generate Ed25519 DKIM key and print
                                                     the DNS TXT record (default selector

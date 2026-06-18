@@ -152,8 +152,8 @@ func TestForwardingAuthAgent_UserLevel(t *testing.T) {
 // --- MailDeliveryAgent tests ---
 
 // MailDeliveryAgent is now a thin pass-through; forwarding is resolved upstream
-// in mail-session deliver stage 1 (the 1-hop ceiling is covered by
-// TestFollowRedirect_OneHopCeiling in internal/smtpd/smtp). The only behavior
+// in session-manager, before the privilege drop (the 1-hop ceiling is covered
+// by TestFollowRedirect_OneHopCeiling in internal/smtpd/smtp). The only behavior
 // left to verify here is that Deliver hands the message straight to the inner
 // agent.
 func TestMailDeliveryAgent_PassesThroughToInner(t *testing.T) {
@@ -170,25 +170,35 @@ func TestMailDeliveryAgent_PassesThroughToInner(t *testing.T) {
 }
 
 func TestForwardChain_ResolutionOrder(t *testing.T) {
-	// User-level should win over domain-level, domain over default
+	// Precedence is admin -> domain -> user -> system default (admins/domains
+	// win over users). See the forwardChain doc.
 	dir := t.TempDir()
 	userFwdDir := filepath.Join(dir, "user_forwards")
 	if err := os.MkdirAll(userFwdDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	// User-level for alice only
-	if err := os.WriteFile(filepath.Join(userFwdDir, "alice"), []byte("alice@user-level.com\n"), 0644); err != nil {
-		t.Fatal(err)
+	// User-level forwards for alice, bob, carol.
+	for name, target := range map[string]string{
+		"alice": "alice@user-level.com",
+		"bob":   "bob@user-level.com",
+		"carol": "carol@user-level.com",
+	} {
+		if err := os.WriteFile(filepath.Join(userFwdDir, name), []byte(target+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	// Domain-level covers alice and bob
+	// Admin tier (config.toml [forwards]) covers alice only.
+	adminFwd := forwards.FromMap(map[string]string{"alice": "alice@admin.com"})
+
+	// Domain tier (forwards file) covers bob only.
 	domainFwdPath := filepath.Join(dir, "domain_forwards")
-	if err := os.WriteFile(domainFwdPath, []byte("alice:alice@domain-level.com\nbob:bob@domain-level.com\n"), 0644); err != nil {
+	if err := os.WriteFile(domainFwdPath, []byte("bob:bob@domain-level.com\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	domainFwd, _ := forwards.Load(domainFwdPath)
 
-	// Default-level is catchall
+	// System default is a catchall.
 	defaultFwdPath := filepath.Join(dir, "default_forwards")
 	if err := os.WriteFile(defaultFwdPath, []byte("*:anyone@default-level.com\n"), 0644); err != nil {
 		t.Fatal(err)
@@ -196,26 +206,56 @@ func TestForwardChain_ResolutionOrder(t *testing.T) {
 	defaultFwd, _ := forwards.Load(defaultFwdPath)
 
 	chain := &forwardChain{
-		userForwardsDir: userFwdDir,
+		adminForwards:   adminFwd,
 		domainForwards:  domainFwd,
+		userForwardsDir: userFwdDir,
 		defaultForwards: defaultFwd,
 	}
 
-	// alice: user-level wins
+	cases := []struct {
+		name, localpart, want string
+	}{
+		{"admin beats user", "alice", "alice@admin.com"},
+		{"domain beats user", "bob", "bob@domain-level.com"},
+		{"user beats default", "carol", "carol@user-level.com"},
+		{"default catchall fallback", "dave", "anyone@default-level.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			targets, ok := chain.resolve(tc.localpart)
+			if !ok || len(targets) != 1 || targets[0] != tc.want {
+				t.Errorf("%s: want %q, got %v ok=%v", tc.localpart, tc.want, targets, ok)
+			}
+		})
+	}
+}
+
+// TestForwardChain_DomainCatchallShadowsUser pins the deliberate shadowing: a
+// domain (or admin) catchall funnels mail that a user-level forward would
+// otherwise catch -- admins/domains win over users, by design.
+func TestForwardChain_DomainCatchallShadowsUser(t *testing.T) {
+	dir := t.TempDir()
+	userFwdDir := filepath.Join(dir, "user_forwards")
+	if err := os.MkdirAll(userFwdDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(userFwdDir, "alice"), []byte("alice@user-level.com\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	domainFwdPath := filepath.Join(dir, "domain_forwards")
+	if err := os.WriteFile(domainFwdPath, []byte("*:catchall@domain-level.com\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	domainFwd, _ := forwards.Load(domainFwdPath)
+
+	chain := &forwardChain{
+		domainForwards:  domainFwd,
+		userForwardsDir: userFwdDir,
+	}
+
 	targets, ok := chain.resolve("alice")
-	if !ok || len(targets) != 1 || targets[0] != "alice@user-level.com" {
-		t.Errorf("alice: expected user-level target, got %v ok=%v", targets, ok)
-	}
-
-	// bob: domain-level wins (no user file)
-	targets, ok = chain.resolve("bob")
-	if !ok || len(targets) != 1 || targets[0] != "bob@domain-level.com" {
-		t.Errorf("bob: expected domain-level target, got %v ok=%v", targets, ok)
-	}
-
-	// charlie: default catchall
-	targets, ok = chain.resolve("charlie")
-	if !ok || len(targets) != 1 || targets[0] != "anyone@default-level.com" {
-		t.Errorf("charlie: expected default-level catchall, got %v ok=%v", targets, ok)
+	if !ok || len(targets) != 1 || targets[0] != "catchall@domain-level.com" {
+		t.Errorf("alice: domain catchall should shadow the user forward, got %v ok=%v", targets, ok)
 	}
 }

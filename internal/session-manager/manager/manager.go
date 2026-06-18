@@ -649,6 +649,33 @@ func (m *Manager) ValidateRecipient(ctx context.Context, address string) (domain
 	return domainIsLocal, userExists, deferRejection, nil
 }
 
+// ResolveForward resolves the forwarding chain for a recipient as root, before
+// any privilege drop. It returns the forward targets and true when the
+// recipient (localpart@domain) has a forwarding rule at any tier (admin,
+// domain, user, or system default); (nil, false) when it has no forward and
+// should be delivered to a local mailbox.
+//
+// This is the single forwarding decision point. The privilege-dropped
+// mail-session never resolves forwards: it cannot read the config tree where
+// the admin/domain tiers live, and -- like every tier, including user
+// forwards -- a forward must be able to re-send the message, which only the
+// SMTP front end (smtpd) can do. Resolving here, before credentials.Lookup,
+// also lets forward-only addresses (no mailbox, hence no uid) be redirected.
+func (m *Manager) ResolveForward(ctx context.Context, recipient string) ([]string, bool) {
+	if m.domainProvider == nil {
+		return nil, false
+	}
+	localpart, domainName, ok := strings.Cut(recipient, "@")
+	if !ok || domainName == "" {
+		return nil, false
+	}
+	d := m.domainProvider.GetDomain(domainName)
+	if d == nil || d.AuthAgent == nil {
+		return nil, false
+	}
+	return d.AuthAgent.ResolveForward(ctx, localpart)
+}
+
 // SetupAuth creates the domain provider and auth router from config.
 // Returns both so the caller can pass the domain provider to New().
 func SetupAuth(cfg *config.Config) (*domain.AuthRouter, domain.DomainProvider, error) {

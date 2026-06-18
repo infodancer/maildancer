@@ -252,24 +252,24 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		return nil, fmt.Errorf("create msgstore: %w", err)
 	}
 
-	// Build forwarding chain from [forwards] sections in config.toml files.
+	// Build the forwarding chain. Resolution order (admins/domains win over
+	// users -- see forwardChain doc):
+	//   1. Admin override: per-domain config.toml [forwards]       (loaded now)
+	//   2. Domain:         {domainPath}/forwards file              (loaded now)
+	//   3. User:           {domainPath}/user_forwards/{localpart}  (read on demand)
+	//   4. System default: {basePath}/config.toml [forwards]       (loaded now)
 	//
-	// Resolution order:
-	//   1. User-level:   {domainPath}/user_forwards/{localpart}  (read on demand, deferred)
-	//   2. Domain-level: per-domain config.toml [forwards]       (loaded now)
-	//   3. System default: {basePath}/config.toml [forwards]     (loaded now)
-	//
-	// If the domain's config.toml has a [forwards] section (even empty), it takes
-	// full ownership: the system default is suppressed. This lets a domain admin
-	// disable the global catchall by setting forwards = {}.
-	var domainFwd, defaultFwd *forwards.ForwardMap
+	// If the domain's config.toml has a [forwards] section (even empty), the
+	// admin tier takes full ownership and the system default is suppressed. This
+	// lets a domain admin disable the global catchall by setting forwards = {}.
+	var adminFwd, defaultFwd *forwards.ForwardMap
 	if perDomainMap != nil && perDomainMap["forwards"] != nil {
 		// Domain explicitly declared [forwards] -- use it, suppress system default.
-		domainFwd = forwards.FromMap(cfg.Forwards)
+		adminFwd = forwards.FromMap(cfg.Forwards)
 		defaultFwd = forwards.FromMap(nil)
 	} else {
 		// Domain did not declare [forwards] -- fall through to system default.
-		domainFwd = forwards.FromMap(nil)
+		adminFwd = forwards.FromMap(nil)
 		if p.baseDefaults != nil {
 			defaultFwd = forwards.FromMap(p.baseDefaults.Forwards)
 		} else {
@@ -277,9 +277,21 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		}
 	}
 
+	// Domain tier: the per-domain `forwards` file. A missing file is empty (not
+	// an error); a malformed file degrades to an empty tier rather than failing
+	// the whole domain load.
+	domainFwd, err := forwards.Load(filepath.Join(domainPath, "forwards"))
+	if err != nil {
+		p.logger.Warn("load domain forwards file",
+			slog.String("domain", name),
+			slog.String("error", err.Error()))
+		domainFwd = forwards.FromMap(nil)
+	}
+
 	chain := &forwardChain{
-		userForwardsDir: filepath.Join(domainPath, "user_forwards"),
+		adminForwards:   adminFwd,
 		domainForwards:  domainFwd,
+		userForwardsDir: filepath.Join(domainPath, "user_forwards"),
 		defaultForwards: defaultFwd,
 	}
 
@@ -290,7 +302,8 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 	}
 
 	// Wrap delivery agent as an extension seam for future per-domain delivery
-	// behavior. Forwarding is resolved upstream in mail-session deliver stage 1.
+	// behavior. Forwarding is resolved upstream in session-manager, before the
+	// privilege drop -- this agent only performs local mailbox writes.
 	var finalDelivery msgstore.DeliveryAgent = &MailDeliveryAgent{
 		inner: store,
 	}

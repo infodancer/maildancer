@@ -3,6 +3,7 @@ package deliver
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -240,81 +241,35 @@ func TestDeliver(t *testing.T) {
 // TestDeliver_Forwarding exercises the forwarding stage of the pipeline.
 // Forwarding rules are injected by writing a [forwards] section in config.toml;
 // no production code is modified.
-func TestDeliver_Forwarding(t *testing.T) {
-	t.Run("single forward target returns ResultRedirected", func(t *testing.T) {
-		dlvr := setupDomainFixture(t, `[forwards]
+// TestDeliver_DoesNotResolveForwarding pins the post-#95 contract: forwarding is
+// resolved upstream in session-manager (as root, before the privilege drop), so
+// this pipeline -- which runs as the recipient uid -- never resolves forwards.
+// Even with a matching [forwards] rule present, a message reaching Deliver is
+// always written to the local mailbox; it is never redirected here.
+func TestDeliver_DoesNotResolveForwarding(t *testing.T) {
+	for _, forwarded := range []bool{false, true} {
+		t.Run(fmt.Sprintf("forwarded=%v", forwarded), func(t *testing.T) {
+			dlvr := setupDomainFixture(t, `[forwards]
 alice = "alice@other.example.com"`)
 
-		resp, err := dlvr.Deliver(context.Background(),
-			DeliverRequest{
-				Sender:    "sender@example.com",
-				Recipient: "alice@example.com",
-				Forwarded: false,
-			},
-			[]byte(minimalMsg))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if resp.Result != ResultRedirected {
-			t.Errorf("want ResultRedirected, got %v (reason: %q)", resp.Result, resp.Reason)
-		}
-		if len(resp.RedirectAddresses) != 1 {
-			t.Fatalf("want 1 redirect address, got %d: %v", len(resp.RedirectAddresses), resp.RedirectAddresses)
-		}
-		if resp.RedirectAddresses[0] != "alice@other.example.com" {
-			t.Errorf("want redirect to alice@other.example.com, got %q", resp.RedirectAddresses[0])
-		}
-	})
-
-	t.Run("two forward targets returns ResultRejected misconfiguration", func(t *testing.T) {
-		dlvr := setupDomainFixture(t, `[forwards]
-alice = "alice@other.example.com,alice@second.example.com"`)
-
-		resp, err := dlvr.Deliver(context.Background(),
-			DeliverRequest{
-				Sender:    "sender@example.com",
-				Recipient: "alice@example.com",
-				Forwarded: false,
-			},
-			[]byte(minimalMsg))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if resp.Result != ResultRejected {
-			t.Errorf("want ResultRejected, got %v (reason: %q)", resp.Result, resp.Reason)
-		}
-		// A multi-target forward is a misconfiguration that must temp-fail (not
-		// perm-fail) so the sending MTA holds and retries while the admin fixes it.
-		if !resp.Temporary {
-			t.Errorf("want Temporary=true for multi-target misconfiguration, got false")
-		}
-		if resp.Reason == "" {
-			t.Error("want non-empty Reason for misconfiguration")
-		}
-	})
-
-	t.Run("Forwarded=true bypasses forward resolution in deliver.go", func(t *testing.T) {
-		// When Forwarded=true, deliver.go's forward-resolution block is skipped
-		// entirely (the !req.Forwarded guard). This is the 1-hop rule: a message
-		// that has already been forwarded is not forwarded again by deliver.go.
-		// Use a fixture with no forward rule to confirm baseline delivery succeeds
-		// with Forwarded=true.
-		dlvr := setupDomainFixture(t, "")
-
-		resp, err := dlvr.Deliver(context.Background(),
-			DeliverRequest{
-				Sender:    "sender@example.com",
-				Recipient: "alice@example.com",
-				Forwarded: true,
-			},
-			[]byte(minimalMsg))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if resp.Result != ResultDelivered {
-			t.Errorf("want ResultDelivered with Forwarded=true, got %v (reason: %q)", resp.Result, resp.Reason)
-		}
-	})
+			resp, err := dlvr.Deliver(context.Background(),
+				DeliverRequest{
+					Sender:    "sender@example.com",
+					Recipient: "alice@example.com",
+					Forwarded: forwarded,
+				},
+				[]byte(minimalMsg))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resp.Result != ResultDelivered {
+				t.Errorf("want ResultDelivered (deliver.go ignores forwarding), got %v (reason: %q)", resp.Result, resp.Reason)
+			}
+			if len(resp.RedirectAddresses) != 0 {
+				t.Errorf("want no redirect addresses, got %v", resp.RedirectAddresses)
+			}
+		})
+	}
 }
 
 // Sieve execution behavior is covered in sieve_test.go.

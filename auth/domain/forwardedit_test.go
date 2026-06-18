@@ -108,7 +108,7 @@ func TestSetDomainForward_RejectsMultiTarget(t *testing.T) {
 func TestSetDomainForward_PreservesOtherFields(t *testing.T) {
 	// A config.toml with unrelated settings must survive a forward edit.
 	initial := `
-gid = 5000
+max_message_size = 5000
 recipient_rejection = "data"
 
 [auth]
@@ -129,8 +129,8 @@ base_path = "mail"
 	if err != nil {
 		t.Fatalf("LoadDomainConfig: %v", err)
 	}
-	if cfg.Gid != 5000 {
-		t.Errorf("Gid = %d, want 5000 (other fields must survive)", cfg.Gid)
+	if cfg.MaxMessageSize != 5000 {
+		t.Errorf("MaxMessageSize = %d, want 5000 (other fields must survive)", cfg.MaxMessageSize)
 	}
 	if cfg.RecipientRejection != "data" {
 		t.Errorf("RecipientRejection = %q, want data", cfg.RecipientRejection)

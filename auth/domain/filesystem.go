@@ -198,13 +198,10 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		return nil, fmt.Errorf("merge config: %w", err)
 	}
 
-	// Postmaster GID is authoritative -- applied after all config merges so that
-	// neither system defaults nor domain-admin config.toml can override it.
-	if p.postmaster != nil {
-		if entry, ok := p.postmaster[name]; ok && entry.GID != 0 {
-			cfg.Gid = entry.GID
-		}
-	}
+	// GID is no longer a config concern: identity (uid/gid) is resolved from the
+	// authoritative {config}/gid.toml and {config}/{domain}/uid.toml maps by the
+	// daemon spawn path, never from config.toml or the postmaster file
+	// (maildancer#101). See infodancer/docs/identity-allocation-design.md.
 
 	// Resolve the writable storage base first. The data path comes from
 	// (highest priority first):

@@ -26,7 +26,20 @@ type AuthAgentConfig struct {
 	// local filesystem for keys).
 	// For passwd/LDAP with local keys: path to key directory (e.g., "/etc/mail/keys")
 	// For database: typically same as CredentialBackend
+	//
+	// For the filesystem passwd backend this is the LEGACY flat key directory in
+	// the read-only config tree; per-user keyrings now live under UserKeyringBase
+	// (see below) and KeyBackend is only a read-fallback for unmigrated keys.
 	KeyBackend string
+
+	// UserKeyringBase is the parent directory of per-user data directories in the
+	// writable data tree (i.e. the msgstore base path: {dataPath}/{domain}/users).
+	// The filesystem passwd backend stores each user's keyring beside their
+	// maildir at {UserKeyringBase}/{user}/keyring.{key,pub}, owned by the user's
+	// uid -- so the delivery process (running as the recipient) can read its own
+	// public key without config-tree access. Empty disables it (legacy KeyBackend
+	// only).
+	UserKeyringBase string
 
 	// Options contains implementation-specific settings.
 	Options map[string]string

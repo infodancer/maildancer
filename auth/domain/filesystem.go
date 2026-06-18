@@ -206,21 +206,8 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 		}
 	}
 
-	// Create lazy auth agent -- defers OpenAuthAgent() until the first
-	// auth-related call (Authenticate, UserExists, etc.). This allows
-	// privilege-dropped processes (e.g., mail-session oneshot delivery)
-	// to use GetDomain() for forwarding/spam/sieve without needing read
-	// access to credential files.
-	authAgent := &lazyAuthAgent{
-		cfg: auth.AuthAgentConfig{
-			Type:              cfg.Auth.Type,
-			CredentialBackend: resolvePath(domainPath, cfg.Auth.CredentialBackend),
-			KeyBackend:        resolvePath(domainPath, cfg.Auth.KeyBackend),
-			Options:           cfg.Auth.Options,
-		},
-	}
-
-	// Create message store. The data path comes from (highest priority first):
+	// Resolve the writable storage base first. The data path comes from
+	// (highest priority first):
 	//   1. postmaster file DataPath for this domain
 	//   2. provider-level WithDataPath() joined with domain name
 	//   3. the domain's config directory
@@ -234,9 +221,29 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 	} else if p.dataPath != "" {
 		storageBase = filepath.Join(p.dataPath, name)
 	}
+	// The per-user data directory parent ({dataPath}/{domain}/users). Per-user
+	// keyrings live here (beside the maildir), so the delivery process can read
+	// its own public key as the recipient uid -- no config-tree access needed.
+	userStoreBase := resolvePath(storageBase, cfg.MsgStore.BasePath)
+
+	// Create lazy auth agent -- defers OpenAuthAgent() until the first
+	// auth-related call (Authenticate, UserExists, etc.). This allows
+	// privilege-dropped processes (e.g., mail-session oneshot delivery)
+	// to use GetDomain() for forwarding/spam/sieve without needing read
+	// access to credential files.
+	authAgent := &lazyAuthAgent{
+		cfg: auth.AuthAgentConfig{
+			Type:              cfg.Auth.Type,
+			CredentialBackend: resolvePath(domainPath, cfg.Auth.CredentialBackend),
+			KeyBackend:        resolvePath(domainPath, cfg.Auth.KeyBackend),
+			UserKeyringBase:   userStoreBase,
+			Options:           cfg.Auth.Options,
+		},
+	}
+
 	storeCfg := msgstore.StoreConfig{
 		Type:     cfg.MsgStore.Type,
-		BasePath: resolvePath(storageBase, cfg.MsgStore.BasePath),
+		BasePath: userStoreBase,
 		Options:  cfg.MsgStore.Options,
 	}
 	store, err := msgstore.Open(storeCfg)

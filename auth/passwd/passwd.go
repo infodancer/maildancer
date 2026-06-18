@@ -21,9 +21,16 @@ import (
 )
 
 const (
-	// Key file extensions
+	// Key file extensions (legacy flat keyDir: {keyDir}/{user}.{key,pub})
 	privateKeyExt = ".key"
 	publicKeyExt  = ".pub"
+
+	// Per-user keyring filenames in the user's own data dir
+	// ({userKeyringBase}/{user}/keyring.{key,pub}). Co-located with the maildir
+	// and owned by the user's uid, so the delivery process reads its own public
+	// key without config-tree access.
+	keyringPubFile = "keyring.pub"
+	keyringKeyFile = "keyring.key"
 
 	// Argon2id parameters for password hashing (HashPassword / verify). The
 	// private-key seal KDF and blob layout live in auth/keyseal, the single
@@ -46,10 +53,23 @@ type userEntry struct {
 // Agent implements AuthenticationAgent using a passwd file and key directory.
 type Agent struct {
 	passwdPath string
-	keyDir     string
+	keyDir     string // legacy flat key dir (config tree); read-fallback only
+
+	// userKeyringBase is the parent of per-user data dirs ({dataPath}/{domain}/users).
+	// When set, per-user keyrings are read/written at {userKeyringBase}/{user}/keyring.*.
+	userKeyringBase string
 
 	mu    sync.RWMutex
 	users map[string]*userEntry // Cached user entries
+}
+
+// WithUserKeyringBase sets the per-user keyring base directory (the msgstore
+// user-dir parent in the writable data tree) and returns the agent for
+// chaining. When set, keyrings live beside each user's maildir rather than in
+// the legacy flat key directory.
+func (a *Agent) WithUserKeyringBase(base string) *Agent {
+	a.userKeyringBase = base
+	return a
 }
 
 // NewAgent creates a new passwd-based authentication agent.
@@ -202,13 +222,37 @@ func (a *Agent) UserExists(ctx context.Context, username string) (bool, error) {
 }
 
 // GetPublicKey returns the public key for a user.
+//
+// Resolution prefers the per-user keyring ({userKeyringBase}/{user}/keyring.pub)
+// and falls back to the legacy flat key dir. It is fail-closed: a key that
+// EXISTS but cannot be read (e.g. EACCES) returns the underlying error, never
+// ErrKeyNotFound -- so a caller (the delivery encrypt gate) does not mistake an
+// inaccessible key for an absent one and silently store plaintext. The keyring
+// read does not depend on the passwd file being readable by this (possibly
+// privilege-dropped) process, which is what the legacy config-tree path did.
 func (a *Agent) GetPublicKey(ctx context.Context, username string) ([]byte, error) {
+	if a.userKeyringBase != "" {
+		p := filepath.Join(a.userKeyringBase, username, keyringPubFile)
+		pubKey, err := os.ReadFile(p)
+		if err == nil {
+			return pubKey, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read keyring public key: %w", err)
+		}
+		// Absent in the keyring dir -- fall through to the legacy location.
+	}
+
+	// Legacy flat key dir (config tree). Gate on user existence here, as this
+	// path predates per-user keyrings.
 	a.mu.RLock()
 	_, exists := a.users[username]
 	a.mu.RUnlock()
-
 	if !exists {
 		return nil, errors.ErrUserNotFound
+	}
+	if a.keyDir == "" {
+		return nil, errors.ErrKeyNotFound
 	}
 
 	pubKeyPath := filepath.Join(a.keyDir, username+publicKeyExt)
@@ -223,19 +267,37 @@ func (a *Agent) GetPublicKey(ctx context.Context, username string) ([]byte, erro
 	return pubKey, nil
 }
 
-// HasEncryption returns whether encryption is enabled for a user.
+// HasEncryption returns whether encryption is enabled for a user. It is
+// fail-closed on an inaccessible (but present) key: that surfaces as an error
+// rather than a silent false.
 func (a *Agent) HasEncryption(ctx context.Context, username string) (bool, error) {
+	if a.userKeyringBase != "" {
+		p := filepath.Join(a.userKeyringBase, username, keyringPubFile)
+		_, err := os.Stat(p)
+		if err == nil {
+			return true, nil
+		}
+		if !os.IsNotExist(err) {
+			return false, fmt.Errorf("stat keyring public key: %w", err)
+		}
+	}
+
 	a.mu.RLock()
 	_, exists := a.users[username]
 	a.mu.RUnlock()
-
-	if !exists {
+	if !exists || a.keyDir == "" {
 		return false, nil
 	}
 
 	pubKeyPath := filepath.Join(a.keyDir, username+publicKeyExt)
 	_, err := os.Stat(pubKeyPath)
-	return err == nil, nil
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat public key: %w", err)
+	}
+	return true, nil
 }
 
 // verifyPassword checks if the password matches the stored hash.
@@ -284,26 +346,54 @@ func (a *Agent) verifyPassword(password, hash string) bool {
 	return subtle.ConstantTimeCompare(derivedKey, expectedHash) == 1
 }
 
-// loadKeys loads and decrypts the user's key pair.
-func (a *Agent) loadKeys(username, password string) (publicKey, privateKey []byte, err error) {
-	// Load public key
-	pubKeyPath := filepath.Join(a.keyDir, username+publicKeyExt)
-	publicKey, err = os.ReadFile(pubKeyPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil, errors.ErrKeyNotFound
+// keyFilePath resolves the path to a user key file, preferring the per-user
+// keyring dir ({userKeyringBase}/{user}/{keyringFile}) and falling back to the
+// legacy flat key dir ({keyDir}/{user}{legacyExt}). Fail-closed: a file present
+// but unreadable at the keyring path returns an error, never ErrKeyNotFound.
+// Returns ErrKeyNotFound only when the file is absent in both locations.
+func (a *Agent) keyFilePath(username, keyringFile, legacyExt string) (string, error) {
+	if a.userKeyringBase != "" {
+		p := filepath.Join(a.userKeyringBase, username, keyringFile)
+		_, err := os.Stat(p)
+		if err == nil {
+			return p, nil
 		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("stat keyring %s: %w", keyringFile, err)
+		}
+	}
+	if a.keyDir != "" {
+		p := filepath.Join(a.keyDir, username+legacyExt)
+		_, err := os.Stat(p)
+		if err == nil {
+			return p, nil
+		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("stat key %s: %w", legacyExt, err)
+		}
+	}
+	return "", errors.ErrKeyNotFound
+}
+
+// loadKeys loads and decrypts the user's key pair. Called at login by the
+// (root) session-manager, so it can read the keyring wherever it lives.
+func (a *Agent) loadKeys(username, password string) (publicKey, privateKey []byte, err error) {
+	pubPath, err := a.keyFilePath(username, keyringPubFile, publicKeyExt)
+	if err != nil {
+		return nil, nil, err
+	}
+	publicKey, err = os.ReadFile(pubPath)
+	if err != nil {
 		return nil, nil, fmt.Errorf("read public key: %w", err)
 	}
 
-	// Load encrypted private key
-	privKeyPath := filepath.Join(a.keyDir, username+privateKeyExt)
-	warnInsecurePerms(privKeyPath)
-	encryptedKey, err := os.ReadFile(privKeyPath)
+	privPath, err := a.keyFilePath(username, keyringKeyFile, privateKeyExt)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil, errors.ErrKeyNotFound
-		}
+		return nil, nil, err
+	}
+	warnInsecurePerms(privPath)
+	encryptedKey, err := os.ReadFile(privPath)
+	if err != nil {
 		return nil, nil, fmt.Errorf("read private key: %w", err)
 	}
 

@@ -10,11 +10,16 @@ func init() {
 		if config.CredentialBackend == "" {
 			return nil, errors.ErrAuthAgentConfigInvalid
 		}
-		// KeyBackend defaults to same directory as credential file
+		// KeyBackend is the legacy flat key dir (read-fallback). Per-user
+		// keyrings live under UserKeyringBase (the data-tree user-dir parent).
 		keyDir := config.KeyBackend
 		if keyDir == "" {
 			return nil, errors.ErrAuthAgentConfigInvalid
 		}
-		return NewAgent(config.CredentialBackend, keyDir)
+		agent, err := NewAgent(config.CredentialBackend, keyDir)
+		if err != nil {
+			return nil, err
+		}
+		return agent.WithUserKeyringBase(config.UserKeyringBase), nil
 	})
 }

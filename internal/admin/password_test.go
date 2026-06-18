@@ -22,6 +22,7 @@ func authenticate(t *testing.T, p Paths, domain, username, password string) (*au
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
+	agent = agent.WithUserKeyringBase(filepath.Join(p.Data, domain, "users"))
 	defer func() { _ = agent.Close() }()
 	return agent.Authenticate(context.Background(), username, password)
 }

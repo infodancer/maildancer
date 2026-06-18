@@ -162,29 +162,38 @@ When pop3d retrieves a message for an authenticated user:
 
 ## Key Storage
 
-### Public Keys
-
-Public keys are stored in plaintext files:
-
-```
-/etc/mail/keys/
-├── alice.pub    # 32-byte X25519 public key
-├── bob.pub
-└── charlie.pub
-```
-
-These are readable by smtpd to encrypt incoming messages.
-
-### Private Keys
-
-Private keys are stored encrypted with the user's password:
+Per-user keyrings live in the **writable data tree**, beside the user's
+maildir, not in the read-only config tree (maildancer#82):
 
 ```
-/etc/mail/keys/
-├── alice.key    # Encrypted private key
-├── bob.key
-└── charlie.key
+{data}/{domain}/users/{user}/
+├── keyring.pub    # 32-byte X25519 public key (plaintext)
+├── keyring.key    # sealed private key (see below)
+└── Maildir/
 ```
+
+The directory and both files are owned by the user's uid and the domain gid
+(dir `0700`, `keyring.key` `0600`). This is what makes encryption work under
+privilege separation: the delivery process runs as the recipient uid, so it
+can read `keyring.pub` to encrypt incoming mail, and the login path (as root,
+via session-manager) can read `keyring.key` to unseal the private key. Putting
+the keyring in the config tree -- owned by a service uid and mounted read-only
+-- left the delivery process unable to read the public key, so the encryption
+gate saw "no key" and stored plaintext (the fail-open this layout fixes).
+
+**Legacy fallback.** For unmigrated users, the old config-tree location
+(`{config}/{domain}/keys/{user}.pub` / `.key`) is still read as a fallback.
+New keys are only ever written to the data-tree keyring; provisioning a fresh
+keypair (or `ResetPasswordRegenKeys`) migrates the user off the legacy path.
+
+### Public keys
+
+`keyring.pub` is a raw 32-byte X25519 public key in plaintext, read by the
+delivery agent (running as the recipient) to encrypt incoming messages.
+
+### Private keys
+
+`keyring.key` holds the private key sealed under the user's password:
 
 #### Sealed Keyring Format (current)
 
@@ -375,7 +384,7 @@ recovery key) is reserved but not yet implemented.
 [auth]
 type = "passwd"
 credential_backend = "/etc/mail/passwd"
-key_backend = "/etc/mail/keys"
+key_backend = "/etc/mail/keys"   # legacy fallback only; new keyrings live in the data tree
 ```
 
 On login, the auth backend unseals the user's private key with their password

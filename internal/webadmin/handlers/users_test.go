@@ -118,12 +118,12 @@ func TestHandleCreateUser_WithKeys(t *testing.T) {
 		t.Errorf("expected 201, got %d: %s", rr.Code, rr.Body.String())
 	}
 
-	// Verify keys were created
-	keysDir := filepath.Join(dir, "example.com", "keys")
-	if _, err := os.Stat(filepath.Join(keysDir, "keyuser.pub")); err != nil {
+	// Verify keys were created in the user's data-tree keyring (maildancer#82).
+	keyringDir := filepath.Join(dir, "example.com", "users", "keyuser")
+	if _, err := os.Stat(filepath.Join(keyringDir, "keyring.pub")); err != nil {
 		t.Error("expected public key file")
 	}
-	if _, err := os.Stat(filepath.Join(keysDir, "keyuser.key")); err != nil {
+	if _, err := os.Stat(filepath.Join(keyringDir, "keyring.key")); err != nil {
 		t.Error("expected private key file")
 	}
 }
@@ -281,9 +281,9 @@ func TestHandleCreateAndDeleteKeys(t *testing.T) {
 		t.Errorf("expected 201, got %d: %s", rr.Code, rr.Body.String())
 	}
 
-	// Verify keys exist
-	keysDir := filepath.Join(dir, "example.com", "keys")
-	if _, err := os.Stat(filepath.Join(keysDir, "user1.pub")); err != nil {
+	// Verify keys exist in the user's data-tree keyring (maildancer#82).
+	keyringDir := filepath.Join(dir, "example.com", "users", "user1")
+	if _, err := os.Stat(filepath.Join(keyringDir, "keyring.pub")); err != nil {
 		t.Error("expected public key")
 	}
 
@@ -298,7 +298,7 @@ func TestHandleCreateAndDeleteKeys(t *testing.T) {
 		t.Errorf("expected 200, got %d", delRR.Code)
 	}
 
-	if _, err := os.Stat(filepath.Join(keysDir, "user1.pub")); err == nil {
+	if _, err := os.Stat(filepath.Join(keyringDir, "keyring.pub")); err == nil {
 		t.Error("expected public key to be removed")
 	}
 }

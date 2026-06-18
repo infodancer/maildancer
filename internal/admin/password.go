@@ -33,7 +33,7 @@ func (p Paths) ChangePassword(domain, username, oldPassword, newPassword string)
 	}
 
 	passwdPath := filepath.Join(p.Config, domain, "passwd")
-	keysDir := filepath.Join(p.Config, domain, "keys")
+	keysDir := p.domainKeysDir(domain)
 
 	unlock, err := p.lockDomain(domain)
 	if err != nil {
@@ -49,10 +49,13 @@ func (p Paths) ChangePassword(domain, username, oldPassword, newPassword string)
 	// the user has keys, unseals the private key (a sealed key that does not
 	// unseal fails authentication outright -- the strict no-silent-downgrade
 	// invariant -- so reaching a session with a key means we can re-seal it).
+	// The keyring lives in the data-tree user dir (legacy keysDir is a
+	// read-fallback for unmigrated users); see maildancer#82.
 	agent, err := passwd.NewAgent(passwdPath, keysDir)
 	if err != nil {
 		return fmt.Errorf("open auth agent: %w", err)
 	}
+	agent = agent.WithUserKeyringBase(p.userKeyringBase(domain))
 	defer func() { _ = agent.Close() }()
 
 	session, err := agent.Authenticate(context.Background(), username, oldPassword)
@@ -70,7 +73,7 @@ func (p Paths) ChangePassword(domain, username, oldPassword, newPassword string)
 		if err != nil {
 			return fmt.Errorf("re-seal private key: %w", err)
 		}
-		newKeyPath = filepath.Join(keysDir, username+".key")
+		newKeyPath = p.userKeyFile(domain, username)
 		tmpKeyPath = newKeyPath + ".rekey"
 		if err := os.WriteFile(tmpKeyPath, encPriv, 0o600); err != nil {
 			return fmt.Errorf("write re-sealed key: %w", err)
@@ -125,7 +128,7 @@ func (p Paths) ResetPasswordRegenKeys(domain, username, newPassword string) (str
 	}
 
 	hadKeys := false
-	if status := p.keyStatus(domain, username); status.Exists && status.HasPrivate {
+	if status := p.userKeyStatus(domain, username); status.Exists && status.HasPrivate {
 		hadKeys = true
 	}
 
@@ -137,9 +140,12 @@ func (p Paths) ResetPasswordRegenKeys(domain, username, newPassword string) (str
 		return "", nil
 	}
 
-	if err := p.createKeypair(domain, username, newPassword); err != nil {
+	// Drop any legacy config-tree key so the regenerated keyring is the only
+	// key present (DeleteUserKeys clears both locations).
+	_ = keys.DeleteKeypair(p.domainKeysDir(domain), username)
+	if _, err := p.createUserKeypair(domain, username, newPassword); err != nil {
 		return "", fmt.Errorf("regenerate keypair (password already changed; old key is orphaned until this is fixed): %w", err)
 	}
-	status := p.keyStatus(domain, username)
+	status := p.userKeyStatus(domain, username)
 	return status.Fingerprint, nil
 }

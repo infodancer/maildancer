@@ -6,7 +6,10 @@ package credentials
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+
+	"github.com/pelletier/go-toml/v2"
 
 	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/auth/passwd"
@@ -55,7 +58,18 @@ func Lookup(domainsPath, domainsDataPath, localpart, domainName string) (*Info, 
 		return nil, fmt.Errorf("lookup uid for %q in %q: %w", localpart, passwdPath, err)
 	}
 
+	// The domain gid is recorded in the DATA-tree config.toml as `[domain] gid`
+	// by `userctl domain create` (uidalloc). The read-only config tree does not
+	// carry runtime allocation state, so the config-tree cfg.Gid is normally 0;
+	// the data tree is authoritative. Reading the config tree alone spawned
+	// mail-session with gid 0, which could not traverse the 2750 root:{gid}
+	// data dirs -- "open .../users/<user>/new: permission denied".
 	gid := cfg.Gid
+	if domainsDataPath != "" {
+		if g := loadDataDomainGID(filepath.Join(domainsDataPath, domainName, "config.toml")); g != 0 {
+			gid = g
+		}
+	}
 
 	// Resolve mail-session basePath (default: "users").
 	// Priority: postmaster DataPath > domainsDataPath+domain > domainDir.
@@ -94,4 +108,24 @@ func Lookup(domainsPath, domainsDataPath, localpart, domainName string) (*Info, 
 		BasePath:  base,
 		StoreType: storeType,
 	}, nil
+}
+
+// loadDataDomainGID reads `[domain] gid` from a data-tree config.toml. Returns 0
+// when the file is absent, unreadable, or the key is unset. This is the same
+// schema `userctl domain create` writes and `internal/admin` reads, kept in sync
+// here so the daemon spawn path resolves the gid from its authoritative home.
+func loadDataDomainGID(path string) uint32 {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var c struct {
+		Domain struct {
+			Gid uint32 `toml:"gid"`
+		} `toml:"domain"`
+	}
+	if err := toml.Unmarshal(data, &c); err != nil {
+		return 0
+	}
+	return c.Domain.Gid
 }

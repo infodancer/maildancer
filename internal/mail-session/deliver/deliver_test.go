@@ -81,7 +81,12 @@ maildir_subdir = "Maildir"
 		t.Fatalf("write config.toml: %v", err)
 	}
 
-	dlvr, err := New(Config{DomainsPath: base})
+	// StoreBasePath is the recipient user-store root, as session-manager passes
+	// via --basepath. At-rest encryption reads keyrings from here.
+	dlvr, err := New(Config{
+		DomainsPath:   base,
+		StoreBasePath: filepath.Join(base, "example.com", "users"),
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

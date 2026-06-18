@@ -278,13 +278,25 @@ func (p *FilesystemDomainProvider) loadDomain(name, domainPath, configPath strin
 	}
 
 	// Domain tier: the per-domain `forwards` file. A missing file is empty (not
-	// an error); a malformed file degrades to an empty tier rather than failing
-	// the whole domain load.
+	// an error); any other read failure degrades to an empty tier rather than
+	// failing the whole domain load.
+	//
+	// GetDomain runs both in session-manager (root, where forwards resolve) and
+	// in the privilege-dropped mail-session (recipient uid, which can't read the
+	// config tree and no longer resolves forwards anyway). A permission error is
+	// the expected, benign case there, so log it at Debug; a non-permission error
+	// in the root context is a real misconfiguration and stays at Warn.
 	domainFwd, err := forwards.Load(filepath.Join(domainPath, "forwards"))
 	if err != nil {
-		p.logger.Warn("load domain forwards file",
-			slog.String("domain", name),
-			slog.String("error", err.Error()))
+		if errors.Is(err, os.ErrPermission) {
+			p.logger.Debug("skipping unreadable domain forwards file (expected for privilege-dropped reader)",
+				slog.String("domain", name),
+				slog.String("error", err.Error()))
+		} else {
+			p.logger.Warn("load domain forwards file",
+				slog.String("domain", name),
+				slog.String("error", err.Error()))
+		}
 		domainFwd = forwards.FromMap(nil)
 	}
 

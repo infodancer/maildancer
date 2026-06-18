@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/infodancer/maildancer/auth/passwd"
 )
@@ -48,8 +49,11 @@ type permEntry struct {
 
 // PermReport records what a permission apply/check did or would do.
 type PermReport struct {
-	Domain  string
-	Entries []PermResult
+	Domain string
+	// Allocated lists ids the fix allocated before applying perms, e.g.
+	// "example.com gid=10013" or "alice@example.com uid=10025".
+	Allocated []string
+	Entries   []PermResult
 }
 
 // PermResult is the per-path outcome of an apply.
@@ -201,18 +205,29 @@ func (p Paths) provisionUserDataDir(domain, username string, uid uint32) error {
 	return report.firstError()
 }
 
-// FixDomainPerms checks and repairs ownership/modes across a domain's data tree
-// against the security model, idempotently. It is the supported replacement for
-// the standalone fix-domain-perms.sh: it resolves the gid from the data tree
-// (where it lives) and never silently skips a configured domain. Returns a
-// report of every path touched.
-func (p Paths) FixDomainPerms(domain string) (PermReport, error) {
+// FixDomain repairs a domain's data tree against the security model,
+// idempotently: it first allocates any missing gid (domain) or uid (passwd
+// entries), then applies ownership/modes. It is the supported replacement for
+// the standalone fix-domain-perms.sh -- it resolves the gid from the data tree
+// (where it lives), allocates ids the perms depend on (so it never fails on an
+// unallocated domain), and never silently skips a configured domain. Returns a
+// report of ids allocated and every path touched.
+func (p Paths) FixDomain(domain string) (PermReport, error) {
 	if !ValidDomainName(domain) {
 		return PermReport{}, ErrInvalidDomainName
 	}
 	if !p.DomainExists(domain) {
 		return PermReport{}, ErrDomainNotFound
 	}
+
+	// Allocate any missing gid/uids first -- the ownership model below depends
+	// on them. migrateDomain self-locks for passwd uid writes, so it runs
+	// before we take the perms lock (no nested lock).
+	_, _, allocated, errs := p.migrateDomain(domain)
+	if len(errs) > 0 {
+		return PermReport{Domain: domain, Allocated: allocated}, fmt.Errorf("allocate ids: %s", strings.Join(errs, "; "))
+	}
+
 	unlock, err := p.lockDomain(domain)
 	if err != nil {
 		return PermReport{}, err
@@ -225,6 +240,7 @@ func (p Paths) FixDomainPerms(domain string) (PermReport, error) {
 	}
 	report := applyPlan(plan, true)
 	report.Domain = domain
+	report.Allocated = allocated
 	return report, report.firstError()
 }
 

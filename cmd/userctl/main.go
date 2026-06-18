@@ -277,7 +277,7 @@ func usage() {
     userctl domain dkim   create <domain> [--selector <s>] [--force]
     userctl domain dkim   show   <domain>             DKIM key + DNS TXT record
     userctl domain dns    <domain> [--hostname <h>] [--ip <i>]   check public DNS records
-    userctl domain fix-perms <domain> | --all         repair data-dir ownership/modes (run as root)
+    userctl domain fix      <domain> | --all          allocate missing ids + repair data-dir perms (run as root)
 
   Users:
     userctl user add    <user@domain> [--gen-keys] [--password-stdin]

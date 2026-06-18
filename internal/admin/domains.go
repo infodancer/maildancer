@@ -55,7 +55,7 @@ func (p Paths) DomainExists(name string) bool {
 //
 // Directory ownership for the data tree (root:{gid} with setgid per the mail
 // security model) is applied here when running as root; off-root the structure
-// and modes are created and ownership is left to FixDomainPerms.
+// and modes are created and ownership is left to FixDomain.
 func (p Paths) CreateDomain(name string) (uint32, error) {
 	if !ValidDomainName(name) {
 		return 0, ErrInvalidDomainName

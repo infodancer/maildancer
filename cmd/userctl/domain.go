@@ -82,7 +82,7 @@ func runDomainSubcommand(args []string, paths admin.Paths, stdin io.Reader) erro
 			return fmt.Errorf("domain set: expected <domain> <key> [<value>] (omit value to unset)")
 		}
 
-	case "fix-perms":
+	case "fix":
 		all := false
 		var names []string
 		for _, a := range rest {
@@ -95,15 +95,15 @@ func runDomainSubcommand(args []string, paths admin.Paths, stdin io.Reader) erro
 		if all {
 			if len(names) != 0 {
 				domainUsage()
-				return fmt.Errorf("domain fix-perms: --all takes no domain argument")
+				return fmt.Errorf("domain fix: --all takes no domain argument")
 			}
-			return cmdDomainFixPermsAll(paths)
+			return cmdDomainFixAll(paths)
 		}
 		if len(names) != 1 {
 			domainUsage()
-			return fmt.Errorf("domain fix-perms: expected <domain> or --all")
+			return fmt.Errorf("domain fix: expected <domain> or --all")
 		}
-		return cmdDomainFixPerms(paths, strings.ToLower(strings.TrimSpace(names[0])))
+		return cmdDomainFix(paths, strings.ToLower(strings.TrimSpace(names[0])))
 
 	case "key":
 		return runDomainKeyAction(rest, paths, stdin)
@@ -163,8 +163,8 @@ func cmdDomainCreate(paths admin.Paths, name string) error {
 	return nil
 }
 
-func cmdDomainFixPerms(paths admin.Paths, name string) error {
-	report, err := paths.FixDomainPerms(name)
+func cmdDomainFix(paths admin.Paths, name string) error {
+	report, err := paths.FixDomain(name)
 	printPermReport(report)
 	if err != nil {
 		return err
@@ -172,14 +172,14 @@ func cmdDomainFixPerms(paths admin.Paths, name string) error {
 	return nil
 }
 
-func cmdDomainFixPermsAll(paths admin.Paths) error {
+func cmdDomainFixAll(paths admin.Paths) error {
 	domains, err := paths.ListDomains()
 	if err != nil {
 		return err
 	}
 	var firstErr error
 	for _, d := range domains {
-		report, err := paths.FixDomainPerms(d.Name)
+		report, err := paths.FixDomain(d.Name)
 		printPermReport(report)
 		if err != nil && firstErr == nil {
 			firstErr = err
@@ -188,14 +188,18 @@ func cmdDomainFixPermsAll(paths admin.Paths) error {
 	return firstErr
 }
 
-// printPermReport renders a fix-perms report. Off-root, chown is skipped; the
-// note makes that explicit so an operator does not mistake it for success.
+// printPermReport renders a fix report: any ids allocated, then per-path
+// ownership/mode results. Off-root, chown is skipped; the note makes that
+// explicit so an operator does not mistake it for success.
 func printPermReport(report admin.PermReport) {
 	if report.Domain == "" && len(report.Entries) == 0 {
 		return
 	}
 	if report.Domain != "" {
 		fmt.Printf("domain %s:\n", report.Domain)
+	}
+	for _, a := range report.Allocated {
+		fmt.Printf("  allocated %s\n", a)
 	}
 	skippedChown := false
 	for _, e := range report.Entries {
@@ -448,8 +452,9 @@ func domainUsage() {
   userctl domain key    show   <domain>             show domain encryption key
   userctl domain key    create <domain> [--password-stdin]
   userctl domain key    del    <domain>
-  userctl domain fix-perms <domain> | --all         repair data-dir ownership/modes per the
-                                                    security model (run as root to apply uid:gid)
+  userctl domain fix    <domain> | --all            allocate any missing gid/uids, then repair
+                                                    data-dir ownership/modes per the security
+                                                    model (run as root to apply uid:gid)
   userctl domain dkim   create <domain> [--selector <s>] [--force]
                                                     generate Ed25519 DKIM key and print
                                                     the DNS TXT record (default selector

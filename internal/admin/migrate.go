@@ -89,7 +89,51 @@ func (p Paths) migrateDomain(name string) (domainMigrated bool, usersMigrated in
 	usersMigrated = migrated
 	details = append(details, userDetails...)
 	errs = append(errs, uerrs...)
+
+	// Narrow legacy four-field passwd entries to user:hash:mailbox now that the
+	// uid is authoritative in uid.toml.
+	stripped, serrs := p.stripMigratedPasswdUIDs(name)
+	errs = append(errs, serrs...)
+	if stripped > 0 {
+		details = append(details, fmt.Sprintf("%s narrowed %d legacy passwd uid field(s)", name, stripped))
+	}
 	return domainMigrated, usersMigrated, details, errs
+}
+
+// stripMigratedPasswdUIDs drops the legacy uid column from passwd entries whose
+// uid is already recorded in uid.toml -- the only safe condition, since the
+// passwd uid is otherwise the sole record. Runs under the domain lock.
+func (p Paths) stripMigratedPasswdUIDs(domain string) (int, []string) {
+	passwdPath := filepath.Join(p.Config, domain, "passwd")
+	users, err := passwd.ListUsers(passwdPath)
+	if err != nil {
+		return 0, []string{fmt.Sprintf("%s: list users for strip: %v", domain, err)}
+	}
+	// A user is safe to strip once their uid is in uid.toml -- regardless of the
+	// passwd column's value (a stale ":0" included). StripUIDs only narrows
+	// genuine four-field lines, so passing an already-three-field user is a
+	// no-op. A user NOT in uid.toml is left untouched so their uid is not lost.
+	var safe []string
+	for _, u := range users {
+		if _, err := identity.UserUID(p.Config, domain, u.Username); err == nil {
+			safe = append(safe, u.Username)
+		}
+	}
+	if len(safe) == 0 {
+		return 0, nil
+	}
+
+	unlock, err := p.lockDomain(domain)
+	if err != nil {
+		return 0, []string{fmt.Sprintf("%s: lock for passwd strip: %v", domain, err)}
+	}
+	defer unlock()
+
+	n, err := passwd.StripUIDs(passwdPath, safe)
+	if err != nil {
+		return 0, []string{fmt.Sprintf("%s: strip passwd uids: %v", domain, err)}
+	}
+	return n, nil
 }
 
 // migrateUserUIDs ensures every passwd user has a uid in uid.toml, adopting the

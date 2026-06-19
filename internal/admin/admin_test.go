@@ -459,6 +459,21 @@ func TestMigrateUIDs(t *testing.T) {
 		}
 	}
 
+	// The passwd file is narrowed: every entry is now three-field (the legacy
+	// uid columns, including bob's ":0" and carol's ":10005", are stripped).
+	pw, err := os.ReadFile(passwdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(pw)), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if n := strings.Count(line, ":"); n != 2 {
+			t.Errorf("passwd entry not narrowed to user:hash:mailbox: %q", line)
+		}
+	}
+
 	// Idempotent: a second run migrates nothing.
 	result, err = p.MigrateUIDs()
 	if err != nil {

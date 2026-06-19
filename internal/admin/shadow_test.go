@@ -29,18 +29,15 @@ func writeDomainFixture(t *testing.T, p Paths, domainName, passwdBody, configBod
 }
 
 func TestShadowWarnings(t *testing.T) {
-	t.Run("admin tier exact forward shadows a real user", func(t *testing.T) {
+	t.Run("exact forward of a real user is intentional, not flagged", func(t *testing.T) {
 		p := newTestPaths(t)
+		// A real mailbox that forwards elsewhere is the classic forwarding case.
 		writeDomainFixture(t, p, "example.com",
 			"alice:hash:alice\nbob:hash:bob\n",
 			"[forwards]\nalice = \"alice@elsewhere.com\"\n", "")
 
-		warnings := p.shadowWarnings("example.com")
-		if len(warnings) != 1 {
-			t.Fatalf("want 1 warning, got %d: %v", len(warnings), warnings)
-		}
-		if !strings.Contains(warnings[0], "alice@example.com") || !strings.Contains(warnings[0], "alice@elsewhere.com") {
-			t.Errorf("warning missing user or target: %q", warnings[0])
+		if w := p.shadowWarnings("example.com"); len(w) != 0 {
+			t.Errorf("exact forward must not be flagged, got %v", w)
 		}
 	})
 
@@ -53,6 +50,26 @@ func TestShadowWarnings(t *testing.T) {
 		warnings := p.shadowWarnings("example.com")
 		if len(warnings) != 2 {
 			t.Fatalf("want 2 warnings (catchall shadows all), got %d: %v", len(warnings), warnings)
+		}
+		if !strings.Contains(warnings[0], "catchall (*)") {
+			t.Errorf("warning should name the catchall: %q", warnings[0])
+		}
+	})
+
+	t.Run("exact forward overrides catchall: only the swept user is flagged", func(t *testing.T) {
+		p := newTestPaths(t)
+		// alice has her own explicit forward (intentional); bob is only caught
+		// by the catchall (the surprising case).
+		writeDomainFixture(t, p, "example.com",
+			"alice:hash:alice\nbob:hash:bob\n",
+			"", "alice:alice@elsewhere.com\n*:catchall@elsewhere.com\n")
+
+		warnings := p.shadowWarnings("example.com")
+		if len(warnings) != 1 {
+			t.Fatalf("want 1 warning (bob only), got %d: %v", len(warnings), warnings)
+		}
+		if !strings.Contains(warnings[0], "bob@example.com") {
+			t.Errorf("warning should be for bob, got %q", warnings[0])
 		}
 	})
 

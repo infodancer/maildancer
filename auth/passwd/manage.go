@@ -65,35 +65,6 @@ func AddUser(passwdPath, username, password string) error {
 	return err
 }
 
-// AddUserWithUID appends a new user entry with an explicit uid to the passwd
-// file at passwdPath. Returns an error if the username already exists.
-func AddUserWithUID(passwdPath, username, password string, uid uint32) error {
-	users, err := parsePasswd(passwdPath)
-	if err != nil {
-		return err
-	}
-
-	for _, u := range users {
-		if u.Username == username {
-			return fmt.Errorf("user %q already exists", username)
-		}
-	}
-
-	hash, err := HashPassword(password)
-	if err != nil {
-		return err
-	}
-
-	f, err := os.OpenFile(passwdPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o640)
-	if err != nil {
-		return fmt.Errorf("open passwd file: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	_, err = fmt.Fprintf(f, "%s:%s:%s:%d\n", username, hash, username, uid)
-	return err
-}
-
 // SetPassword replaces the password hash for the named user, preserving the
 // mailbox and uid fields (including legacy three-field entries, which stay
 // three-field). Returns an error if the user does not exist.
@@ -145,18 +116,27 @@ func SetPassword(passwdPath, username, password string) error {
 	return writePasswd(passwdPath, lines)
 }
 
-// SetUID assigns a uid to the named user, preserving the hash and mailbox
-// fields and upgrading legacy three-field entries to four fields.
-// Returns an error if the user does not exist.
-func SetUID(passwdPath, username string, uid uint32) error {
+// StripUIDs rewrites the passwd file, dropping the legacy uid (4th) field from
+// every entry whose username is in usernames. Other entries, comments, and
+// blank lines are preserved verbatim. uid is identity allocation, owned by
+// uid.toml -- the passwd file holds only user:hash:mailbox. Callers strip a
+// user only once its uid is authoritative in uid.toml, so a uid is never lost.
+// Returns the number of entries narrowed; idempotent (an already three-field
+// entry is left as-is, and the file is rewritten only when something changed).
+func StripUIDs(passwdPath string, usernames []string) (int, error) {
+	strip := make(map[string]struct{}, len(usernames))
+	for _, u := range usernames {
+		strip[u] = struct{}{}
+	}
+
 	f, err := os.Open(passwdPath)
 	if err != nil {
-		return fmt.Errorf("open passwd file: %w", err)
+		return 0, fmt.Errorf("open passwd file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
 	var lines []string
-	found := false
+	stripped := 0
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -166,25 +146,24 @@ func SetUID(passwdPath, username string, uid uint32) error {
 			continue
 		}
 		parts := strings.SplitN(trimmed, ":", 4)
-		if len(parts) < 2 || parts[0] != username {
+		if len(parts) < 4 {
 			lines = append(lines, line)
 			continue
 		}
-		found = true
-		mailbox := parts[0]
-		if len(parts) >= 3 {
-			mailbox = parts[2]
+		if _, ok := strip[parts[0]]; !ok {
+			lines = append(lines, line)
+			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s:%s:%s:%d", username, parts[1], mailbox, uid))
+		lines = append(lines, fmt.Sprintf("%s:%s:%s", parts[0], parts[1], parts[2]))
+		stripped++
 	}
 	if err := scanner.Err(); err != nil {
-		return err
+		return 0, err
 	}
-	if !found {
-		return fmt.Errorf("user %q not found", username)
+	if stripped == 0 {
+		return 0, nil
 	}
-
-	return writePasswd(passwdPath, lines)
+	return stripped, writePasswd(passwdPath, lines)
 }
 
 // DeleteUser removes the named user from the passwd file.

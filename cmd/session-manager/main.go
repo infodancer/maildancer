@@ -17,7 +17,14 @@ import (
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
 	"github.com/infodancer/maildancer/internal/session-manager/metrics"
 
-	// Register storage drivers used by the domain provider.
+	// Register the auth agents and storage drivers the daemon constructs at
+	// runtime. These are registry side-effects (init()) with no referenced
+	// symbols, so they must be imported explicitly -- session-manager used to
+	// pull auth/passwd in transitively through credentials.Lookup, but that
+	// import was removed when uid/gid resolution moved to auth/identity
+	// (maildancer#101); without this line the "passwd" agent type is
+	// unregistered and "setup auth" fails with "auth agent type not registered".
+	_ "github.com/infodancer/maildancer/auth/passwd"
 	_ "github.com/infodancer/maildancer/msgstore/maildir"
 )
 

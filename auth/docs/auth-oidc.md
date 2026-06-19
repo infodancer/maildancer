@@ -110,8 +110,14 @@ Dynamic clients are always public (no client secret; PKCE required). On server r
 
 ## Deployment
 
-`auth-oidc` is deployed on `docker-mail` as a separate Docker Compose stack. Traefik on `docker-web` routes all `auth.<domain>` hostnames to it via a dynamically-generated file provider config.
+`auth-oidc` runs as its own process (typically a small Docker Compose stack
+alongside the mail daemons). Put a reverse proxy in front of it that routes every
+`auth.<domain>` hostname to the server -- it serves discovery per owned domain
+via host-based routing, so each domain needs its own `auth.<domain>` name.
 
-DNS: add an A record for `auth.<domain>` (or a wildcard `*.infodancer.net`) pointing to the Traefik host. TLS is handled by Traefik via Cloudflare DNS-01.
+DNS: add an A record for each `auth.<domain>` (or a wildcard covering them)
+pointing at the proxy. Terminate TLS at the proxy.
 
-Each domain listed in `mail_domains` in the Ansible inventory gets a Traefik router rule automatically. To register OIDC clients, add `auth_oidc_clients` entries to the `docker-mail` host vars.
+If you provision with a configuration-management tool, drive the per-domain proxy
+router rules and the registered OIDC clients from the same source of truth as the
+mail domain list, so adding a mail domain automatically exposes its OIDC issuer.

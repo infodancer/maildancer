@@ -137,7 +137,7 @@ func (c DomainConfig) ProvisionKeysByDefault() bool {
 }
 
 // DomainsConfig holds per-domain configuration overrides from domains.toml.
-// Keys are domain names (e.g. "matthewjayhunter.com").
+// Keys are domain names (e.g. "example.com").
 // This file is managed by the system postmaster and provides per-domain settings
 // that domain admins can further override in their own config.toml.
 type DomainsConfig map[string]DomainConfig

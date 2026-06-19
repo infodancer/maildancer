@@ -17,7 +17,7 @@ tasks:
         cmd: go build -o {{.BUILD_DIR}}/{{.ITEM}} ./cmd/{{.ITEM}}
     vars:
       BINARIES:
-        sh: ls cmd
+        sh: find cmd -mindepth 1 -maxdepth 1 -type d -printf '%f\n'
 
   lint:
     desc: Run golangci-lint

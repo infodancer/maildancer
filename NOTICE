@@ -1,0 +1,9 @@
+maildancer
+Copyright 2026 Matthew Hunter
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product includes third-party Go dependencies, each under its own license
+(predominantly MIT and BSD-3-Clause). The authoritative list of dependencies and
+their versions is go.mod; license texts are retrieved into the module cache by
+the Go toolchain and are not vendored in this repository.

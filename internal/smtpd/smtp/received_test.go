@@ -37,7 +37,7 @@ func TestBuildReceivedHeader_Full(t *testing.T) {
 		Helo:           "client.example.org",
 		ClientHostname: "mail.example.org",
 		ClientIP:       "203.0.113.7",
-		Hostname:       "mx.infodancer.net",
+		Hostname:       "mail.example.net",
 		Proto:          "ESMTPS",
 		TLSComment:     "(version=TLS1.3 cipher=TLS_AES_256_GCM_SHA384)",
 		MsgID:          "deadbeef",
@@ -46,7 +46,7 @@ func TestBuildReceivedHeader_Full(t *testing.T) {
 
 	for _, want := range []string{
 		"Received: from client.example.org (mail.example.org [203.0.113.7])",
-		"by mx.infodancer.net with ESMTPS id deadbeef",
+		"by mail.example.net with ESMTPS id deadbeef",
 		"(version=TLS1.3 cipher=TLS_AES_256_GCM_SHA384)",
 		"for <alice@infodancer.net>;",
 		"Fri, 02 Jan 2026 15:04:05 -0700",
@@ -74,7 +74,7 @@ func TestBuildReceivedHeader_OmitsUnknownValues(t *testing.T) {
 	h := buildReceivedHeader(ReceivedInfo{
 		Helo:     "bot",
 		ClientIP: "198.51.100.4",
-		Hostname: "mx.infodancer.net",
+		Hostname: "mail.example.net",
 		Proto:    "ESMTP",
 		MsgID:    "abc123",
 	}, mustParseTime(t))
@@ -91,11 +91,11 @@ func TestBuildReceivedHeader_OmitsUnknownValues(t *testing.T) {
 }
 
 func TestBuildForwardReceivedHeader(t *testing.T) {
-	h := buildForwardReceivedHeader("mx.infodancer.net", "matthew@oldschoolgamers.org", "id99", mustParseTime(t))
+	h := buildForwardReceivedHeader("mail.example.net", "user@example.org", "id99", mustParseTime(t))
 	for _, want := range []string{
-		"Received: by mx.infodancer.net (forwarding for <matthew@oldschoolgamers.org>)",
+		"Received: by mail.example.net (forwarding for <user@example.org>)",
 		"id id99;",
-		"X-Original-To: matthew@oldschoolgamers.org",
+		"X-Original-To: user@example.org",
 	} {
 		if !strings.Contains(h, want) {
 			t.Errorf("forward header missing %q\n--- header ---\n%s", want, h)

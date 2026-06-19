@@ -4,12 +4,25 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"os"
 	"testing"
 
 	"golang.org/x/crypto/curve25519"
 
 	autherrors "github.com/infodancer/maildancer/auth/errors"
+	"github.com/infodancer/maildancer/internal/kdfcost"
 )
+
+// TestMain drops the argon2id cost to the cheapest valid profile for the whole
+// test binary -- this binary drives both the legacy path here and keyring's
+// passphrase slots, and both read kdfcost.Default. These tests exercise
+// seal/open routing, not KDF strength; full-cost argon2id (64 MiB, t=3) under
+// -race made the package slow enough to flake on loaded CI runners (issue #114).
+// Seal and open both read the lowered cost, so round-trips stay consistent.
+func TestMain(m *testing.M) {
+	kdfcost.Default = kdfcost.Params{Time: 1, Memory: 8, Threads: 1}
+	os.Exit(m.Run())
+}
 
 // newPriv returns a fresh 32-byte X25519 private key.
 func newPriv(t *testing.T) []byte {

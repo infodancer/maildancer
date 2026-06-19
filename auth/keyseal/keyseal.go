@@ -29,18 +29,21 @@ import (
 
 	autherrors "github.com/infodancer/maildancer/auth/errors"
 	"github.com/infodancer/maildancer/auth/keyring"
+	"github.com/infodancer/maildancer/internal/kdfcost"
 )
 
 // Legacy single-key seal parameters. Retained for reading pre-keyring .key
 // files (and for the back-compat test that produces them). New seals use the
 // keyring format, which owns its own KDF parameters in auth/keyring.
+//
+// The argon2id cost comes from kdfcost.Default: the legacy blob stores no
+// parameters, so seal and open must agree, and they do by reading the same
+// shared profile. The output and framing sizes stay const -- changing them
+// would change the on-disk format.
 const (
-	argon2Time    = 3
-	argon2Memory  = 64 * 1024 // 64 MiB
-	argon2Threads = 4
-	argon2KeyLen  = 32
-	saltSize      = 32
-	nonceSize     = 24
+	argon2KeyLen = 32
+	saltSize     = 32
+	nonceSize    = 24
 )
 
 // Seal encrypts privKey under password as a new sealed keyring holding a single
@@ -98,7 +101,7 @@ func sealLegacy(privKey []byte, password string) ([]byte, error) {
 	}
 
 	var key [32]byte
-	derived := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	derived := argon2.IDKey([]byte(password), salt, kdfcost.Default.Time, kdfcost.Default.Memory, kdfcost.Default.Threads, argon2KeyLen)
 	copy(key[:], derived)
 
 	ciphertext := secretbox.Seal(nil, privKey, &nonce, &key)
@@ -122,7 +125,7 @@ func openLegacy(sealed []byte, password string) ([]byte, error) {
 	ciphertext := sealed[saltSize+nonceSize:]
 
 	var key [32]byte
-	derived := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	derived := argon2.IDKey([]byte(password), salt, kdfcost.Default.Time, kdfcost.Default.Memory, kdfcost.Default.Threads, argon2KeyLen)
 	copy(key[:], derived)
 
 	plaintext, ok := secretbox.Open(nil, ciphertext, &nonce, &key)

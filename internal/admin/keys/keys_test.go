@@ -10,7 +10,16 @@ import (
 
 	"github.com/infodancer/maildancer/auth/keyseal"
 	"github.com/infodancer/maildancer/internal/admin/keys"
+	"github.com/infodancer/maildancer/internal/kdfcost"
 )
+
+// TestMain lowers the shared key-wrap argon2id cost for this binary, which seals
+// many keyrings during key-generation tests. The tests check key plumbing, not
+// KDF strength; full cost under -race needlessly loaded CI runners (issue #114).
+func TestMain(m *testing.M) {
+	kdfcost.Default = kdfcost.Params{Time: 1, Memory: 8, Threads: 1}
+	os.Exit(m.Run())
+}
 
 func TestGenerateKeypair(t *testing.T) {
 	pub, encPriv, err := keys.GenerateKeypair("hunter2")

@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/admin/keys"
 	"github.com/infodancer/maildancer/internal/webadmin/audit"
 	"github.com/infodancer/maildancer/internal/webadmin/rbac"
@@ -52,6 +54,14 @@ type uiOutboundConfig struct {
 	HasPassword   bool
 	PasswordFile  string
 	HasConfig     bool
+}
+
+// uiForwardRow holds one domain forwarding rule for rendering. IsCatchall marks
+// the wildcard "*" entry so the template can label it.
+type uiForwardRow struct {
+	Localpart  string
+	Target     string
+	IsCatchall bool
 }
 
 // uiOutboundSettings holds outbound transport display data for the settings page.
@@ -353,6 +363,8 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	forwards := h.listForwardsForUI(name)
+
 	pd := h.pageData(r, nil)
 	pd.Data = struct {
 		Domain               uiDomainRow
@@ -360,6 +372,7 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 		DomainKeyFingerprint string
 		IsSuperAdmin         bool
 		Outbound             uiOutboundConfig
+		Forwards             []uiForwardRow
 	}{
 		Domain: uiDomainRow{
 			Name:              name,
@@ -376,11 +389,28 @@ func (h *WebHandler) HandleDomainDetail(w http.ResponseWriter, r *http.Request) 
 		DomainKeyFingerprint: domainKeyFingerprint,
 		IsSuperAdmin:         h.roles == nil || h.roles.IsSuperAdmin(h.currentUsername(r)),
 		Outbound:             outbound,
+		Forwards:             forwards,
 	}
 
 	if err := h.render.Render(w, "domain", pd); err != nil {
 		h.logger.Error("failed to render domain page", "error", err)
 	}
+}
+
+// listForwardsForUI reads the domain's forwarding rules for rendering, sorted by
+// localpart. A read error degrades to an empty list rather than failing the page.
+func (h *WebHandler) listForwardsForUI(name string) []uiForwardRow {
+	fwds, err := domain.ListDomainForwards(h.domainsPath, name)
+	if err != nil {
+		h.logger.Warn("failed to load domain forwards for UI", "domain", name, "error", err)
+		return nil
+	}
+	rows := make([]uiForwardRow, 0, len(fwds))
+	for lp, target := range fwds {
+		rows = append(rows, uiForwardRow{Localpart: lp, Target: target, IsCatchall: lp == "*"})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Localpart < rows[j].Localpart })
+	return rows
 }
 
 // listUsersForUI reads the passwd file and checks key status for each user.

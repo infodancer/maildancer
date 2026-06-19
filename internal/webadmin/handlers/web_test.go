@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/internal/webadmin/session"
 )
 
@@ -75,6 +76,33 @@ func TestHandleDomainDetail(t *testing.T) {
 	}
 	if !strings.Contains(body, "user1") {
 		t.Error("expected user1 in detail page")
+	}
+	if !strings.Contains(body, "Forwarding") {
+		t.Error("expected Forwarding section in detail page")
+	}
+}
+
+func TestHandleDomainDetail_ShowsForwards(t *testing.T) {
+	h, dir := newTestWebHandler(t)
+	createTestDomain(t, dir, "example.com")
+	if err := domain.SetDomainForward(dir, "example.com", "sales", "alice@example.net"); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/domains/example.com", nil)
+	req.SetPathValue("name", "example.com")
+	rr := httptest.NewRecorder()
+	h.HandleDomainDetail(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "sales@example.com") {
+		t.Error("expected configured forward address in detail page")
+	}
+	if !strings.Contains(body, "alice@example.net") {
+		t.Error("expected configured forward target in detail page")
 	}
 }
 

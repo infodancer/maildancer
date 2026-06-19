@@ -1,6 +1,7 @@
 #!/bin/bash
 #
-# Pre-push hook: run all checks (build, lint, vulncheck, test) before pushing.
+# Pre-push hook: secret scan (gitleaks) + all checks (build, lint, vulncheck,
+# test) before pushing.
 # Install with: task hooks:install
 #
 # Pushes that only delete remote branches carry no new code, so the checks
@@ -28,6 +29,17 @@ if ! command -v task &> /dev/null; then
     echo "Error: 'task' is not installed."
     echo "Please install Task from https://taskfile.dev/installation/"
     exit 1
+fi
+
+# Secret scan first -- it is cheap (~300ms over full history) and a leak should
+# fail fast, before the slow build/lint/test pass. Warn-and-skip if gitleaks is
+# absent (not a Go-toolchain default); install it with: task install:deps
+if command -v gitleaks &> /dev/null; then
+    echo "Scanning history for secrets (gitleaks)..."
+    task secrets
+else
+    echo "WARNING: gitleaks not found; skipping the history secret scan."
+    echo "  Install it with: task install:deps"
 fi
 
 task all

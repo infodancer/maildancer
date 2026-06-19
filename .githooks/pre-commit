@@ -1,10 +1,26 @@
 #!/bin/bash
 #
-# Pre-commit hook: gofmt check on the staged Go files.
+# Pre-commit hook: secret scan (gitleaks) + gofmt check, on staged changes.
 # Install with: task hooks:install
 
 set -e
 
+# --- gitleaks: scan staged changes so a secret never enters a commit ---------
+# Warn-and-skip if gitleaks is absent rather than blocking the commit -- it is
+# not a Go-toolchain default. Install it with: task install:deps
+if command -v gitleaks &> /dev/null; then
+    if ! gitleaks git --staged --redact --no-banner; then
+        echo
+        echo "gitleaks found a potential secret in the staged changes (above)."
+        echo "Remove it, or if it is a false positive add an allowlist entry to .gitleaks.toml."
+        exit 1
+    fi
+else
+    echo "WARNING: gitleaks not found; skipping the staged secret scan."
+    echo "  Install it with: task install:deps"
+fi
+
+# --- gofmt: check staged Go files --------------------------------------------
 files=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
 if [ -z "$files" ]; then
     exit 0

@@ -223,42 +223,16 @@ func TestNewAgent_MissingPasswdFile(t *testing.T) {
 	}
 }
 
-func TestAddUserWithUID(t *testing.T) {
-	passwdPath := filepath.Join(t.TempDir(), "passwd")
-
-	if err := AddUserWithUID(passwdPath, "alice", "password123", 10042); err != nil {
-		t.Fatalf("AddUserWithUID: %v", err)
-	}
-
-	uid, err := LookupUID(passwdPath, "alice")
-	if err != nil {
-		t.Fatalf("LookupUID: %v", err)
-	}
-	if uid != 10042 {
-		t.Errorf("uid = %d, want 10042", uid)
-	}
-
-	// Duplicate username is rejected.
-	if err := AddUserWithUID(passwdPath, "alice", "other", 10043); err == nil {
-		t.Error("expected error adding duplicate user, got nil")
-	}
-
-	// Entry authenticates with the stored hash.
-	agent, err := NewAgent(passwdPath, "")
-	if err != nil {
-		t.Fatalf("NewAgent: %v", err)
-	}
-	defer func() { _ = agent.Close() }()
-	if _, err := agent.Authenticate(context.Background(), "alice", "password123"); err != nil {
-		t.Errorf("Authenticate after AddUserWithUID: %v", err)
-	}
-}
-
 func TestSetPassword(t *testing.T) {
 	passwdPath := filepath.Join(t.TempDir(), "passwd")
 
-	if err := AddUserWithUID(passwdPath, "bob", "oldpassword", 10050); err != nil {
-		t.Fatalf("AddUserWithUID: %v", err)
+	// Four-field legacy entry; SetPassword must preserve the uid field.
+	hash, err := HashPassword("oldpassword")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	if err := os.WriteFile(passwdPath, []byte("bob:"+hash+":bob:10050\n"), 0o640); err != nil {
+		t.Fatal(err)
 	}
 
 	if err := SetPassword(passwdPath, "bob", "newpassword"); err != nil {
@@ -289,8 +263,8 @@ func TestSetPassword(t *testing.T) {
 
 func TestSetPassword_UserNotFound(t *testing.T) {
 	passwdPath := filepath.Join(t.TempDir(), "passwd")
-	if err := AddUserWithUID(passwdPath, "carol", "password123", 10060); err != nil {
-		t.Fatalf("AddUserWithUID: %v", err)
+	if err := AddUser(passwdPath, "carol", "password123"); err != nil {
+		t.Fatalf("AddUser: %v", err)
 	}
 	if err := SetPassword(passwdPath, "nosuchuser", "whatever"); err == nil {
 		t.Error("expected error for missing user, got nil")
@@ -330,51 +304,67 @@ func TestSetPassword_PreservesLegacyEntry(t *testing.T) {
 	}
 }
 
-func TestSetUID(t *testing.T) {
+// TestStripUIDs covers narrowing four-field entries back to three fields once
+// the uid is authoritative in uid.toml.
+func TestStripUIDs(t *testing.T) {
 	passwdPath := filepath.Join(t.TempDir(), "passwd")
 	hash, err := HashPassword("pw12345678")
 	if err != nil {
 		t.Fatalf("HashPassword: %v", err)
 	}
-	// One legacy three-field entry, one four-field entry with uid 0.
-	content := "# users\neve:" + hash + ":eve.jones\nfrank:" + hash + ":frank:0\n"
+	// eve: four-field (uid to strip); frank: four-field (strip); carol: already
+	// three-field (untouched); a comment line is preserved.
+	content := "# users\n" +
+		"eve:" + hash + ":eve.jones:10070\n" +
+		"frank:" + hash + ":frank:10071\n" +
+		"carol:" + hash + ":carol\n"
 	if err := os.WriteFile(passwdPath, []byte(content), 0o640); err != nil {
 		t.Fatalf("write passwd: %v", err)
 	}
 
-	if err := SetUID(passwdPath, "eve", 10070); err != nil {
-		t.Fatalf("SetUID legacy entry: %v", err)
-	}
-	if err := SetUID(passwdPath, "frank", 10071); err != nil {
-		t.Fatalf("SetUID zero-uid entry: %v", err)
-	}
-
-	users, err := ListUsers(passwdPath)
+	// Strip only eve and frank (carol is not in the set and has no uid anyway).
+	n, err := StripUIDs(passwdPath, []string{"eve", "frank"})
 	if err != nil {
-		t.Fatalf("ListUsers: %v", err)
+		t.Fatalf("StripUIDs: %v", err)
 	}
-	byName := map[string]UserInfo{}
-	for _, u := range users {
-		byName[u.Username] = u
-	}
-	if byName["eve"].Uid != 10070 || byName["eve"].Mailbox != "eve.jones" {
-		t.Errorf("eve = %+v, want uid 10070 mailbox eve.jones", byName["eve"])
-	}
-	if byName["frank"].Uid != 10071 {
-		t.Errorf("frank = %+v, want uid 10071", byName["frank"])
+	if n != 2 {
+		t.Errorf("stripped = %d, want 2", n)
 	}
 
-	// Hash is untouched: password still authenticates.
+	data, err := os.ReadFile(passwdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "# users") {
+		t.Errorf("comment not preserved:\n%s", got)
+	}
+	for _, want := range []string{
+		"eve:" + hash + ":eve.jones\n",
+		"frank:" + hash + ":frank\n",
+		"carol:" + hash + ":carol\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, ":10070") || strings.Contains(got, ":10071") {
+		t.Errorf("uid field not stripped:\n%s", got)
+	}
+
+	// Hash untouched: password still authenticates.
 	agent, err := NewAgent(passwdPath, "")
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)
 	}
 	defer func() { _ = agent.Close() }()
 	if _, err := agent.Authenticate(context.Background(), "eve", "pw12345678"); err != nil {
-		t.Errorf("Authenticate after SetUID: %v", err)
+		t.Errorf("Authenticate after StripUIDs: %v", err)
 	}
 
-	if err := SetUID(passwdPath, "nosuch", 1); err == nil {
-		t.Error("expected error for missing user, got nil")
+	// Idempotent: a second strip changes nothing.
+	n, err = StripUIDs(passwdPath, []string{"eve", "frank"})
+	if err != nil || n != 0 {
+		t.Errorf("second StripUIDs = (%d, %v), want (0, nil)", n, err)
 	}
 }

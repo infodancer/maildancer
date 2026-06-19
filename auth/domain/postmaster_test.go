@@ -10,8 +10,8 @@ const postmasterContent = `# System postmaster
 postmaster:10001:10001:/var/mail
 
 # Domain postmasters
-postmaster@matthewjayhunter.com:10013:10014:/opt/infodancer/domains/matthewjayhunter.com
-postmaster@AMYHUNTER.ORG:10015:10016:/opt/infodancer/domains/amyhunter.org
+postmaster@example.com:10013:10014:/opt/infodancer/domains/example.com
+postmaster@EXAMPLE.ORG:10015:10016:/opt/infodancer/domains/example.org
 `
 
 func TestParsePostmasterFile(t *testing.T) {
@@ -38,21 +38,21 @@ func TestParsePostmasterFile(t *testing.T) {
 		t.Errorf("system: got uid=%d gid=%d path=%q", sys.UID, sys.GID, sys.DataPath)
 	}
 
-	mjh := entries["matthewjayhunter.com"]
+	mjh := entries["example.com"]
 	if mjh == nil {
-		t.Fatal("matthewjayhunter.com entry missing")
+		t.Fatal("example.com entry missing")
 	}
-	if mjh.UID != 10013 || mjh.GID != 10014 || mjh.DataPath != "/opt/infodancer/domains/matthewjayhunter.com" {
-		t.Errorf("matthewjayhunter.com: got uid=%d gid=%d path=%q", mjh.UID, mjh.GID, mjh.DataPath)
+	if mjh.UID != 10013 || mjh.GID != 10014 || mjh.DataPath != "/opt/infodancer/domains/example.com" {
+		t.Errorf("example.com: got uid=%d gid=%d path=%q", mjh.UID, mjh.GID, mjh.DataPath)
 	}
 
 	// Domain name must be lowercased.
-	amy := entries["amyhunter.org"]
+	amy := entries["example.org"]
 	if amy == nil {
-		t.Fatal("amyhunter.org entry missing (should be lowercased from AMYHUNTER.ORG)")
+		t.Fatal("example.org entry missing (should be lowercased from EXAMPLE.ORG)")
 	}
 	if amy.GID != 10016 {
-		t.Errorf("amyhunter.org: expected gid 10016, got %d", amy.GID)
+		t.Errorf("example.org: expected gid 10016, got %d", amy.GID)
 	}
 }
 
@@ -81,7 +81,7 @@ func TestLookupDomainPostmaster(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entry := LookupDomainPostmaster(dir, "matthewjayhunter.com")
+	entry := LookupDomainPostmaster(dir, "example.com")
 	if entry == nil {
 		t.Fatal("expected entry, got nil")
 	}

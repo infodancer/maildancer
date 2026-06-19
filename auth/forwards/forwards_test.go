@@ -162,7 +162,7 @@ func TestLoadTargets_MissingFile(t *testing.T) {
 func TestLoadTargets_ValidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "matthew")
-	content := "matthew@matthewjayhunter.com\n# comment\nmatthew@infodancer.net\n"
+	content := "user@example.com\n# comment\nuser@example.net\n"
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestLoadTargets_ValidFile(t *testing.T) {
 	if len(targets) != 2 {
 		t.Errorf("expected 2 targets, got %d: %v", len(targets), targets)
 	}
-	if targets[0] != "matthew@matthewjayhunter.com" || targets[1] != "matthew@infodancer.net" {
+	if targets[0] != "user@example.com" || targets[1] != "user@example.net" {
 		t.Errorf("unexpected targets: %v", targets)
 	}
 }
@@ -192,10 +192,10 @@ func TestForwardMap_NilSafe(t *testing.T) {
 
 func TestFromMap_Catchall(t *testing.T) {
 	m := forwards.FromMap(map[string]string{
-		"*": "matthew@matthewjayhunter.com",
+		"*": "user@example.com",
 	})
 	targets, ok := m.Resolve("anyone")
-	if !ok || len(targets) != 1 || targets[0] != "matthew@matthewjayhunter.com" {
+	if !ok || len(targets) != 1 || targets[0] != "user@example.com" {
 		t.Errorf("expected catchall target, got %v ok=%v", targets, ok)
 	}
 }

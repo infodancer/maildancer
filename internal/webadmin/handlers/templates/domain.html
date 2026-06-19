@@ -135,6 +135,64 @@ function saveOutboundConfig(domain, csrfToken) {
 }
 </script>
 
+<h2>Forwarding</h2>
+<p><small>Domain forwards route mail for an address to a single target. Forwarding is 1:1 -- use <code>*</code> as the localpart for a catchall. Per-user forwards are managed separately.</small></p>
+<table id="forwards-table">
+  <thead>
+    <tr><th>Address</th><th>Forwards to</th><th></th></tr>
+  </thead>
+  <tbody>
+    {{range .Data.Forwards}}
+    <tr>
+      <td><code>{{.Localpart}}@{{$.Data.Domain.Name}}</code>{{if .IsCatchall}} <kbd class="badge">catchall</kbd>{{end}}</td>
+      <td><code>{{.Target}}</code></td>
+      <td>
+        <button class="outline secondary" style="padding:0.25em 0.5em;font-size:0.875rem"
+                onclick="deleteForward('{{$.Data.Domain.Name}}', '{{.Localpart}}', '{{$.CSRFToken}}')">Delete</button>
+      </td>
+    </tr>
+    {{else}}
+    <tr><td colspan="3"><small>No forwards configured.</small></td></tr>
+    {{end}}
+  </tbody>
+</table>
+<form id="forward-add-form" onsubmit="return false" style="margin-top:1rem">
+  <div class="grid">
+    <label>Address (localpart or <code>*</code>)
+      <input type="text" id="forward-localpart" placeholder="sales or *">
+    </label>
+    <label>Forward to (single address)
+      <input type="text" id="forward-target" placeholder="user@example.com">
+    </label>
+  </div>
+  <button type="button" onclick="saveForward('{{.Data.Domain.Name}}', '{{.CSRFToken}}')">Add / Update Forward</button>
+</form>
+<script>
+function saveForward(domain, csrfToken) {
+  var localpart = document.getElementById('forward-localpart').value.trim();
+  var target = document.getElementById('forward-target').value.trim();
+  if (!localpart || !target) { alert('Address and target are both required.'); return; }
+  fetch('/api/domains/' + domain + '/forwards', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+    body: JSON.stringify({ localpart: localpart, target: target })
+  }).then(function(r) {
+    if (r.ok) { location.reload(); }
+    else { r.json().then(function(e) { alert('Error: ' + e.error); }); }
+  });
+}
+function deleteForward(domain, localpart, csrfToken) {
+  if (!confirm('Delete forward for ' + localpart + '@' + domain + '?')) { return; }
+  fetch('/api/domains/' + domain + '/forwards/' + encodeURIComponent(localpart), {
+    method: 'DELETE',
+    headers: { 'X-CSRF-Token': csrfToken }
+  }).then(function(r) {
+    if (r.ok) { location.reload(); }
+    else { r.json().then(function(e) { alert('Error: ' + e.error); }); }
+  });
+}
+</script>
+
 <h2>Domain Keys</h2>
 <div id="domain-keys-status">
   {{if .Data.Domain.HasKeys}}

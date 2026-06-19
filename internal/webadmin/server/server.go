@@ -130,6 +130,7 @@ func (s *Server) registerRoutes() {
 	rspamdHandler := handlers.NewRspamdHandler(s.cfg.FilePath, s.sessions, s.logger)
 	settingsHandler := handlers.NewSettingsHandler(s.cfg.FilePath, s.sessions, s.logger)
 	outboundHandler := handlers.NewOutboundHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.auditLog)
+	forwardHandler := handlers.NewForwardHandler(s.cfg.DomainsPath, s.sessions, s.logger, s.auditLog)
 	dnsHandler := handlers.NewDNSHandler(s.cfg.DomainsPath, s.sessions, s.logger, settingsHandler)
 	webHandler.SetConfigFile(s.cfg.FilePath)
 	webHandler.SetSettingsHandler(settingsHandler)
@@ -362,6 +363,20 @@ func (s *Server) registerRoutes() {
 	s.mux.Handle("PUT /api/outbound/default", middleware.Chain(
 		http.HandlerFunc(outboundHandler.HandleSetDefaultOutbound),
 		requireAuth, requireCSRF, requireSuperAdmin,
+	))
+
+	// Domain forwarding API (1:1 enforced by auth/domain; shared with userctl).
+	s.mux.Handle("GET /api/domains/{name}/forwards", middleware.Chain(
+		http.HandlerFunc(forwardHandler.HandleListForwards),
+		requireAuth, requireDomainAccessByName,
+	))
+	s.mux.Handle("POST /api/domains/{name}/forwards", middleware.Chain(
+		http.HandlerFunc(forwardHandler.HandleSetForward),
+		requireAuth, requireCSRF, requireDomainAccessByName,
+	))
+	s.mux.Handle("DELETE /api/domains/{name}/forwards/{localpart}", middleware.Chain(
+		http.HandlerFunc(forwardHandler.HandleDeleteForward),
+		requireAuth, requireCSRF, requireDomainAccessByName,
 	))
 
 	// Migration API (super_admin only -- idempotent, safe to re-run)

@@ -11,6 +11,8 @@ import (
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/nacl/box"
+
+	"github.com/infodancer/maildancer/internal/kdfcost"
 )
 
 // SlotType identifies how a wrap-slot unlocks the KEK.
@@ -28,15 +30,15 @@ const (
 	xNonceSize = chacha20poly1305.NonceSizeX // 24
 )
 
-// Argon2id parameters for passphrase slots. Stored self-describingly in each
-// slot's KDFParams so a future parameter change does not strand old blobs.
-// Deliberately independent of any auth-path KDF.
+// Argon2id parameters for passphrase slots. The cost comes from the shared
+// kdfcost.Default profile; it is stored self-describingly in each slot's
+// KDFParams (see newKDFParams) so a future cost change -- or the lowered cost a
+// test binary sets -- does not strand old blobs: open reads each slot's recorded
+// cost, not the current default. Deliberately independent of any auth-path KDF.
+// argon2KeyLen and saltSize stay const -- they are format invariants.
 const (
-	argon2Time    = 3
-	argon2Memory  = 64 * 1024 // 64 MiB
-	argon2Threads = 4
-	argon2KeyLen  = 32
-	saltSize      = 32
+	argon2KeyLen = 32
+	saltSize     = 32
 )
 
 // wrapInfo domain-separates the keyring wrap-key from any other value derivable
@@ -158,9 +160,9 @@ func newPassphraseSlot(kek []byte, password, slotID string) (WrapSlot, error) {
 	p := KDFParams{
 		Algorithm: "argon2id",
 		Salt:      salt,
-		Time:      argon2Time,
-		Memory:    argon2Memory,
-		Threads:   argon2Threads,
+		Time:      kdfcost.Default.Time,
+		Memory:    kdfcost.Default.Memory,
+		Threads:   kdfcost.Default.Threads,
 		KeyLen:    argon2KeyLen,
 		Info:      wrapInfo,
 	}

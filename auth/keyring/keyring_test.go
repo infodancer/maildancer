@@ -5,12 +5,23 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 
 	"golang.org/x/crypto/nacl/box"
 
 	autherrors "github.com/infodancer/maildancer/auth/errors"
+	"github.com/infodancer/maildancer/internal/kdfcost"
 )
+
+// TestMain lowers the argon2id passphrase-slot cost to the cheapest valid
+// profile for this test binary. Slots store their cost self-describingly, so
+// blobs sealed here open here; nothing exercises KDF strength. Full cost under
+// -race made auth/keyring slow enough to flake on loaded CI runners (issue #114).
+func TestMain(m *testing.M) {
+	kdfcost.Default = kdfcost.Params{Time: 1, Memory: 8, Threads: 1}
+	os.Exit(m.Run())
+}
 
 // newKeypair returns a fresh X25519 keypair as raw 32-byte slices.
 func newKeypair(t *testing.T) (pub, priv []byte) {

@@ -25,10 +25,10 @@ credentials for more than one user at a time.
 | `mail-session` | Per-user retrieval/delivery agent, spawned as `uid=user, gid=domain` | (spawned) |
 | `mail-deliver` | Delivery agent: forwarding -> rspamd -> sieve -> maildir write | (spawned) |
 | `mail-remote` | Outbound delivery agent invoked by the queue | (invoked) |
-| `queue-manager` | Outbound queue driver: retry loop, TTL cleanup | — |
+| `queue-manager` | Outbound queue driver: retry loop, TTL cleanup | - |
 | `webadmin` | Web admin UI (domains, users, keys; RBAC, audit log) | 8080 |
 | `auth-oidc` | Leaf OIDC identity provider for owned mail domains | 9000 |
-| `userctl` | Site-operator CLI (domains, users, forwards, keys) | — |
+| `userctl` | Site-operator CLI (domains, users, forwards, keys) | - |
 
 The two importable libraries live at the top level: **`msgstore`** (storage
 interfaces and the maildir backend) and **`auth`** (authentication, domain

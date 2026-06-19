@@ -15,10 +15,10 @@ These are the binaries you run and configure directly.
 | `pop3d` | POP3 retrieval | 110, 995 |
 | `imapd` | IMAP retrieval | 143, 993 |
 | `session-manager` | Auth + per-user session hub; spawns `mail-session` | unix socket |
-| `queue-manager` | Outbound queue driver; invokes `mail-remote` | — |
+| `queue-manager` | Outbound queue driver; invokes `mail-remote` | - |
 | `webadmin` | Web admin UI (domains, users, keys) | 8080 |
 | `auth-oidc` | Leaf OIDC identity provider for owned domains | 9000 |
-| `userctl` | Site-operator CLI (domains, users, forwards, keys) | — (CLI) |
+| `userctl` | Site-operator CLI (domains, users, forwards, keys) | - (CLI) |
 
 `userctl` is the host-side admin tool; run `userctl` with no arguments for the
 full subcommand list. See [`../deploy/README.md`](../deploy/README.md) for the

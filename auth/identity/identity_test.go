@@ -157,6 +157,23 @@ func TestRemoveUser(t *testing.T) {
 	}
 }
 
+func TestRemoveDomainGID(t *testing.T) {
+	m := newManager(t)
+	if _, err := m.AllocateDomainGID("example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RemoveDomainGID("example.com"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := m.DomainGID("example.com"); !errors.Is(err, ErrNoGID) {
+		t.Fatalf("want ErrNoGID after remove, got %v", err)
+	}
+	// Removing a missing domain is not an error.
+	if err := m.RemoveDomainGID("ghost.example"); err != nil {
+		t.Fatalf("remove missing: %v", err)
+	}
+}
+
 // TestGIDMapFormat checks the on-disk file: a guard header, quoted keys, sorted.
 func TestGIDMapFormat(t *testing.T) {
 	m := newManager(t)

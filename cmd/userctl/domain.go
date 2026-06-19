@@ -230,8 +230,13 @@ func cmdDomainDel(paths admin.Paths, name string, force bool) error {
 	if err := paths.DeleteDomain(name, force); err != nil {
 		return err
 	}
-	fmt.Printf("Deleted domain %s (configuration removed; mail data under %s is retained)\n",
-		name, filepath.Join(paths.Data, name))
+	if force {
+		fmt.Printf("Deleted domain %s (configuration, identity, and mail data under %s removed)\n",
+			name, filepath.Join(paths.Data, name))
+	} else {
+		fmt.Printf("Deleted domain %s (configuration and identity removed; mail data under %s is retained -- use --force to remove it)\n",
+			name, filepath.Join(paths.Data, name))
+	}
 	return nil
 }
 
@@ -447,8 +452,8 @@ func printDKIMRecord(rec *admin.DKIMRecord) {
 func domainUsage() {
 	fmt.Fprintf(os.Stderr, `Usage:
   userctl domain create <domain>                    create domain (allocates gid)
-  userctl domain del    <domain> [--force]          delete domain config (--force if users exist;
-                                                    mail data is retained)
+  userctl domain del    <domain> [--force]          delete domain config + gid (--force if users
+                                                    exist; --force also removes mail data)
   userctl domain list                               list domains
   userctl domain show   <domain>                    show domain configuration
   userctl domain set    <domain> <key> [<value>]    set a config key (omit value to unset)

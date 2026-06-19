@@ -86,6 +86,28 @@ func (m *Manager) SetDomainGID(domain string, gid uint32) error {
 	return storeMap(gidMapPath(m.Config), gidMapHeader, cur)
 }
 
+// RemoveDomainGID deletes domain's gid entry from gid.toml (on domain deletion).
+// A missing entry is not an error. This reclaims the allocation-ledger slot so a
+// deleted domain does not leave a dead entry behind; it does not touch the data
+// tree -- the caller decides whether to remove the domain's mail data.
+func (m *Manager) RemoveDomainGID(domain string) error {
+	unlock, err := lockFile(gidMapPath(m.Config) + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	cur, err := loadMap(gidMapPath(m.Config))
+	if err != nil {
+		return err
+	}
+	if _, ok := cur[domain]; !ok {
+		return nil
+	}
+	delete(cur, domain)
+	return storeMap(gidMapPath(m.Config), gidMapHeader, cur)
+}
+
 // AllocateUserUID allocates a fresh uid for localpart in domain and records it
 // in {domain}/uid.toml. Allocate-once, like AllocateDomainGID.
 func (m *Manager) AllocateUserUID(domain, localpart string) (uint32, error) {

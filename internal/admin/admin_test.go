@@ -122,6 +122,11 @@ func TestDeleteDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The gid was allocated at create time.
+	if _, err := identity.DomainGID(p.Config, "example.com"); err != nil {
+		t.Fatalf("gid should exist after create: %v", err)
+	}
+
 	// Refuses while users exist.
 	err := p.DeleteDomain("example.com", false)
 	if !errors.Is(err, ErrDomainHasUsers) {
@@ -131,19 +136,46 @@ func TestDeleteDomain(t *testing.T) {
 		t.Errorf("error should carry the count: %v", err)
 	}
 
-	// Force deletes; data volume survives.
+	// Force is a full teardown: config dir, gid ledger entry, and data tree all
+	// go.
 	if err := p.DeleteDomain("example.com", true); err != nil {
 		t.Fatalf("DeleteDomain force: %v", err)
 	}
 	if p.DomainExists("example.com") {
 		t.Error("config-volume domain dir still present after delete")
 	}
-	if _, err := os.Stat(filepath.Join(p.Data, "example.com", "users")); err != nil {
-		t.Errorf("data volume should survive domain deletion: %v", err)
+	if _, err := identity.DomainGID(p.Config, "example.com"); !errors.Is(err, identity.ErrNoGID) {
+		t.Errorf("gid.toml entry should be reclaimed on force delete, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.Data, "example.com")); !os.IsNotExist(err) {
+		t.Errorf("data tree should be removed on force delete, stat err = %v", err)
 	}
 
 	if err := p.DeleteDomain("example.com", false); !errors.Is(err, ErrDomainNotFound) {
 		t.Errorf("deleting missing domain err = %v, want ErrDomainNotFound", err)
+	}
+}
+
+// TestDeleteDomainNonForceKeepsData verifies that a non-forced delete revokes
+// access (config dir + gid ledger entry) but preserves the mail data volume.
+func TestDeleteDomainNonForceKeepsData(t *testing.T) {
+	p := newTestPaths(t)
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.DeleteDomain("example.com", false); err != nil {
+		t.Fatalf("DeleteDomain non-force: %v", err)
+	}
+	if p.DomainExists("example.com") {
+		t.Error("config-volume domain dir still present after delete")
+	}
+	if _, err := identity.DomainGID(p.Config, "example.com"); !errors.Is(err, identity.ErrNoGID) {
+		t.Errorf("gid.toml entry should be reclaimed on delete, got %v", err)
+	}
+	// Mail data is preserved so a decommissioned domain can be archived.
+	if _, err := os.Stat(filepath.Join(p.Data, "example.com")); err != nil {
+		t.Errorf("data volume should survive a non-forced delete: %v", err)
 	}
 }
 

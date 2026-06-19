@@ -93,8 +93,14 @@ func (p Paths) CreateDomain(name string) (uint32, error) {
 // still has users, it refuses unless force is set; the error wraps
 // ErrDomainHasUsers and includes the count.
 //
-// The data volume (maildirs) is deliberately left in place: deleting domain
-// configuration revokes access without destroying mail data.
+// The gid.toml ledger entry is always reclaimed -- it is allocation metadata,
+// not mail data, and must not outlive the domain. (If the data tree is kept, a
+// later recreate re-adopts this gid from the on-disk data-dir group during
+// `domain fix`.)
+//
+// The data volume (maildirs) is left in place by default: deleting domain
+// configuration revokes access without destroying mail data. A forced delete is
+// a full teardown and removes the data tree as well, so nothing is orphaned.
 func (p Paths) DeleteDomain(name string, force bool) error {
 	if !ValidDomainName(name) {
 		return ErrInvalidDomainName
@@ -115,6 +121,20 @@ func (p Paths) DeleteDomain(name string, force bool) error {
 
 	if err := os.RemoveAll(filepath.Join(p.Config, name)); err != nil {
 		return fmt.Errorf("remove domain: %w", err)
+	}
+
+	// Reclaim the gid.toml ledger entry so it never references a deleted domain.
+	if err := p.idMgr().RemoveDomainGID(name); err != nil {
+		return fmt.Errorf("remove domain gid: %w", err)
+	}
+
+	// Remove the mail data tree only on a forced teardown. In a single-tree
+	// deployment (Data == Config) the data already went with the config dir
+	// above, so only a distinct data volume needs separate removal.
+	if force && p.Data != "" && p.Data != p.Config {
+		if err := os.RemoveAll(filepath.Join(p.Data, name)); err != nil {
+			return fmt.Errorf("remove domain data: %w", err)
+		}
 	}
 	return nil
 }

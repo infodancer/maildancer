@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	imap "github.com/emersion/go-imap/v2"
@@ -524,61 +525,68 @@ func TestClose(t *testing.T) {
 // which Rescan fails with "unknown session token" and the client misses
 // new-mail notifications.
 func TestRunIdleKeepalive_FiresAndStops(t *testing.T) {
-	store := newMockStore()
-	s := newTestSession(t, store)
-	s.selectedMailbox = "INBOX"
-	s.keepaliveInterval = 20 * time.Millisecond
+	// synctest gives the bubble a fake clock that only advances when every
+	// goroutine is durably blocked, so the tick count is exact rather than a
+	// wall-clock estimate -- this is the deterministic replacement for the
+	// real-time sleep that flaked under loaded CI runners (issue #114).
+	synctest.Test(t, func(t *testing.T) {
+		store := newMockStore()
+		s := newTestSession(t, store)
+		s.selectedMailbox = "INBOX"
+		s.keepaliveInterval = 20 * time.Millisecond
 
-	done := make(chan struct{})
-	exited := make(chan struct{})
-	go func() {
-		s.runIdleKeepalive(done)
-		close(exited)
-	}()
+		done := make(chan struct{})
+		go s.runIdleKeepalive(done)
 
-	// Wait long enough for ~4 ticks. Tolerance allows for scheduler jitter.
-	time.Sleep(95 * time.Millisecond)
-	close(done)
+		// Advance the fake clock just past four ticks (20, 40, 60, 80 ms).
+		time.Sleep(95 * time.Millisecond)
+		synctest.Wait()
 
-	select {
-	case <-exited:
-	case <-time.After(time.Second):
-		t.Fatal("runIdleKeepalive did not exit after done closed")
-	}
+		if calls := store.uidValidityCallCount(); calls != 4 {
+			t.Errorf("expected exactly 4 keepalive RPCs (20ms interval over 95ms), got %d", calls)
+		}
 
-	calls := store.uidValidityCallCount()
-	if calls < 2 {
-		t.Errorf("expected at least 2 keepalive RPCs, got %d", calls)
-	}
-	if calls > 10 {
-		t.Errorf("unexpectedly many keepalive RPCs (got %d) -- interval not honored?", calls)
-	}
+		// Closing done must stop the goroutine; the bubble's exit blocks until
+		// it returns, so a leaked keepalive goroutine would fail the test here.
+		close(done)
+		synctest.Wait()
+
+		if calls := store.uidValidityCallCount(); calls != 4 {
+			t.Errorf("keepalive issued RPCs after done closed: got %d, want 4", calls)
+		}
+	})
 }
 
 // TestRunIdleKeepalive_NoCallsAfterDone verifies that once done is closed,
 // no further RPCs are issued -- i.e. the goroutine stops promptly and doesn't
 // race a final tick.
 func TestRunIdleKeepalive_NoCallsAfterDone(t *testing.T) {
-	store := newMockStore()
-	s := newTestSession(t, store)
-	s.selectedMailbox = "INBOX"
-	s.keepaliveInterval = 10 * time.Millisecond
+	synctest.Test(t, func(t *testing.T) {
+		store := newMockStore()
+		s := newTestSession(t, store)
+		s.selectedMailbox = "INBOX"
+		s.keepaliveInterval = 10 * time.Millisecond
 
-	done := make(chan struct{})
-	go s.runIdleKeepalive(done)
+		done := make(chan struct{})
+		go s.runIdleKeepalive(done)
 
-	time.Sleep(35 * time.Millisecond)
-	close(done)
-	// Allow the goroutine to observe the close.
-	time.Sleep(5 * time.Millisecond)
+		time.Sleep(35 * time.Millisecond) // ticks at 10, 20, 30 ms
+		synctest.Wait()
+		close(done)
+		synctest.Wait()
 
-	before := store.uidValidityCallCount()
-	time.Sleep(50 * time.Millisecond)
-	after := store.uidValidityCallCount()
+		before := store.uidValidityCallCount()
+		if before != 3 {
+			t.Fatalf("expected 3 RPCs before done closed, got %d", before)
+		}
 
-	if after != before {
-		t.Errorf("keepalive issued %d additional RPCs after done closed", after-before)
-	}
+		// Advance well past several would-be ticks; none may fire now.
+		time.Sleep(100 * time.Millisecond)
+		synctest.Wait()
+		if after := store.uidValidityCallCount(); after != before {
+			t.Errorf("keepalive issued %d RPCs after done closed", after-before)
+		}
+	})
 }
 
 func TestSubscribe_Unsubscribe(t *testing.T) {

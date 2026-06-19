@@ -55,13 +55,75 @@ it with a domain and user:
   UI. You first need an admin credential in `deploy/config/admin-passwd`
   (RBAC is disabled by default, so any authenticated user is super_admin --
   set `roles_file` to enable RBAC).
-- **Via CLI** -- `userctl --domains <path> add user@domain` (prompts for a
-  password) against the `maildata` volume. `userctl` is a CLI, not one of the
-  service images; run it from a build or a one-off container that mounts the
-  volume.
+- **Via CLI** -- `userctl`. It is a CLI, not one of the service images; run it
+  from a build or a one-off container that mounts both the config and data
+  volumes. The order is create domain, add user, then reconcile ids/perms:
+
+  ```bash
+  userctl domain create example.com            # allocates the domain gid
+  userctl user   add    matthew@example.com    # allocates the user uid; prompts for password
+  userctl domain fix    --all                  # allocates any missing ids + repairs data-dir perms (run as root)
+  ```
+
+  `domain fix` is idempotent: re-running it allocates only what is missing and
+  re-applies ownership. In the deploy it runs on every converge after the
+  declarative `domain create` / `user add` steps.
+
+webadmin and userctl share the same operations layer (`internal/admin`), so the
+two front doors cannot drift -- a domain or user created in one is fully managed
+by the other.
 
 auth-oidc serves discovery per owned domain (host-based routing); with zero
 domains, `/.well-known/openid-configuration` returns 404 until a domain exists.
+
+## Identity allocation (uid / gid)
+
+Each mail domain is an OS group and each local user is an OS user; the data dirs
+under `{data}/{domain}/` are `2750 root:{gid}` and per-user maildirs are
+`{uid}:{gid}`. Those uid/gid values are **identity allocation, not
+configuration** -- allocated once, authoritative, and exempt from the
+site -> domain -> user override hierarchy that governs `config.toml`. Putting a
+uid or gid in a merged config file is the exact mistake that once locked a live
+mailbox out of IMAP (the password verified, but `mail-session` spawned with a
+gid that could not traverse the data dirs, surfacing as `AUTHENTICATIONFAILED`).
+
+For the default local passwd-files provider, identity lives in two flat maps in
+the **config** tree, written only by the shared identity package (via `userctl`
+or `webadmin`):
+
+| File | Contents | Example |
+|------|----------|---------|
+| `{config}/gid.toml` | domain -> gid (one top-level map for the whole site) | `"example.com" = 10014` |
+| `{config}/{domain}/uid.toml` | localpart -> uid (per domain) | `"matthew" = 10026` |
+
+`{config}/{domain}/passwd` holds only credentials and is now three fields --
+`username:argon2id_hash:mailbox`. The uid is **not** in passwd; it lives in
+`uid.toml`. (Older deployments had a fourth uid field; `userctl domain fix`
+adopts that uid into `uid.toml` and then narrows the passwd line.)
+
+Rules that the tooling enforces and you should not work around:
+
+- **Never hand-edit `gid.toml` / `uid.toml`, and never render them from IaC.**
+  They are an allocation ledger, not config. Let `userctl` / `webadmin` write
+  them.
+- **Allocate once; never reassign a live id.** The allocator refuses to
+  overwrite an existing entry. Repair means chowning data to the recorded id,
+  never minting a new id to match the data -- which is exactly what
+  `userctl domain fix` does.
+- **The data tree never holds an authoritative id.** `{data}/{domain}/` carries
+  maildirs, keyrings, and the allocator's `.uid-counter`, but no gid of record.
+- **A domain using LDAP or a database provider does not use these files at all**
+  -- its identities come from that backend. Only the *choice* of provider is
+  hierarchical config; the ids a provider records are not.
+
+To migrate a deployment that predates the maps, `userctl migrate uids` (or
+`domain fix --all`) walks every domain, adopting any id already authoritative
+under the old layout before allocating a fresh one, so existing mail is never
+re-owned out from under itself.
+
+The full rationale and design history is in
+`infodancer/infodancer/docs/identity-allocation-design.md` (authoritative). Read
+it before changing anything in the auth, session-manager, or userctl id paths.
 
 ## Outbound relay & TLS
 

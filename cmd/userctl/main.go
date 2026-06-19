@@ -269,7 +269,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `Usage:
   Domains (site admin):
     userctl domain create <domain>                    create domain (allocates gid)
-    userctl domain del    <domain> [--force]          delete domain config (mail data retained)
+    userctl domain del    <domain> [--force]          delete domain config + gid (--force removes mail data too)
     userctl domain list
     userctl domain show   <domain>
     userctl domain set    <domain> <key> [<value>]    set/unset a config key

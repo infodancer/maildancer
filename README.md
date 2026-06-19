@@ -58,8 +58,8 @@ At-rest mail is encrypted with NaCl box (X25519 + XSalsa20-Poly1305); smtpd
 encrypts before delivery and pop3d/imapd decrypt after retrieval, so msgstore
 only ever handles encrypted blobs.
 
-The authoritative design documents -- security model, encryption design, OIDC
-federation, queue design, identity allocation -- live in the separate
+The authoritative design documents -- security model, encryption design, queue
+design, identity allocation -- live in the separate
 [`infodancer/infodancer`](https://github.com/infodancer/infodancer) repository
 under `docs/`.
 

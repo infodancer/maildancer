@@ -42,6 +42,6 @@ The following are generally **out of scope**:
 maildancer is built around qmail-inspired privilege separation: no
 network-facing process holds filesystem access to mail data, and no single
 process holds credentials for more than one user at a time. The authoritative
-design documents (threat model, encryption design, OIDC federation) live in the
+design documents (threat model, encryption design, privilege model) live in the
 [`infodancer/infodancer`](https://github.com/infodancer/infodancer) repository
 under `docs/`. Read those before reasoning about a finding's impact.

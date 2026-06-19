@@ -4,10 +4,10 @@ Authentication, domain routing, identity allocation, and key management for
 maildancer. Importable library; it also backs two binaries: `cmd/auth-oidc` (the
 leaf OIDC IdP) and `cmd/userctl` (the site-operator CLI).
 
-> **Read before changing auth.** The identity/OIDC design has been re-litigated
-> repeatedly. auth-oidc is a **leaf IdP, never a federation client**; websites are
-> dumb RPs. The authoritative rules are in
-> [`infodancer/infodancer/docs/oidc-federation-design.md`](https://github.com/infodancer/infodancer).
+`auth-oidc` is a leaf identity provider: it authenticates a domain's own mail
+users and exposes OIDC discovery for them. It is not an OIDC client and has no
+upstream provider. The full auth design lives in the
+[`infodancer/infodancer`](https://github.com/infodancer/infodancer) docs.
 
 ## Pluggable auth agents
 

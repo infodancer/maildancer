@@ -39,21 +39,22 @@ type keyEnvelope struct {
 	Key     []byte `json:"key"` // 32-byte NaCl session key, base64-encoded
 }
 
-// maybeWrapWithDecryptingStore attempts to read a keyEnvelope from fd 3
-// (ExtraFiles[0] as set by the spawning daemon). If fd 3 is present and
-// contains a valid v1 envelope with a 32-byte key, the store is wrapped in a
-// decrypting store with the key applied (FolderStore support is preserved
-// when the underlying store has it); otherwise the store is returned
-// unchanged (encryption not configured or fd 3 absent).
-func maybeWrapWithDecryptingStore(underlying msgstore.MessageStore) msgstore.MessageStore {
-	keyFile := os.NewFile(3, "key-pipe")
+// maybeWrapWithDecryptingStore attempts to read a keyEnvelope from keyFile
+// (fd 3 / ExtraFiles[0] as set by the spawning daemon on the retrieval path).
+// If the envelope is a valid v1 with a 32-byte key, the store is wrapped in a
+// decrypting store with the key applied (FolderStore support is preserved when
+// the underlying store has it); otherwise the store is returned unchanged
+// (encryption not configured or fd 3 absent). Call only on the retrieval
+// (daemon) path -- the oneshot delivery spawn is not handed a session key and
+// must not probe fd 3.
+func maybeWrapWithDecryptingStore(underlying msgstore.MessageStore, keyFile *os.File) msgstore.MessageStore {
 	var env keyEnvelope
 	err := json.NewDecoder(keyFile).Decode(&env)
 	_ = keyFile.Close()
 	if err != nil || env.Version != 1 || len(env.Key) != 32 {
 		// fd 3 absent, parse error, or unexpected envelope -- use store as-is.
 		if err != nil && !isErrBadFd(err) {
-			slog.Warn("fd 3 key envelope invalid, skipping encryption", "error", err)
+			slog.Warn("fd 3 decrypting-store key envelope invalid; retrieval decryption disabled", "error", err)
 		}
 		return underlying
 	}
@@ -131,7 +132,15 @@ func main() {
 	}
 
 	// ── Encryption seam: fd 3 key pipe ───────────────────────────────────────
-	sessionStore := maybeWrapWithDecryptingStore(store)
+	// The fd-3 session key drives the decrypting store, which serves plaintext
+	// on retrieval (daemon mode for IMAP/POP3). The oneshot delivery spawn is
+	// not handed a session key -- delivery-time at-rest encryption uses the
+	// recipient public key independently -- so skip the probe there to avoid a
+	// spurious decode of whatever fd 3 happens to carry.
+	var sessionStore msgstore.MessageStore = store
+	if *mode == "daemon" {
+		sessionStore = maybeWrapWithDecryptingStore(store, os.NewFile(3, "key-pipe"))
+	}
 	// ─────────────────────────────────────────────────────────────────────────
 
 	sess := session.New(sessionStore)

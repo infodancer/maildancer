@@ -76,6 +76,9 @@ func TestHandleDomainDetail(t *testing.T) {
 	if !strings.Contains(body, "user1") {
 		t.Error("expected user1 in detail page")
 	}
+	if !strings.Contains(body, "Fix Permissions") {
+		t.Error("expected the Fix Permissions action in detail page")
+	}
 }
 
 func TestHandleDomainDetail_NotFound(t *testing.T) {

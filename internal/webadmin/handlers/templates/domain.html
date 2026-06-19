@@ -158,6 +158,58 @@ function saveOutboundConfig(domain, csrfToken) {
   {{end}}
 </div>
 
+<h2>Permissions</h2>
+<p><small>Repair the data directory ownership and modes against the mail security model (shared dirs <code>root:gid 2750</code>, user dirs <code>uid:gid 0700</code>), allocating any missing ids first. Ownership changes require webadmin to run as root; otherwise only modes are applied and ownership is reported as skipped.</small></p>
+<button type="button" class="outline" onclick="fixPerms('{{.Data.Domain.Name}}', '{{.CSRFToken}}')">Fix Permissions</button>
+<div id="fixperms-result" style="margin-top:1rem"></div>
+<script>
+function fixPerms(domain, csrfToken) {
+  var out = document.getElementById('fixperms-result');
+  out.innerHTML = '<p aria-busy="true">Repairing permissions...</p>';
+  fetch('/api/domains/' + domain + '/fix-perms', {
+    method: 'POST',
+    headers: { 'X-CSRF-Token': csrfToken }
+  }).then(function(r) {
+    return r.json().then(function(body) { return { ok: r.ok, body: body }; });
+  }).then(function(res) {
+    if (!res.ok) { out.innerHTML = '<p class="error-text">Error: ' + (res.body.error || 'failed') + '</p>'; return; }
+    renderFixReport(out, res.body);
+  }).catch(function() {
+    out.innerHTML = '<p class="error-text">Error: request failed</p>';
+  });
+}
+function renderFixReport(out, rep) {
+  var html = '';
+  html += '<p>Changed ' + rep.changed_count + ' path(s), ' + rep.error_count + ' error(s).</p>';
+  if (!rep.running_as_root) {
+    html += '<p><kbd class="badge badge-no">ownership skipped</kbd> webadmin is not running as root, so only modes were applied. Run the CLI doctor as root (<code>userctl domain ' + rep.domain + ' fix</code>) to repair ownership.</p>';
+  }
+  if (rep.allocated && rep.allocated.length) {
+    html += '<p>Allocated ids: ' + rep.allocated.map(escapeHTML).join(', ') + '</p>';
+  }
+  if (rep.warnings && rep.warnings.length) {
+    html += '<p class="error-text">Warnings:</p><ul>';
+    rep.warnings.forEach(function(w) { html += '<li>' + escapeHTML(w) + '</li>'; });
+    html += '</ul>';
+  }
+  if (rep.entries && rep.entries.length) {
+    html += '<table><thead><tr><th>Path</th><th>Owner</th><th>Mode</th><th>Status</th></tr></thead><tbody>';
+    rep.entries.forEach(function(e) {
+      var status = e.error ? ('<span class="error-text">' + escapeHTML(e.error) + '</span>')
+        : (e.skipped ? 'ownership skipped' : (e.changed ? 'changed' : 'ok'));
+      html += '<tr><td><code>' + escapeHTML(e.path) + '</code></td><td>' + e.uid + ':' + e.gid + '</td><td>' + escapeHTML(e.mode) + '</td><td>' + status + '</td></tr>';
+    });
+    html += '</tbody></table>';
+  }
+  out.innerHTML = html;
+}
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, function(c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+</script>
+
 <h2>Users</h2>
 <div style="margin-bottom:1rem">
   <button hx-get="/ui/domains/{{.Data.Domain.Name}}/users/new" hx-target="#create-user-form" hx-swap="innerHTML">Add User</button>

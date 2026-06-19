@@ -164,6 +164,25 @@ func (m *ForwardMap) UserExists(localpart string) bool {
 	return ok
 }
 
+// HasExact reports whether localpart has an explicit (non-catchall) forward.
+// An exact forward is an intentional per-user rule, distinct from a wildcard
+// catchall that happens to cover the localpart.
+func (m *ForwardMap) HasExact(localpart string) bool {
+	if m == nil {
+		return false
+	}
+	_, ok := m.exact[strings.ToLower(localpart)]
+	return ok
+}
+
+// Catchall returns the wildcard (*) targets and whether one is configured.
+func (m *ForwardMap) Catchall() ([]string, bool) {
+	if m == nil || len(m.catchall) == 0 {
+		return nil, false
+	}
+	return m.catchall, true
+}
+
 // Empty reports whether the map has no forwarding rules at all.
 func (m *ForwardMap) Empty() bool {
 	if m == nil {

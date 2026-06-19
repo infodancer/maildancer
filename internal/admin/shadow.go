@@ -10,20 +10,21 @@ import (
 	"github.com/infodancer/maildancer/auth/passwd"
 )
 
-// shadowWarnings reports real (passwd) users whose mail is also captured by a
-// forward rule. A forward at any per-domain tier (admin config.toml [forwards],
-// the domain forwards file, or the user's own user_forwards entry) shadows the
-// mailbox: delivery resolves the forward upstream in session-manager and never
-// writes to the local maildir, so the account silently receives no mail. A
-// domain or admin catchall (*) shadows every user, which is the common
-// contradiction (a real account plus a catchall that funnels everything away).
+// shadowWarnings reports real (passwd) users whose mail is swept away by a
+// wildcard catchall (*) they did not explicitly opt into. A real mailbox that
+// forwards elsewhere is the classic, intentional case of mail forwarding and is
+// NOT flagged: an explicit per-user forward (admin config.toml [forwards], the
+// domain forwards file, or the user's own user_forwards entry) is deliberate.
+// Only a bare catchall, which redirects an account the operator may not have
+// meant to capture, is surfaced -- delivery resolves the catchall upstream in
+// session-manager and never writes to the local maildir.
 //
 // The global system-default forward tier is deliberately not consulted here:
 // it is a site-wide policy, not a per-domain misconfiguration, and flagging
 // every user in every domain against it would be noise.
 //
-// Returns one human-readable warning per shadowed user. Resolution errors are
-// non-fatal: a tier that cannot be read contributes nothing.
+// Returns one human-readable warning per catchall-shadowed user. Resolution
+// errors are non-fatal: a tier that cannot be read contributes nothing.
 func (p Paths) shadowWarnings(domainName string) []string {
 	domainDir := filepath.Join(p.Config, domainName)
 
@@ -50,29 +51,35 @@ func (p Paths) shadowWarnings(domainName string) []string {
 
 	var warnings []string
 	for _, u := range users {
-		tier, targets := shadowingTier(adminFwd, domainFwd, userForwardsDir, u.Username)
+		tier, targets := catchallShadow(adminFwd, domainFwd, userForwardsDir, u.Username)
 		if tier == "" {
 			continue
 		}
 		warnings = append(warnings, fmt.Sprintf(
-			"user %s@%s has a mailbox but is also forwarded (%s -> %s); mail is forwarded away and never delivered to the mailbox",
+			"user %s@%s has a mailbox but a %s catchall (*) forwards their mail away (-> %s); add an explicit forward or exclude them from the catchall if the mailbox should receive mail",
 			u.Username, domainName, tier, strings.Join(targets, ", ")))
 	}
 	return warnings
 }
 
-// shadowingTier returns the highest-priority tier that forwards localpart and
-// its targets, or ("", nil) if no per-domain tier covers it. Order matches the
-// delivery chain: admin -> domain -> user.
-func shadowingTier(adminFwd, domainFwd *forwards.ForwardMap, userForwardsDir, localpart string) (string, []string) {
-	if targets, ok := adminFwd.Resolve(localpart); ok {
-		return "admin config.toml [forwards]", targets
-	}
-	if targets, ok := domainFwd.Resolve(localpart); ok {
-		return "domain forwards file", targets
+// catchallShadow returns the tier whose wildcard catchall captures localpart
+// when the user has no intentional forward of their own, or ("", nil)
+// otherwise. An explicit per-user forward (admin/domain exact, or a
+// user_forwards entry) is deliberate forwarding and is never flagged.
+func catchallShadow(adminFwd, domainFwd *forwards.ForwardMap, userForwardsDir, localpart string) (string, []string) {
+	// Intentional per-user forwarding: not a shadow.
+	if adminFwd.HasExact(localpart) || domainFwd.HasExact(localpart) {
+		return "", nil
 	}
 	if targets, err := forwards.LoadTargets(filepath.Join(userForwardsDir, localpart)); err == nil && len(targets) > 0 {
-		return "user_forwards", targets
+		return "", nil
+	}
+	// A catchall sweeps the user up without an explicit rule.
+	if targets, ok := adminFwd.Catchall(); ok {
+		return "admin config.toml [forwards]", targets
+	}
+	if targets, ok := domainFwd.Catchall(); ok {
+		return "domain forwards file", targets
 	}
 	return "", nil
 }

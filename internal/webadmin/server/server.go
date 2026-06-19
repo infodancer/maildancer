@@ -258,6 +258,10 @@ func (s *Server) registerRoutes() {
 		http.HandlerFunc(domainHandler.HandleUpdateDomainConfig),
 		requireAuth, requireCSRF, requireDomainAccessByName,
 	))
+	s.mux.Handle("POST /api/domains/{name}/fix-perms", middleware.Chain(
+		http.HandlerFunc(domainHandler.HandleFixPerms),
+		requireAuth, requireCSRF, requireDomainAccessByName,
+	))
 
 	// Domain key management API
 	s.mux.Handle("GET /api/domains/{name}/keys", middleware.Chain(

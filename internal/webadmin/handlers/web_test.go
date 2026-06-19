@@ -80,6 +80,9 @@ func TestHandleDomainDetail(t *testing.T) {
 	if !strings.Contains(body, "Forwarding") {
 		t.Error("expected Forwarding section in detail page")
 	}
+	if !strings.Contains(body, "Fix Permissions") {
+		t.Error("expected the Fix Permissions action in detail page")
+	}
 }
 
 func TestHandleDomainDetail_ShowsForwards(t *testing.T) {

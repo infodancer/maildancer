@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-func TestDomainConfig_GidTOML(t *testing.T) {
+func TestDomainConfig_MaxMessageSizeTOML(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.toml")
 
-	content := `gid = 2001
+	content := `max_message_size = 2001
 
 [auth]
 type = "passwd"
@@ -27,8 +27,8 @@ base_path = "users"
 	if err != nil {
 		t.Fatalf("LoadDomainConfig: %v", err)
 	}
-	if cfg.Gid != 2001 {
-		t.Errorf("expected Gid 2001, got %d", cfg.Gid)
+	if cfg.MaxMessageSize != 2001 {
+		t.Errorf("expected MaxMessageSize 2001, got %d", cfg.MaxMessageSize)
 	}
 }
 

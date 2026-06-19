@@ -18,10 +18,6 @@ type DomainConfig struct {
 	Limits   LimitsConfig         `toml:"limits,omitempty"`
 	DNS      DNSConfig            `toml:"dns,omitempty"`
 
-	// Gid is the OS group ID under which mail-session runs for this domain.
-	// 0 means not configured.
-	Gid uint32 `toml:"gid,omitempty"`
-
 	// MaxMessageSize is the maximum message size in bytes for this domain.
 	// Applies to both delivery and rspamd learning (both in mail-session).
 	// 0 means use the global default (50 MiB).

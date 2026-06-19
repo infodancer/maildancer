@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/infodancer/maildancer/auth/identity"
 	"github.com/infodancer/maildancer/auth/passwd"
 )
 
@@ -75,11 +76,13 @@ func TestCreateDomain(t *testing.T) {
 			t.Errorf("missing config-volume %s: %v", rel, err)
 		}
 	}
-	// Data volume anatomy.
-	for _, rel := range []string{"config.toml", "users"} {
-		if _, err := os.Stat(filepath.Join(p.Data, "example.com", rel)); err != nil {
-			t.Errorf("missing data-volume %s: %v", rel, err)
-		}
+	// Data volume anatomy: just the maildir root. The gid lives in the
+	// config-tree gid.toml (identity allocation), not a data-tree config.toml.
+	if _, err := os.Stat(filepath.Join(p.Data, "example.com", "users")); err != nil {
+		t.Errorf("missing data-volume users dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.Config, "gid.toml")); err != nil {
+		t.Errorf("gid.toml not written at config root: %v", err)
 	}
 
 	// GetDomain reads it back, gid included.
@@ -191,10 +194,10 @@ func TestCreateUser(t *testing.T) {
 		t.Errorf("maildir not created: %v", err)
 	}
 
-	// uid is in the passwd entry and the password authenticates.
-	uid, err := passwd.LookupUID(filepath.Join(p.Config, "example.com", "passwd"), "alice")
+	// uid is allocated in uid.toml (not the passwd entry).
+	uid, err := identity.UserUID(p.Config, "example.com", "alice")
 	if err != nil || uid != res.UID {
-		t.Errorf("LookupUID = %d, %v; want %d", uid, err, res.UID)
+		t.Errorf("UserUID = %d, %v; want %d", uid, err, res.UID)
 	}
 
 	// Error cases.
@@ -322,8 +325,8 @@ func TestResetPassword(t *testing.T) {
 		t.Fatalf("ResetPassword: %v", err)
 	}
 
-	// uid preserved.
-	uid, err := passwd.LookupUID(filepath.Join(p.Config, "example.com", "passwd"), "alice")
+	// uid preserved (it lives in uid.toml, untouched by a password reset).
+	uid, err := identity.UserUID(p.Config, "example.com", "alice")
 	if err != nil || uid != res.UID {
 		t.Errorf("uid after reset = %d, %v; want %d", uid, err, res.UID)
 	}
@@ -422,9 +425,12 @@ func TestMigrateUIDs(t *testing.T) {
 	if err := os.WriteFile(passwdPath, []byte(legacy), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(p.Data, "example.com", "config.toml")); err != nil {
+	// Simulate a pre-identity-map domain: drop the gid.toml and uid.toml that
+	// CreateDomain wrote, leaving only the legacy passwd (with carol's uid).
+	if err := os.Remove(filepath.Join(p.Config, "gid.toml")); err != nil {
 		t.Fatal(err)
 	}
+	_ = os.Remove(filepath.Join(p.Config, "example.com", "uid.toml"))
 
 	result, err := p.MigrateUIDs()
 	if err != nil {
@@ -433,24 +439,23 @@ func TestMigrateUIDs(t *testing.T) {
 	if result.DomainsMigrated != 1 {
 		t.Errorf("DomainsMigrated = %d, want 1", result.DomainsMigrated)
 	}
-	if result.UsersMigrated != 2 {
-		t.Errorf("UsersMigrated = %d, want 2 (alice and bob, not carol): %+v", result.UsersMigrated, result)
+	// All three users gain a uid.toml entry: alice and bob are allocated fresh,
+	// carol's legacy passwd uid (10005) is adopted.
+	if result.UsersMigrated != 3 {
+		t.Errorf("UsersMigrated = %d, want 3: %+v", result.UsersMigrated, result)
 	}
 	if len(result.Errors) != 0 {
 		t.Errorf("Errors = %v", result.Errors)
 	}
 
-	// All users now have uids; carol's is untouched.
-	users, err := passwd.ListUsers(passwdPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, u := range users {
-		if u.Uid == 0 {
-			t.Errorf("user %s still has uid 0", u.Username)
+	// All users now have authoritative uids in uid.toml; carol's is adopted.
+	for _, name := range []string{"alice", "bob", "carol"} {
+		uid, err := identity.UserUID(p.Config, "example.com", name)
+		if err != nil || uid == 0 {
+			t.Errorf("user %s has no uid after migrate: uid=%d err=%v", name, uid, err)
 		}
-		if u.Username == "carol" && u.Uid != 10005 {
-			t.Errorf("carol's uid changed to %d", u.Uid)
+		if name == "carol" && uid != 10005 {
+			t.Errorf("carol's adopted uid = %d, want 10005", uid)
 		}
 	}
 

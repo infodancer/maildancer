@@ -125,9 +125,10 @@ func TestFixDomain_AllocatesMissingGID(t *testing.T) {
 	if _, err := p.CreateDomain("example.com"); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate a domain with no allocated gid by blanking the data config.
-	dataCfg := filepath.Join(p.Data, "example.com", "config.toml")
-	if err := os.WriteFile(dataCfg, []byte("[domain]\n"), 0o640); err != nil {
+	// Simulate a domain with no allocated gid by dropping the gid.toml entry.
+	// (The test data dir's group is the test user's, below the allocator floor,
+	// so adoptDomainGID skips it and FixDomain allocates a fresh gid.)
+	if err := os.Remove(filepath.Join(p.Config, "gid.toml")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -139,7 +140,7 @@ func TestFixDomain_AllocatesMissingGID(t *testing.T) {
 		t.Errorf("expected an allocation to be reported, got none")
 	}
 
-	// The gid is now persisted in the data-tree config.
+	// The gid is now persisted in the authoritative gid.toml.
 	gid, err := p.domainGid("example.com")
 	if err != nil || gid == 0 {
 		t.Errorf("gid not allocated: gid=%d err=%v", gid, err)

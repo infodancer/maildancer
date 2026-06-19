@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 
 	domainpkg "github.com/infodancer/maildancer/auth/domain"
+	"github.com/infodancer/maildancer/auth/identity"
 	"github.com/infodancer/maildancer/auth/passwd"
 	"github.com/infodancer/maildancer/internal/admin/keys"
-	"github.com/infodancer/maildancer/internal/admin/uidalloc"
 )
 
 // UserSummary describes a user for listings.
@@ -57,14 +57,18 @@ func (p Paths) CreateUser(domain, username, password string, generateKeys bool) 
 		return nil, ErrUserExists
 	}
 
-	uid, err := uidalloc.Allocate(p.Data)
+	// Identity allocation goes through the single identity code path, which
+	// records the uid in {config}/{domain}/uid.toml. The passwd entry carries
+	// only credentials (user:hash:mailbox) -- not the uid.
+	uid, err := p.idMgr().AllocateUserUID(domain, username)
 	if err != nil {
 		unlock()
 		return nil, fmt.Errorf("allocate uid: %w", err)
 	}
 
-	if err := passwd.AddUserWithUID(passwdPath, username, password, uid); err != nil {
+	if err := passwd.AddUser(passwdPath, username, password); err != nil {
 		unlock()
+		_ = p.idMgr().RemoveUser(domain, username)
 		return nil, fmt.Errorf("write passwd: %w", err)
 	}
 	unlock()
@@ -133,6 +137,9 @@ func (p Paths) DeleteUser(domain, username string) error {
 	if err := passwd.DeleteUser(passwdPath, username); err != nil {
 		return fmt.Errorf("remove passwd entry: %w", err)
 	}
+	// Release the uid allocation. Best-effort: the credential is already gone,
+	// so a stale uid.toml entry would only be reclaimed by the next domain fix.
+	_ = p.idMgr().RemoveUser(domain, username)
 
 	// Key removal is best-effort, matching prior webadmin behavior. Remove the
 	// data-tree keyring and any legacy config-tree key files.
@@ -198,10 +205,15 @@ func (p Paths) ListUsers(domain string) ([]UserSummary, error) {
 
 	summaries := []UserSummary{}
 	for _, u := range users {
+		// UID is authoritative in uid.toml; 0 means not yet allocated.
+		uid, err := identity.UserUID(p.Config, domain, u.Username)
+		if err != nil {
+			uid = 0
+		}
 		summaries = append(summaries, UserSummary{
 			Username: u.Username,
 			Mailbox:  u.Mailbox,
-			UID:      u.Uid,
+			UID:      uid,
 			HasKeys:  p.userKeyStatus(domain, u.Username).Exists,
 		})
 	}

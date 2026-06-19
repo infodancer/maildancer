@@ -42,11 +42,11 @@ func TestDeepMergeMaps(t *testing.T) {
 	})
 
 	t.Run("override replaces non-map with non-map", func(t *testing.T) {
-		base := map[string]any{"gid": int64(1000)}
-		over := map[string]any{"gid": int64(2001)}
+		base := map[string]any{"key": int64(1000)}
+		over := map[string]any{"key": int64(2001)}
 		result := deepMergeMaps(base, over)
-		if result["gid"] != int64(2001) {
-			t.Errorf("gid = %v, want 2001", result["gid"])
+		if result["key"] != int64(2001) {
+			t.Errorf("key = %v, want 2001", result["key"])
 		}
 	})
 
@@ -63,7 +63,6 @@ func TestDeepMergeMaps(t *testing.T) {
 func TestMergeConfigLayers(t *testing.T) {
 	t.Run("basic layer merge", func(t *testing.T) {
 		base := map[string]any{
-			"gid":                 int64(1000),
 			"recipient_rejection": "rcpt",
 			"auth": map[string]any{
 				"type":               "passwd",
@@ -71,7 +70,7 @@ func TestMergeConfigLayers(t *testing.T) {
 			},
 		}
 		override := map[string]any{
-			"gid": int64(2001),
+			"max_message_size": int64(2001),
 			"auth": map[string]any{
 				"type": "ldap",
 			},
@@ -82,8 +81,8 @@ func TestMergeConfigLayers(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if cfg.Gid != 2001 {
-			t.Errorf("Gid = %d, want 2001", cfg.Gid)
+		if cfg.MaxMessageSize != 2001 {
+			t.Errorf("MaxMessageSize = %d, want 2001", cfg.MaxMessageSize)
 		}
 		if cfg.RecipientRejection != "rcpt" {
 			t.Errorf("RecipientRejection = %q, want rcpt (retained from base)", cfg.RecipientRejection)
@@ -129,13 +128,13 @@ func TestMergeConfigLayers(t *testing.T) {
 	})
 
 	t.Run("nil layers skipped", func(t *testing.T) {
-		layer := map[string]any{"gid": int64(42)}
+		layer := map[string]any{"max_message_size": int64(42)}
 		var cfg DomainConfig
 		if err := mergeConfigLayers(&cfg, nil, layer, nil); err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Gid != 42 {
-			t.Errorf("Gid = %d, want 42", cfg.Gid)
+		if cfg.MaxMessageSize != 42 {
+			t.Errorf("MaxMessageSize = %d, want 42", cfg.MaxMessageSize)
 		}
 	})
 }
@@ -150,9 +149,6 @@ func TestToTOMLMap_OmitsZeroValues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, ok := m["gid"]; ok {
-		t.Error("zero-value gid should not appear in TOML map")
-	}
 	if _, ok := m["max_message_size"]; ok {
 		t.Error("zero-value max_message_size should not appear in TOML map")
 	}
@@ -283,7 +279,7 @@ func TestMergeConfigLayers_Limits(t *testing.T) {
 			"limits": map[string]any{"max_sends_per_hour": int64(100)},
 		}
 		domain := map[string]any{
-			"gid": int64(2001),
+			"max_message_size": int64(2001),
 		}
 		var cfg DomainConfig
 		if err := mergeConfigLayers(&cfg, global, domain); err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -155,8 +156,28 @@ func (l *Listener) acceptLoop(ctx context.Context) {
 }
 
 // handleConnection wraps a connection and calls the handler.
+//
+// pop3d is a homegrown server with no library-provided panic recovery, so a
+// panic in any command handler would otherwise escape this per-connection
+// goroutine and crash the whole daemon, dropping every other live connection.
+// The deferred recover guards the entire session: a panic is logged with its
+// stack at error level and torn down to just this connection. See issue #137.
 func (l *Listener) handleConnection(ctx context.Context, netConn net.Conn) {
 	defer l.wg.Done()
+
+	// Logger for the panic guard, upgraded to the per-connection logger once the
+	// connection wrapper exists so a recovered panic carries the connection ID.
+	logger := l.logger
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("panic serving connection",
+				slog.Any("panic", r),
+				slog.String("remote_addr", netConn.RemoteAddr().String()),
+				slog.String("stack", string(debug.Stack())),
+			)
+			_ = netConn.Close()
+		}
+	}()
 
 	// Check connection limit
 	if l.limiter != nil && !l.limiter.TryAcquire() {
@@ -173,6 +194,7 @@ func (l *Listener) handleConnection(ctx context.Context, netConn net.Conn) {
 
 	// Create connection wrapper
 	conn := NewConnection(netConn, l.connCfg)
+	logger = conn.Logger()
 
 	conn.Logger().Info("connection accepted")
 
@@ -192,8 +214,21 @@ func (l *Listener) handleConnection(ctx context.Context, netConn net.Conn) {
 		return
 	}
 
-	// Start idle monitor
-	go conn.IdleMonitor(connCtx)
+	// Start idle monitor. It runs in its own goroutine, so it needs its own
+	// panic guard; on panic, cancel the session context to tear the connection
+	// down rather than crash the daemon.
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				conn.Logger().Error("panic in idle monitor",
+					slog.Any("panic", r),
+					slog.String("stack", string(debug.Stack())),
+				)
+				cancel()
+			}
+		}()
+		conn.IdleMonitor(connCtx)
+	}()
 
 	// Call the connection handler
 	if l.handler != nil {

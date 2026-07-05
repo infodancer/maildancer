@@ -10,7 +10,13 @@ import (
 )
 
 // Expunge permanently removes messages marked for deletion.
-func (s *Session) Expunge(w *imapserver.ExpungeWriter, uids *imap.UIDSet) error {
+//
+// It does not write EXPUNGE responses via the ExpungeWriter directly: it only
+// queues them on the mailbox tracker. go-imap runs Session.Poll after the
+// command (before the tagged OK), which drains the tracker and emits each
+// EXPUNGE exactly once. Writing them here as well produced duplicate
+// "* n EXPUNGE" responses -- see issue #132.
+func (s *Session) Expunge(_ *imapserver.ExpungeWriter, uids *imap.UIDSet) error {
 	if s.messages == nil {
 		return nil
 	}
@@ -34,9 +40,8 @@ func (s *Session) Expunge(w *imapserver.ExpungeWriter, uids *imap.UIDSet) error 
 			continue
 		}
 
-		if err := w.WriteExpunge(seqNum); err != nil {
-			return err
-		}
+		// Queue the expunge for the post-command poll to emit; do not write it
+		// here as well (that double-emitted, #132).
 		if s.tracker != nil {
 			s.tracker.QueueExpunge(seqNum)
 		}
@@ -236,17 +241,17 @@ func (s *Session) Move(w *imapserver.MoveWriter, numSet imap.NumSet, dest string
 		return err
 	}
 
-	// Write expunge notifications in descending seqnum order so client seqnums
-	// remain valid as each expunge is applied.
+	// Queue expunges in descending seqnum order so client seqnums remain valid
+	// as each expunge is applied. go-imap's post-command poll drains the tracker
+	// and emits each "* n EXPUNGE" exactly once, after this COPYUID and before
+	// the tagged OK -- the RFC 6851 order. Writing them here as well
+	// double-emitted (#132).
 	for i := len(indices) - 1; i >= 0; i-- {
 		idx := indices[i]
 		if idx < 0 || idx >= len(s.messages) {
 			continue
 		}
 		seqNum := uint32(idx + 1)
-		if err := w.WriteExpunge(seqNum); err != nil {
-			return err
-		}
 		if s.tracker != nil {
 			s.tracker.QueueExpunge(seqNum)
 		}

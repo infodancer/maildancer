@@ -11,6 +11,7 @@ import (
 	"time"
 
 	gosmtp "github.com/emersion/go-smtp"
+	"github.com/infodancer/logging"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 )
 
@@ -56,6 +57,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		s := gosmtp.NewServer(cfg.Backend)
 		s.Addr = listener.Address
 		s.Domain = cfg.Hostname
+		// Route go-smtp's error sink (SMTP-session panic recovery plus
+		// connection/accept errors) through slog at error level. Left as its
+		// default it logs to stderr via log.Default(), bypassing structured
+		// logging. See issue #135.
+		s.ErrorLog = logging.NewStdLogger(logger.With("component", "smtpd"))
 		s.ReadTimeout = cfg.ReadTimeout
 		s.WriteTimeout = cfg.WriteTimeout
 		s.MaxMessageBytes = int64(cfg.MaxMessageSize)

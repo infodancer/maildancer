@@ -91,6 +91,12 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapMove: {}},
 		TLSConfig:    cfg.TLSConfig,
 		InsecureAuth: cfg.TLSConfig == nil,
+		// Route go-imap's internal error sink (panics, session/greeting
+		// failures, and the "handling <CMD> command" errors it turns into
+		// "NO [SERVERBUG]") through slog at error level. Left nil, go-imap
+		// falls back to log.Default() and those faults bypass structured
+		// logging entirely. See issue #131.
+		Logger: logging.NewStdLogger(logger.With("component", "imapd")),
 	}
 	if cfg.Config.LogLevel == "debug" {
 		opts.DebugWriter = logging.DebugWriter(logger, "imap-protocol")

@@ -91,6 +91,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		Caps:         imap.CapSet{imap.CapIMAP4rev1: {}, imap.CapMove: {}},
 		TLSConfig:    cfg.TLSConfig,
 		InsecureAuth: cfg.TLSConfig == nil,
+		Logger:       imapLogger{logger: logger},
 	}
 	if cfg.Config.LogLevel == "debug" {
 		opts.DebugWriter = logging.DebugWriter(logger, "imap-protocol")

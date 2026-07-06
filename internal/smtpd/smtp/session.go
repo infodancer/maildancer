@@ -681,7 +681,7 @@ func (s *Session) Data(r io.Reader) error {
 		// rules are resolved by the mail-session delivery path, which signals a
 		// configured forward by returning a *RedirectError.
 		deliverErr := s.backend.smDelivery.Deliver(ctx,
-			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, withHeaders(received, tmp))
+			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, checkResult, withHeaders(received, tmp))
 
 		var redirectErr *RedirectError
 		redirected := errors.As(deliverErr, &redirectErr)
@@ -689,7 +689,7 @@ func (s *Session) Data(r io.Reader) error {
 			// A configured forward. Re-route each target as a fresh recipient
 			// (local Deliver with Forwarded=true, or remote Enqueue). This is
 			// the only delivery path that can reach external forward targets.
-			deliverErr = s.followRedirect(ctx, redirectErr, tmp, msgid, received)
+			deliverErr = s.followRedirect(ctx, redirectErr, tmp, msgid, received, checkResult)
 		}
 
 		if deliverErr != nil {
@@ -808,7 +808,7 @@ func (s *Session) Data(r io.Reader) error {
 // temp-failed -- smtpd follows at most one redirect.
 //
 // Returns nil on success, or an error that the caller maps to a 451.
-func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer, msgid, received string) error {
+func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer, msgid, received string, spamVerdict *spamcheck.CheckResult) error {
 	if len(redirect.Addresses) == 0 {
 		s.logger.Error("forward resolved to no targets",
 			slog.String("from", s.from),
@@ -850,7 +850,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 		// here is a configuration error.
 		now := time.Now()
 		err = s.backend.smDelivery.Deliver(ctx,
-			s.from, target, s.clientIP, s.helo, now, true, msgid, withHeaders(fwdHeaders, tmp))
+			s.from, target, s.clientIP, s.helo, now, true, msgid, spamVerdict, withHeaders(fwdHeaders, tmp))
 
 		var nested *RedirectError
 		if errors.As(err, &nested) {

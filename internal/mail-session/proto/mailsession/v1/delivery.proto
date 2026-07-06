@@ -57,6 +57,30 @@ message DeliverMetadata {
   // Message-ID and, for next-gen protocols, the message_id. Not derived from
   // the inbound Message-ID header (sender-chosen).
   string msgid = 8;
+
+  // Spam verdict from the upstream scanner (rspamd, via smtpd), carried
+  // out-of-band. Delivery-side policy must key on this provenance-trusted
+  // signal, never on the message's own X-Spam-* headers, which a sender can
+  // forge. Absent (nil) when no spam check ran for this message.
+  SpamVerdict spam_verdict = 9;
+}
+
+// SpamVerdict is the upstream spam-scan result for a message, carried alongside
+// it on the delivery channel so delivery-side policy keys on a signal whose
+// provenance we control -- rather than the message's own X-Spam-* headers,
+// which arrive on sender-controlled data and are therefore forgeable. smtpd
+// also stamps these headers onto the message itself, but only for the
+// recipient's client-side filters; the authoritative copy is this one.
+message SpamVerdict {
+  // Whether the scanner classified the message as spam.
+  bool is_spam = 1;
+
+  // The numeric spam score the scanner assigned.
+  double score = 2;
+
+  // The X-Spam-* headers the scanner produced (field name -> value), the same
+  // set smtpd stamps onto the message.
+  map<string, string> headers = 3;
 }
 
 // DeliverResponse is the outcome of the delivery pipeline.

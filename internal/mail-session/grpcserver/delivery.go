@@ -17,6 +17,28 @@ type DeliveryServer struct {
 	srv *Server
 }
 
+// deliverRequestFromMetadata maps the wire metadata to the domain delivery
+// request, including the out-of-band spam verdict (nil when no scan ran).
+func deliverRequestFromMetadata(meta *pb.DeliverMetadata) deliver.DeliverRequest {
+	req := deliver.DeliverRequest{
+		Sender:         meta.GetSender(),
+		Recipient:      meta.GetRecipient(),
+		ClientIP:       meta.GetClientIp(),
+		ClientHostname: meta.GetClientHostname(),
+		Forwarded:      meta.GetForwarded(),
+		ReceivedTime:   meta.GetReceivedTime(),
+		MsgID:          meta.GetMsgid(),
+	}
+	if v := meta.GetSpamVerdict(); v != nil {
+		req.Spam = &deliver.SpamVerdict{
+			IsSpam:  v.GetIsSpam(),
+			Score:   v.GetScore(),
+			Headers: v.GetHeaders(),
+		}
+	}
+	return req
+}
+
 func (d *DeliveryServer) Deliver(stream pb.DeliveryService_DeliverServer) error {
 	if d.srv.deliverer == nil {
 		return status.Error(codes.Unavailable, "delivery service not configured")
@@ -45,15 +67,7 @@ func (d *DeliveryServer) Deliver(stream pb.DeliveryService_DeliverServer) error 
 		body = append(body, chunk.GetData()...)
 	}
 
-	req := deliver.DeliverRequest{
-		Sender:         meta.GetSender(),
-		Recipient:      meta.GetRecipient(),
-		ClientIP:       meta.GetClientIp(),
-		ClientHostname: meta.GetClientHostname(),
-		Forwarded:      meta.GetForwarded(),
-		ReceivedTime:   meta.GetReceivedTime(),
-		MsgID:          meta.GetMsgid(),
-	}
+	req := deliverRequestFromMetadata(meta)
 
 	resp, err := d.srv.deliverer.Deliver(stream.Context(), req, body)
 	if err != nil {

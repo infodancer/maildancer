@@ -11,7 +11,7 @@ require (
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
 	github.com/emersion/go-smtp v0.24.0
 	github.com/foxcpp/go-sieve v0.0.0-20260523221512-9ae51b269e52
-	github.com/infodancer/logging v0.1.1
+	github.com/infodancer/logging v0.1.2
 	github.com/lestrrat-go/jwx/v2 v2.1.6
 	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/prometheus/client_golang v1.23.2

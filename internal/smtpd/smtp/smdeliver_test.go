@@ -102,7 +102,7 @@ func TestSessionManagerDelivery_Delivered(t *testing.T) {
 	folder, err := agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
 		"192.168.1.1", "mail.example.com",
-		receivedTime, false, "", strings.NewReader(body))
+		receivedTime, false, "", nil, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("deliver: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestSessionManagerDelivery_Rejected(t *testing.T) {
 
 	_, err = agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
-		"", "", time.Time{}, false, "", strings.NewReader("test"))
+		"", "", time.Time{}, false, "", nil, strings.NewReader("test"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -184,7 +184,7 @@ func TestSessionManagerDelivery_RejectedTemporary(t *testing.T) {
 
 	_, err = agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
-		"", "", time.Time{}, false, "", strings.NewReader("test"))
+		"", "", time.Time{}, false, "", nil, strings.NewReader("test"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -210,7 +210,7 @@ func TestSessionManagerDelivery_Redirected(t *testing.T) {
 
 	_, err = agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
-		"", "", time.Time{}, false, "", strings.NewReader("test"))
+		"", "", time.Time{}, false, "", nil, strings.NewReader("test"))
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -246,7 +246,7 @@ func TestSessionManagerDelivery_LargeMessage(t *testing.T) {
 
 	_, err = agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
-		"", "", time.Time{}, false, "", strings.NewReader(largeBody))
+		"", "", time.Time{}, false, "", nil, strings.NewReader(largeBody))
 	if err != nil {
 		t.Fatalf("deliver: %v", err)
 	}

@@ -14,6 +14,7 @@ import (
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
+	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -133,16 +134,37 @@ func (a *SessionManagerDeliveryAgent) ValidateRecipient(ctx context.Context, add
 	}, nil
 }
 
+// spamVerdictProto converts smtpd's in-process spam-check result into the wire
+// SpamVerdict carried on the delivery channel. Returns nil when no check ran
+// (r == nil), so the delivery side can distinguish "not scanned" from "scanned
+// and clean". This copies the trusted verdict out of band; delivery-side policy
+// must key on it rather than the message's forgeable X-Spam-* headers.
+func spamVerdictProto(r *spamcheck.CheckResult) *pb.SpamVerdict {
+	if r == nil {
+		return nil
+	}
+	return &pb.SpamVerdict{
+		IsSpam:  r.IsSpam,
+		Score:   r.Score,
+		Headers: r.Headers,
+	}
+}
+
 // Deliver sends a message to the session-manager for delivery.
 // Parameters map directly to SMTP envelope fields -- no msgstore types involved.
+// spamVerdict carries the upstream scanner's result out of band (nil when no
+// check ran); it is not derived from the message body.
 //
 // forwarded marks this delivery as the result of resolving a forward. When
 // true, the mail-session delivery path will not re-resolve forwarding rules
 // for the recipient, which closes the 1-hop gap and prevents mail loops.
+// spamVerdict carries the upstream scanner's result out of band (nil when no
+// check ran); it is not derived from the message body.
+//
 // Deliver returns the mailbox folder the message was actually written to
 // (e.g. "INBOX", "Junk") on a successful, non-redirected delivery. The folder
 // is empty for rejections and redirects.
-func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, forwarded bool, msgid string, message io.Reader) (string, error) {
+func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, forwarded bool, msgid string, spamVerdict *spamcheck.CheckResult, message io.Reader) (string, error) {
 	stream, err := a.delivery.Deliver(ctx)
 	if err != nil {
 		return "", fmt.Errorf("session-manager delivery: open stream: %w", err)
@@ -155,6 +177,7 @@ func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recip
 		ClientHostname: clientHostname,
 		Forwarded:      forwarded,
 		Msgid:          msgid,
+		SpamVerdict:    spamVerdictProto(spamVerdict),
 	}
 	if !receivedTime.IsZero() {
 		meta.ReceivedTime = receivedTime.Format(time.RFC3339)

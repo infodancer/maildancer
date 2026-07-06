@@ -183,7 +183,12 @@ type DeliverMetadata struct {
 	// traceable by id (no content) in the logs. The same bytes are the RFC5322
 	// Message-ID and, for next-gen protocols, the message_id. Not derived from
 	// the inbound Message-ID header (sender-chosen).
-	Msgid         string `protobuf:"bytes,8,opt,name=msgid,proto3" json:"msgid,omitempty"`
+	Msgid string `protobuf:"bytes,8,opt,name=msgid,proto3" json:"msgid,omitempty"`
+	// Spam verdict from the upstream scanner (rspamd, via smtpd), carried
+	// out-of-band. Delivery-side policy must key on this provenance-trusted
+	// signal, never on the message's own X-Spam-* headers, which a sender can
+	// forge. Absent (nil) when no spam check ran for this message.
+	SpamVerdict   *SpamVerdict `protobuf:"bytes,9,opt,name=spam_verdict,json=spamVerdict,proto3" json:"spam_verdict,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -267,6 +272,83 @@ func (x *DeliverMetadata) GetMsgid() string {
 	return ""
 }
 
+func (x *DeliverMetadata) GetSpamVerdict() *SpamVerdict {
+	if x != nil {
+		return x.SpamVerdict
+	}
+	return nil
+}
+
+// SpamVerdict is the upstream spam-scan result for a message, carried alongside
+// it on the delivery channel so delivery-side policy keys on a signal whose
+// provenance we control -- rather than the message's own X-Spam-* headers,
+// which arrive on sender-controlled data and are therefore forgeable. smtpd
+// also stamps these headers onto the message itself, but only for the
+// recipient's client-side filters; the authoritative copy is this one.
+type SpamVerdict struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Whether the scanner classified the message as spam.
+	IsSpam bool `protobuf:"varint,1,opt,name=is_spam,json=isSpam,proto3" json:"is_spam,omitempty"`
+	// The numeric spam score the scanner assigned.
+	Score float64 `protobuf:"fixed64,2,opt,name=score,proto3" json:"score,omitempty"`
+	// The X-Spam-* headers the scanner produced (field name -> value), the same
+	// set smtpd stamps onto the message.
+	Headers       map[string]string `protobuf:"bytes,3,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SpamVerdict) Reset() {
+	*x = SpamVerdict{}
+	mi := &file_mailsession_v1_delivery_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SpamVerdict) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SpamVerdict) ProtoMessage() {}
+
+func (x *SpamVerdict) ProtoReflect() protoreflect.Message {
+	mi := &file_mailsession_v1_delivery_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SpamVerdict.ProtoReflect.Descriptor instead.
+func (*SpamVerdict) Descriptor() ([]byte, []int) {
+	return file_mailsession_v1_delivery_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *SpamVerdict) GetIsSpam() bool {
+	if x != nil {
+		return x.IsSpam
+	}
+	return false
+}
+
+func (x *SpamVerdict) GetScore() float64 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
+}
+
+func (x *SpamVerdict) GetHeaders() map[string]string {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
 // DeliverResponse is the outcome of the delivery pipeline.
 type DeliverResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -291,7 +373,7 @@ type DeliverResponse struct {
 
 func (x *DeliverResponse) Reset() {
 	*x = DeliverResponse{}
-	mi := &file_mailsession_v1_delivery_proto_msgTypes[2]
+	mi := &file_mailsession_v1_delivery_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -303,7 +385,7 @@ func (x *DeliverResponse) String() string {
 func (*DeliverResponse) ProtoMessage() {}
 
 func (x *DeliverResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_mailsession_v1_delivery_proto_msgTypes[2]
+	mi := &file_mailsession_v1_delivery_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -316,7 +398,7 @@ func (x *DeliverResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeliverResponse.ProtoReflect.Descriptor instead.
 func (*DeliverResponse) Descriptor() ([]byte, []int) {
-	return file_mailsession_v1_delivery_proto_rawDescGZIP(), []int{2}
+	return file_mailsession_v1_delivery_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DeliverResponse) GetResult() DeliverResult {
@@ -362,7 +444,7 @@ const file_mailsession_v1_delivery_proto_rawDesc = "" +
 	"\x0eDeliverRequest\x12=\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x1f.mailsession.v1.DeliverMetadataH\x00R\bmetadata\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\t\n" +
-	"\apayload\"\x81\x02\n" +
+	"\apayload\"\xc1\x02\n" +
 	"\x0fDeliverMetadata\x12\x16\n" +
 	"\x06sender\x18\x01 \x01(\tR\x06sender\x12\x1c\n" +
 	"\trecipient\x18\x02 \x01(\tR\trecipient\x12\x1b\n" +
@@ -370,7 +452,15 @@ const file_mailsession_v1_delivery_proto_rawDesc = "" +
 	"\x0fclient_hostname\x18\x04 \x01(\tR\x0eclientHostname\x12\x1c\n" +
 	"\tforwarded\x18\x05 \x01(\bR\tforwarded\x12#\n" +
 	"\rreceived_time\x18\a \x01(\tR\freceivedTime\x12\x14\n" +
-	"\x05msgid\x18\b \x01(\tR\x05msgidJ\x04\b\x06\x10\aR\x13encryption_key_hint\"\xc5\x01\n" +
+	"\x05msgid\x18\b \x01(\tR\x05msgid\x12>\n" +
+	"\fspam_verdict\x18\t \x01(\v2\x1b.mailsession.v1.SpamVerdictR\vspamVerdictJ\x04\b\x06\x10\aR\x13encryption_key_hint\"\xbc\x01\n" +
+	"\vSpamVerdict\x12\x17\n" +
+	"\ais_spam\x18\x01 \x01(\bR\x06isSpam\x12\x14\n" +
+	"\x05score\x18\x02 \x01(\x01R\x05score\x12B\n" +
+	"\aheaders\x18\x03 \x03(\v2(.mailsession.v1.SpamVerdict.HeadersEntryR\aheaders\x1a:\n" +
+	"\fHeadersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc5\x01\n" +
 	"\x0fDeliverResponse\x125\n" +
 	"\x06result\x18\x01 \x01(\x0e2\x1d.mailsession.v1.DeliverResultR\x06result\x12\x1c\n" +
 	"\ttemporary\x18\x02 \x01(\bR\ttemporary\x12\x16\n" +
@@ -398,23 +488,27 @@ func file_mailsession_v1_delivery_proto_rawDescGZIP() []byte {
 }
 
 var file_mailsession_v1_delivery_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_mailsession_v1_delivery_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_mailsession_v1_delivery_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_mailsession_v1_delivery_proto_goTypes = []any{
 	(DeliverResult)(0),      // 0: mailsession.v1.DeliverResult
 	(*DeliverRequest)(nil),  // 1: mailsession.v1.DeliverRequest
 	(*DeliverMetadata)(nil), // 2: mailsession.v1.DeliverMetadata
-	(*DeliverResponse)(nil), // 3: mailsession.v1.DeliverResponse
+	(*SpamVerdict)(nil),     // 3: mailsession.v1.SpamVerdict
+	(*DeliverResponse)(nil), // 4: mailsession.v1.DeliverResponse
+	nil,                     // 5: mailsession.v1.SpamVerdict.HeadersEntry
 }
 var file_mailsession_v1_delivery_proto_depIdxs = []int32{
 	2, // 0: mailsession.v1.DeliverRequest.metadata:type_name -> mailsession.v1.DeliverMetadata
-	0, // 1: mailsession.v1.DeliverResponse.result:type_name -> mailsession.v1.DeliverResult
-	1, // 2: mailsession.v1.DeliveryService.Deliver:input_type -> mailsession.v1.DeliverRequest
-	3, // 3: mailsession.v1.DeliveryService.Deliver:output_type -> mailsession.v1.DeliverResponse
-	3, // [3:4] is the sub-list for method output_type
-	2, // [2:3] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	3, // 1: mailsession.v1.DeliverMetadata.spam_verdict:type_name -> mailsession.v1.SpamVerdict
+	5, // 2: mailsession.v1.SpamVerdict.headers:type_name -> mailsession.v1.SpamVerdict.HeadersEntry
+	0, // 3: mailsession.v1.DeliverResponse.result:type_name -> mailsession.v1.DeliverResult
+	1, // 4: mailsession.v1.DeliveryService.Deliver:input_type -> mailsession.v1.DeliverRequest
+	4, // 5: mailsession.v1.DeliveryService.Deliver:output_type -> mailsession.v1.DeliverResponse
+	5, // [5:6] is the sub-list for method output_type
+	4, // [4:5] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_mailsession_v1_delivery_proto_init() }
@@ -432,7 +526,7 @@ func file_mailsession_v1_delivery_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mailsession_v1_delivery_proto_rawDesc), len(file_mailsession_v1_delivery_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   3,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -88,10 +88,21 @@ policy must honor that distinction -- "no verdict" is not "not spam".
 ### Outbound is excluded
 
 The verdict rides only on the local-delivery channel (`DeliverMetadata`), not on
-the outbound `EnqueueMetadata`. Its purpose is local Junk filing, and outbound
-mail has no Junk folder to file into, so carrying it there would dead-end.
-Relaying/forwarding still carries the `X-Spam-*` headers in the message body as
-before.
+the outbound `EnqueueMetadata`. The reason is not "outbound has no Junk folder"
+-- there is a real case for scanning outbound mail (an ISP policing its own
+customers to protect shared sending-IP reputation). The reason is that outbound
+policing acts **synchronously at submission**, where the authenticated identity
+is known -- reject/quarantine/rate-limit/alert -- not by deferring a verdict
+downstream into the queue, by which point we have already accepted
+responsibility for relaying the message. Carrying the verdict on the outbound
+channel would therefore act at the wrong point.
+
+That makes outbound abuse control a separate feature (direction-aware rspamd
+rules so we do not bounce legitimate customer mail, plus per-account rate/abuse
+tracking), tracked as [#144]. The one outbound-carry that could earn its place
+there *later* is the score as forensic metadata on a quarantined message -- not
+for filing. Relaying/forwarding still carries the `X-Spam-*` headers in the
+message body as before.
 
 ## Best practices retained (for the delivery-side phase)
 
@@ -114,8 +125,12 @@ before.
   the rspamd action, not the actual delivery destination ([#143]). When the
   delivery side starts filing to Junk, that guess should be replaced by the real
   destination reported back in `DeliverResponse`.
+- Outbound abuse control (direction-aware scanning + per-account rate/abuse
+  tracking to protect sending-IP reputation) is a separate feature, [#144]. It
+  is not a rider on inbound verdict carriage; see "Outbound is excluded" above.
 - A per-user Sieve editor remains a separate, broader gap; this work does not
   depend on it.
 
 [#133]: https://github.com/infodancer/maildancer/issues/133
 [#143]: https://github.com/infodancer/maildancer/issues/143
+[#144]: https://github.com/infodancer/maildancer/issues/144

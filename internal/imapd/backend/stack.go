@@ -15,6 +15,7 @@ import (
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 	"github.com/infodancer/maildancer/internal/imapd/notify"
+	"github.com/infodancer/maildancer/internal/liblog"
 )
 
 // StackConfig groups the configuration needed to build a Stack.
@@ -93,10 +94,11 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		InsecureAuth: cfg.TLSConfig == nil,
 		// Route go-imap's internal error sink (panics, session/greeting
 		// failures, and the "handling <CMD> command" errors it turns into
-		// "NO [SERVERBUG]") through slog at error level. Left nil, go-imap
-		// falls back to log.Default() and those faults bypass structured
-		// logging entirely. See issue #131.
-		Logger: logging.NewStdLogger(logger.With("component", "imapd")),
+		// "NO [SERVERBUG]") through slog. Left nil, go-imap falls back to
+		// log.Default() and those faults bypass structured logging entirely
+		// (#131). liblog.Level demotes benign client-caused messages (malformed
+		// input, probe disconnects) to info so genuine faults stand out (#140).
+		Logger: logging.NewStdLoggerFunc(logger.With("component", "imapd"), liblog.Level),
 	}
 	if cfg.Config.LogLevel == "debug" {
 		opts.DebugWriter = logging.DebugWriter(logger, "imap-protocol")

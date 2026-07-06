@@ -664,6 +664,16 @@ func (s *Session) Data(r io.Reader) error {
 		ForRcpt:        forRcpt,
 	}, now)
 
+	// Prepend rspamd's X-Spam-* verdict headers above the trace header so the
+	// delivery pipeline's default spam-to-Junk Sieve rule and the recipient's
+	// own client-side filters can act on them. Without this the headers are
+	// computed by the checker and discarded (maildancer#133). Gated by
+	// add_headers; every delivery/enqueue/forward path below reads `received`,
+	// so stamping it once covers all of them.
+	if spamHeaders := buildSpamHeaders(checkResult, s.backend.spamConfig.AddHeaders); spamHeaders != "" {
+		received = spamHeaders + received
+	}
+
 	// Local delivery (synchronous; failures reject at SMTP time).
 	if len(s.recipients) > 0 {
 		// Session-manager is the only delivery path. The initial delivery is

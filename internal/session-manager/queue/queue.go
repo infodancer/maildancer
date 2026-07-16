@@ -26,10 +26,22 @@ type queueEnvelope struct {
 	Origin    string    `json:"origin"`
 }
 
+// Owner identifies the account that should own queue entries on disk.
+type Owner struct {
+	UID int
+	GID int
+}
+
 // Config holds queue-injection parameters.
 type Config struct {
 	// Dir is the root of the on-disk mail queue.
 	Dir string
+	// Owner, when non-nil, assigns ownership of every directory and file
+	// the queue creates. Set it when the writing process runs privileged
+	// but the queue consumer (queue-manager) runs as a dedicated account;
+	// nil leaves entries owned by the writing process. A failed chown
+	// fails the write: entries the consumer cannot read would strand mail.
+	Owner *Owner
 	// MessageTTL is how long the message should be retried.
 	MessageTTL time.Duration
 	// Hostname is the server hostname, used as the domain in VERP bounce addresses.
@@ -98,12 +110,12 @@ func Write(cfg Config, from string, recipients []string, presetMsgIDHex string, 
 
 	senderTLD, senderDomain := splitDomainLabels(fromDomain)
 	msgDir := filepath.Join(cfg.Dir, "msg", senderTLD, senderDomain)
-	if err := os.MkdirAll(msgDir, 0700); err != nil {
+	if err := mkdirAllOwned(cfg.Dir, msgDir, 0700, cfg.Owner); err != nil {
 		return "", fmt.Errorf("queue: mkdir %s: %w", msgDir, err)
 	}
 
 	bodyPath := filepath.Join(msgDir, msgidHex)
-	if err := atomicWrite(msgDir, bodyPath, func(w io.Writer) error {
+	if err := atomicWrite(msgDir, bodyPath, cfg.Owner, func(w io.Writer) error {
 		_, err := io.Copy(w, bodyReader)
 		return err
 	}); err != nil {
@@ -120,7 +132,7 @@ func Write(cfg Config, from string, recipients []string, presetMsgIDHex string, 
 		verpSender := verpAddress(from, rcpt, cfg.Hostname)
 		rcptTLD, rcptSLD := splitDomainLabels(rcptDomain)
 		envDir := filepath.Join(cfg.Dir, "env", rcptTLD, rcptSLD)
-		if err := os.MkdirAll(envDir, 0700); err != nil {
+		if err := mkdirAllOwned(cfg.Dir, envDir, 0700, cfg.Owner); err != nil {
 			return "", fmt.Errorf("queue: mkdir %s: %w", envDir, err)
 		}
 
@@ -136,7 +148,7 @@ func Write(cfg Config, from string, recipients []string, presetMsgIDHex string, 
 			Origin:    from,
 		}
 
-		if err := atomicWrite(envDir, envPath, func(w io.Writer) error {
+		if err := atomicWrite(envDir, envPath, cfg.Owner, func(w io.Writer) error {
 			return json.NewEncoder(w).Encode(env)
 		}); err != nil {
 			return "", fmt.Errorf("queue: write envelope for %s: %w", rcpt, err)
@@ -178,7 +190,34 @@ func newMsgID(hostname string) (msgid, msgidHex string, err error) {
 }
 
 // atomicWrite writes to a tmp_ file in dir, then renames to finalPath.
-func atomicWrite(dir, finalPath string, write func(io.Writer) error) error {
+// mkdirAllOwned is os.MkdirAll plus ownership: it ensures path exists, then
+// chowns every level between root (exclusive) and path (inclusive) to owner.
+// Levels that already existed are chowned too -- chown is idempotent and the
+// queue tree has a single legitimate owner -- so a level created earlier by a
+// differently-privileged writer is repaired rather than left blocking the
+// consumer. A nil owner makes this plain os.MkdirAll.
+func mkdirAllOwned(root, path string, mode os.FileMode, owner *Owner) error {
+	if err := os.MkdirAll(path, mode); err != nil {
+		return err
+	}
+	if owner == nil {
+		return nil
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("queue path %s not under root %s", path, root)
+	}
+	p := root
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
+		p = filepath.Join(p, part)
+		if err := os.Chown(p, owner.UID, owner.GID); err != nil {
+			return fmt.Errorf("chown %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
+func atomicWrite(dir, finalPath string, owner *Owner, write func(io.Writer) error) error {
 	tmp, err := os.CreateTemp(dir, "tmp_")
 	if err != nil {
 		return err
@@ -194,6 +233,15 @@ func atomicWrite(dir, finalPath string, write func(io.Writer) error) error {
 		_ = tmp.Close()
 		_ = os.Remove(tmpName)
 		return err
+	}
+	// Assign ownership before the rename makes the file visible to the
+	// queue consumer; Fchown on the open handle avoids a path race.
+	if owner != nil {
+		if err := tmp.Chown(owner.UID, owner.GID); err != nil {
+			_ = tmp.Close()
+			_ = os.Remove(tmpName)
+			return fmt.Errorf("chown %s: %w", tmpName, err)
+		}
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)

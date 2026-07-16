@@ -66,11 +66,11 @@ RUN test "${TARGETARCH:-amd64}" = "amd64" \
 # next to the uid/gid allocator's 10000 floor -- these must stay below it).
 # mailsvc is the shared daemon group; cfgread names the config-tree read gid
 # (queued joins it: queue-manager reads per-domain outbound routing config
-# from the root:cfgread 0640 config tree). pop3d/imapd and queue-manager drop
+# from the webadmin:cfgread 0640 config tree). pop3d/imapd and queue-manager drop
 # root at exec and smtpd's per-connection handlers drop to the smtpd account;
 # webadmin stays root until its own issue.
 RUN addgroup -S -g 900 mailsvc \
-    && addgroup -S -g 65532 cfgread \
+    && addgroup -S -g 906 cfgread \
     && adduser -S -D -H -u 901 -G mailsvc -s /sbin/nologin pop3d \
     && adduser -S -D -H -u 902 -G mailsvc -s /sbin/nologin imapd \
     && adduser -S -D -H -u 903 -G mailsvc -s /sbin/nologin smtpd \

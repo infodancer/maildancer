@@ -23,7 +23,7 @@ import (
 // from the uids the model is about.
 //
 // The nonroot reader contract being pinned:
-//   - uid 65532 (authReadGID, any gid with 65532 as the primary works via the
+//   - a cfgread-group member (auth-oidc: uid 65532 + group_add cfgread; the
 //     group bits) must be able to read {config}/{domain}/config.toml and
 //     passwd after FixDomain -- that is auth-oidc's read path.
 //   - a mail user (uid >= 10000, including the domain's own uid:gid pair)
@@ -132,7 +132,7 @@ func TestRootPermissionModel(t *testing.T) {
 	// not part of the model's plan (in production it is a mount point), and
 	// mail users must be able to traverse it to reach the per-domain dirs
 	// where the model's group bits take over. The config root IS part of the
-	// plan (configPermPlan) and gets fixed to root:authReadGID 2750 below.
+	// plan (configPermPlan) and gets fixed to webadmin:cfgread 2750 below.
 	p := Paths{
 		Config: filepath.Join(base, "config"),
 		Data:   filepath.Join(base, "data"),
@@ -188,15 +188,24 @@ func TestRootPermissionModel(t *testing.T) {
 	configToml := filepath.Join(p.Config, "example.com", "config.toml")
 	passwdFile := filepath.Join(p.Config, "example.com", "passwd")
 
-	// Positive first: the authReadGID reader (auth-oidc's distroless nonroot
-	// identity) can read the domain config and passwd. This also proves the
-	// tempdir chain is traversable, so the denials below fail for the right
-	// reason (config-tree perms), not a broken test setup.
-	if code := probeRead(t, bin, authReadGID, authReadGID, configToml); code != probeOK {
-		t.Errorf("uid %d read %s: exit %d, want %d (auth-oidc must read domain config)", authReadGID, configToml, code, probeOK)
+	// Positive first: a reader holding the cfgread group (auth-oidc runs as
+	// distroless nonroot 65532 with cfgread as a supplementary group via
+	// compose group_add) can read the domain config and passwd. This also
+	// proves the tempdir chain is traversable, so the denials below fail for
+	// the right reason (config-tree perms), not a broken test setup.
+	if code := probeRead(t, bin, 65532, CfgreadGID, configToml); code != probeOK {
+		t.Errorf("uid 65532 gid %d read %s: exit %d, want %d (auth-oidc must read domain config)", CfgreadGID, configToml, code, probeOK)
 	}
-	if code := probeRead(t, bin, authReadGID, authReadGID, passwdFile); code != probeOK {
-		t.Errorf("uid %d read %s: exit %d, want %d (auth-oidc must read passwd)", authReadGID, passwdFile, code, probeOK)
+	if code := probeRead(t, bin, 65532, CfgreadGID, passwdFile); code != probeOK {
+		t.Errorf("uid 65532 gid %d read %s: exit %d, want %d (auth-oidc must read passwd)", CfgreadGID, passwdFile, code, probeOK)
+	}
+
+	// The read grant is the cfgread GROUP, not the distroless-nonroot id:
+	// plain 65532:65532 without the group is denied. Pinned so membership
+	// stays an explicit grant (issue #152) -- a container that merely runs
+	// as distroless nonroot gets nothing.
+	if code := probeRead(t, bin, 65532, 65532, configToml); code != probeDenied {
+		t.Errorf("uid 65532 gid 65532 (no cfgread) read %s: exit %d, want %d (grant must be the group, not the uid)", configToml, code, probeDenied)
 	}
 
 	// The mail user -- even holding the domain's own gid -- is denied on the
@@ -278,7 +287,7 @@ func TestRootCheckDomainDrift(t *testing.T) {
 		}
 	}
 
-	// Chown a config file to root:root -- losing the authReadGID group that
+	// Chown a config file to root:root -- losing the cfgread group that
 	// lets auth-oidc read it. This is ownership-only drift (mode untouched),
 	// invisible to an off-root check.
 	configToml := filepath.Join(p.Config, "example.com", "config.toml")
@@ -299,8 +308,8 @@ func TestRootCheckDomainDrift(t *testing.T) {
 		if e.Path != configToml {
 			t.Errorf("unexpected drifted entry %s", e.Path)
 		}
-		if e.GotGID != 0 || e.GID != authReadGID {
-			t.Errorf("drift entry gid = got %d want-field %d; expected got 0, want %d", e.GotGID, e.GID, authReadGID)
+		if e.GotGID != 0 || e.GID != int(CfgreadGID) {
+			t.Errorf("drift entry gid = got %d want-field %d; expected got 0, want %d", e.GotGID, e.GID, CfgreadGID)
 		}
 	}
 

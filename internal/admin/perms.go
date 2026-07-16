@@ -27,20 +27,25 @@ import (
 // mail-session, spawned as the recipient, can read and write its own maildir
 // and keyring.
 //
-// The read-only config tree has its own model (issue #145):
+// The read-only config tree has its own model (issues #145, #152):
 //
-//	config/                    root:65532   2750  (drwxr-s---)
-//	config/{domain}/           root:65532   2750
-//	config/{domain}/*          root:65532   0640  (files; subdirs 2750)
+//	config/                    webadmin:cfgread   2750  (drwxr-s---)
+//	config/{domain}/           webadmin:cfgread   2750
+//	config/{domain}/*          webadmin:cfgread   0640  (files; subdirs 2750)
 //
-// Root is the only writer; the group grants read to auth-oidc, the OIDC IdP,
-// which reads each domain's config.toml and passwd as the distroless nonroot
-// uid over a read-only mount. It is the only legitimate nonroot config-tree
-// reader: mail-session (recipient uid) is deliberately denied and degrades to
-// defaults (see auth/domain/filesystem.go). The setgid bit on the directories
-// makes every file a root process writes later -- webadmin's temp+rename
-// saves, userctl, the id allocator -- inherit the group with no cooperation
-// from the write sites.
+// webadmin owns the tree because it is the writer -- owning its own writes is
+// what lets it eventually run unprivileged (issue #154). The cfgread group
+// grants read to auth-oidc (each domain's config.toml and passwd, over a
+// read-only mount) and to queue-manager (per-domain outbound routing);
+// membership is an explicit grant via a dedicated gid, deliberately NOT the
+// distroless-nonroot 65532, so merely running as distroless nonroot conveys
+// nothing. mail-session (recipient uid) is deliberately denied and degrades
+// to defaults (see auth/domain/filesystem.go). The setgid bit on the
+// directories makes every file any writer creates later -- webadmin's
+// temp+rename saves, root-run userctl, the id allocator -- inherit the group
+// with no cooperation from the write sites; a root-owned file left by a
+// root-run userctl is repaired to webadmin ownership by the next fix or
+// provisioning pass, and stays group-readable meanwhile.
 //
 // Ownership changes require root; on a non-root process (dev, tests, rootless)
 // applyPlan is a no-op for chown and reports it, since the uid/gid model is only
@@ -55,13 +60,6 @@ const userDirMode = os.FileMode(0o700)
 
 // rootUID owns the shared domain/users directories.
 const rootUID = 0
-
-// authReadGID is the group granted read access to the config tree: the
-// distroless nonroot gid auth-oidc runs as. Chosen because it requires no
-// deployment change; exposure is controlled by what mounts the tree, not by
-// the gid value. Moving to a dedicated gid later is this constant plus a
-// fix-perms run plus a compose group_add.
-const authReadGID = 65532
 
 // configFileMode is the mode for config-tree files: rw-r----- so root writes
 // and the IdP group reads; no world bits keeps passwd private to the two.
@@ -152,13 +150,13 @@ func (p Paths) domainPermPlan(domain string) ([]permEntry, error) {
 
 // configPermPlan returns the desired ownership/mode for a domain's config-tree
 // paths, plus the shared config root and its ledger files: everything
-// root:authReadGID, dirs setgid. File entries are planned only when the file
+// webadmin:cfgread, dirs setgid. File entries are planned only when the file
 // exists -- the doctor repairs ownership, it does not invent files.
 func (p Paths) configPermPlan(domain string) []permEntry {
 	domainDir := filepath.Join(p.Config, domain)
 	plan := []permEntry{
-		{Path: p.Config, UID: rootUID, GID: authReadGID, Mode: sharedDirMode},
-		{Path: domainDir, UID: rootUID, GID: authReadGID, Mode: sharedDirMode},
+		{Path: p.Config, UID: int(WebadminUID), GID: int(CfgreadGID), Mode: sharedDirMode},
+		{Path: domainDir, UID: int(WebadminUID), GID: int(CfgreadGID), Mode: sharedDirMode},
 	}
 
 	// Shared files at the config root, then the domain's own files.
@@ -171,7 +169,7 @@ func (p Paths) configPermPlan(domain string) []permEntry {
 		filepath.Join(domainDir, "forwards"),
 	} {
 		if info, err := os.Stat(f); err == nil && info.Mode().IsRegular() {
-			plan = append(plan, permEntry{Path: f, UID: rootUID, GID: authReadGID, Mode: configFileMode})
+			plan = append(plan, permEntry{Path: f, UID: int(WebadminUID), GID: int(CfgreadGID), Mode: configFileMode})
 		}
 	}
 
@@ -185,7 +183,7 @@ func (p Paths) configPermPlan(domain string) []permEntry {
 		if err != nil || !info.IsDir() {
 			continue
 		}
-		plan = append(plan, permEntry{Path: d, UID: rootUID, GID: authReadGID, Mode: sharedDirMode})
+		plan = append(plan, permEntry{Path: d, UID: int(WebadminUID), GID: int(CfgreadGID), Mode: sharedDirMode})
 		entries, err := os.ReadDir(d)
 		if err != nil {
 			continue
@@ -194,7 +192,7 @@ func (p Paths) configPermPlan(domain string) []permEntry {
 			if !e.Type().IsRegular() {
 				continue
 			}
-			plan = append(plan, permEntry{Path: filepath.Join(d, e.Name()), UID: rootUID, GID: authReadGID, Mode: configFileMode})
+			plan = append(plan, permEntry{Path: filepath.Join(d, e.Name()), UID: int(WebadminUID), GID: int(CfgreadGID), Mode: configFileMode})
 		}
 	}
 	return plan
@@ -283,7 +281,7 @@ func (p Paths) provisionDomainDataDirs(domain string) error {
 }
 
 // provisionDomainConfigTree applies the config-tree ownership model to a
-// freshly created domain (root:authReadGID, setgid dirs, 0640 files) so
+// freshly created domain (webadmin:cfgread, setgid dirs, 0640 files) so
 // auth-oidc can read it from first boot. Ownership is a no-op off-root; modes
 // still apply.
 func (p Paths) provisionDomainConfigTree(domain string) error {

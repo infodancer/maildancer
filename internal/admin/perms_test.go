@@ -118,7 +118,8 @@ func TestFixDomain_CreatesModesAndIsIdempotent(t *testing.T) {
 }
 
 // TestConfigPermPlan encodes the config-tree side of the security model:
-// everything root:authReadGID, dirs 2750 (setgid), files 0640, so the nonroot
+// everything webadmin-owned with the cfgread group, dirs 2750 (setgid), files
+// 0640, so the nonroot
 // auth-oidc reader gets group read while root keeps sole write. Regression for
 // the outage where root provisioning writes left the tree unreadable to the
 // IdP (issue #145).
@@ -154,8 +155,8 @@ func TestConfigPermPlan(t *testing.T) {
 		if e.Mode != os.FileMode(0o750)|os.ModeSetgid {
 			t.Errorf("%s mode = %v, want 2750 setgid", d, e.Mode)
 		}
-		if e.UID != 0 || e.GID != authReadGID {
-			t.Errorf("%s owner = %d:%d, want 0:%d", d, e.UID, e.GID, authReadGID)
+		if e.UID != int(WebadminUID) || e.GID != int(CfgreadGID) {
+			t.Errorf("%s owner = %d:%d, want %d:%d", d, e.UID, e.GID, WebadminUID, CfgreadGID)
 		}
 	}
 	for _, f := range wantFiles {
@@ -167,8 +168,8 @@ func TestConfigPermPlan(t *testing.T) {
 		if e.Mode != os.FileMode(0o640) {
 			t.Errorf("%s mode = %v, want 0640", f, e.Mode)
 		}
-		if e.UID != 0 || e.GID != authReadGID {
-			t.Errorf("%s owner = %d:%d, want 0:%d", f, e.UID, e.GID, authReadGID)
+		if e.UID != int(WebadminUID) || e.GID != int(CfgreadGID) {
+			t.Errorf("%s owner = %d:%d, want %d:%d", f, e.UID, e.GID, WebadminUID, CfgreadGID)
 		}
 	}
 
@@ -186,8 +187,8 @@ func TestConfigPermPlan(t *testing.T) {
 	for _, e := range p.configPermPlan("example.com") {
 		if e.Path == filepath.Join(domainDir, "forwards") {
 			found = true
-			if e.Mode != os.FileMode(0o640) || e.UID != 0 || e.GID != authReadGID {
-				t.Errorf("forwards entry = %d:%d %v, want 0:%d 0640", e.UID, e.GID, e.Mode, authReadGID)
+			if e.Mode != os.FileMode(0o640) || e.UID != int(WebadminUID) || e.GID != int(CfgreadGID) {
+				t.Errorf("forwards entry = %d:%d %v, want %d:%d 0640", e.UID, e.GID, e.Mode, WebadminUID, CfgreadGID)
 			}
 		}
 	}
@@ -197,7 +198,7 @@ func TestConfigPermPlan(t *testing.T) {
 }
 
 // TestConfigPermPlan_KeyFiles: files inside keys/ (legacy flat key dir,
-// auth-oidc's read-fallback) are planned 0640 root:authReadGID.
+// auth-oidc's read-fallback) are planned 0640 webadmin:cfgread.
 func TestConfigPermPlan_KeyFiles(t *testing.T) {
 	p := newTestPaths(t)
 	if _, err := p.CreateDomain("example.com"); err != nil {
@@ -210,8 +211,8 @@ func TestConfigPermPlan_KeyFiles(t *testing.T) {
 
 	for _, e := range p.configPermPlan("example.com") {
 		if e.Path == keyFile {
-			if e.Mode != os.FileMode(0o640) || e.UID != 0 || e.GID != authReadGID {
-				t.Errorf("key file entry = %d:%d %v, want 0:%d 0640", e.UID, e.GID, e.Mode, authReadGID)
+			if e.Mode != os.FileMode(0o640) || e.UID != int(WebadminUID) || e.GID != int(CfgreadGID) {
+				t.Errorf("key file entry = %d:%d %v, want %d:%d 0640", e.UID, e.GID, e.Mode, WebadminUID, CfgreadGID)
 			}
 			return
 		}
@@ -482,5 +483,41 @@ func TestFixDomain_AllocatesMissingGID(t *testing.T) {
 	gid, err := p.domainGid("example.com")
 	if err != nil || gid == 0 {
 		t.Errorf("gid not allocated: gid=%d err=%v", gid, err)
+	}
+}
+
+// TestMutationsRepairConfigOwnership: user mutations rewrite config-tree
+// files via temp+rename, so a root-run userctl would otherwise leave
+// root-owned inodes webadmin cannot append to (#152). Every mutating entry
+// point re-applies the config plan; off-root that at least repairs modes,
+// which is what this asserts (the ownership half is covered by the
+// rootintegration suite).
+func TestMutationsRepairConfigOwnership(t *testing.T) {
+	p := newTestPaths(t)
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.CreateUser("example.com", "alice", "password123", false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drift a file the mutation does NOT rewrite: the passwd rewrite itself
+	// recreates passwd at 0640, so only a sibling file proves the plan-wide
+	// repair actually ran.
+	configToml := filepath.Join(p.Config, "example.com", "config.toml")
+	if err := os.Chmod(configToml, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.ResetPassword("example.com", "alice", "newpassword456"); err != nil {
+		t.Fatalf("ResetPassword: %v", err)
+	}
+
+	info, err := os.Stat(configToml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Errorf("config.toml mode after mutation = %v, want 0640 (repair hook must run)", info.Mode())
 	}
 }

@@ -91,18 +91,28 @@ func (c *SessionManagerConfig) IsEnabled() bool {
 
 // Config holds the complete SMTP server configuration.
 type Config struct {
-	Hostname           string               `toml:"hostname"`
-	LogLevel           string               `toml:"log_level"`
-	RecipientRejection RejectionMode        `toml:"recipient_rejection"`
-	Listeners          []ListenerConfig     `toml:"listeners"`
-	TLS                TLSConfig            `toml:"tls"`
-	Limits             LimitsConfig         `toml:"limits"`
-	Timeouts           TimeoutsConfig       `toml:"timeouts"`
-	Metrics            MetricsConfig        `toml:"metrics"`
-	SpamCheck          SpamCheckConfig      `toml:"spamcheck"`
-	Spamtrap           SpamtrapConfig       `toml:"spamtrap"`
-	Redis              RedisConfig          `toml:"-"` // populated from [redis] top-level section
-	SessionManager     SessionManagerConfig `toml:"-"` // populated from [session-manager] top-level section
+	Hostname           string        `toml:"hostname"`
+	LogLevel           string        `toml:"log_level"`
+	RecipientRejection RejectionMode `toml:"recipient_rejection"`
+	// HandlerUID/HandlerGID/HandlerGroups are the credentials the listener
+	// drops each protocol-handler subprocess to. The listener itself stays
+	// privileged (it binds low ports and needs CAP_SETUID/SETGID to spawn);
+	// only the per-connection handlers run under these ids. A zero
+	// HandlerUID (the default) disables the drop: handlers inherit the
+	// listener's credentials, which keeps dev and rootless setups working.
+	HandlerUID    uint32   `toml:"handler_uid"`
+	HandlerGID    uint32   `toml:"handler_gid"`
+	HandlerGroups []uint32 `toml:"handler_groups"`
+
+	Listeners      []ListenerConfig     `toml:"listeners"`
+	TLS            TLSConfig            `toml:"tls"`
+	Limits         LimitsConfig         `toml:"limits"`
+	Timeouts       TimeoutsConfig       `toml:"timeouts"`
+	Metrics        MetricsConfig        `toml:"metrics"`
+	SpamCheck      SpamCheckConfig      `toml:"spamcheck"`
+	Spamtrap       SpamtrapConfig       `toml:"spamtrap"`
+	Redis          RedisConfig          `toml:"-"` // populated from [redis] top-level section
+	SessionManager SessionManagerConfig `toml:"-"` // populated from [session-manager] top-level section
 }
 
 // SpamtrapConfig holds configuration for spamtrap auto-learning.
@@ -362,6 +372,12 @@ func (c *Config) Validate() error {
 		if c.Metrics.Path == "" {
 			return errors.New("metrics path is required when metrics are enabled")
 		}
+	}
+
+	// Handler gid/groups make no sense without a handler uid: they would
+	// silently leave handlers running with the listener's credentials.
+	if c.HandlerUID == 0 && (c.HandlerGID != 0 || len(c.HandlerGroups) > 0) {
+		return errors.New("handler_gid/handler_groups require handler_uid")
 	}
 
 	// Validate recipient rejection mode

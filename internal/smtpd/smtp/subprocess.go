@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 )
@@ -25,19 +26,20 @@ import (
 //	SMTPD_CLIENT_IP     - remote IP address of the connecting client
 //	SMTPD_LISTENER_MODE - listener mode (smtp/submission/smtps/alt)
 type SubprocessServer struct {
-	listeners  []config.ListenerConfig
+	cfg        config.Config
 	execPath   string
 	configPath string
 	logger     *slog.Logger
 	wg         sync.WaitGroup
 }
 
-// NewSubprocessServer creates a SubprocessServer.
+// NewSubprocessServer creates a SubprocessServer from the listener's
+// effective configuration (listeners, handler credentials, TLS overrides).
 // execPath is the path to the smtpd binary (use os.Executable()).
 // configPath is passed to each subprocess as the --config flag value.
-func NewSubprocessServer(listeners []config.ListenerConfig, execPath, configPath string, logger *slog.Logger) *SubprocessServer {
+func NewSubprocessServer(cfg config.Config, execPath, configPath string, logger *slog.Logger) *SubprocessServer {
 	return &SubprocessServer{
-		listeners:  listeners,
+		cfg:        cfg,
 		execPath:   execPath,
 		configPath: configPath,
 		logger:     logger,
@@ -46,8 +48,8 @@ func NewSubprocessServer(listeners []config.ListenerConfig, execPath, configPath
 
 // Run starts accept loops on all configured ports and blocks until ctx is cancelled.
 func (s *SubprocessServer) Run(ctx context.Context) error {
-	lns := make([]net.Listener, 0, len(s.listeners))
-	for _, lc := range s.listeners {
+	lns := make([]net.Listener, 0, len(s.cfg.Listeners))
+	for _, lc := range s.cfg.Listeners {
 		ln, err := net.Listen("tcp", lc.Address)
 		if err != nil {
 			for _, l := range lns {
@@ -66,7 +68,7 @@ func (s *SubprocessServer) Run(ctx context.Context) error {
 		go func(ln net.Listener, lc config.ListenerConfig) {
 			defer s.wg.Done()
 			s.acceptLoop(ctx, ln, lc)
-		}(ln, s.listeners[i])
+		}(ln, s.cfg.Listeners[i])
 	}
 
 	<-ctx.Done()
@@ -121,13 +123,8 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 
 	cmd := exec.Command(s.execPath, "protocol-handler", "--config", s.configPath)
 	cmd.ExtraFiles = []*os.File{connFile} // becomes fd 3 in the child
-	cmd.Env = append(
-		[]string{
-			"SMTPD_CLIENT_IP=" + clientIP,
-			"SMTPD_LISTENER_MODE=" + string(lc.Mode),
-		},
-		inheritEnv("PATH", "HOME", "USER", "TMPDIR", "TMP", "TEMP")...,
-	)
+	cmd.Env = handlerEnv(s.cfg, clientIP, lc.Mode)
+	cmd.SysProcAttr = handlerSysProcAttr(s.cfg)
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
@@ -155,6 +152,45 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 			s.logger.Debug("protocol-handler exited", slog.Int("pid", pid))
 		}
 	}()
+}
+
+// handlerSysProcAttr builds the SysProcAttr for protocol-handler subprocesses.
+// When handler_uid is configured the handler is spawned directly under those
+// credentials (the listener holds the privilege; the child never calls
+// setuid/setgid itself, matching the session-manager -> mail-session model).
+// A zero handler_uid returns nil: no drop, handlers inherit the listener's
+// credentials, which keeps dev and rootless setups working.
+func handlerSysProcAttr(cfg config.Config) *syscall.SysProcAttr {
+	if cfg.HandlerUID == 0 {
+		return nil
+	}
+	return &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid:    cfg.HandlerUID,
+			Gid:    cfg.HandlerGID,
+			Groups: cfg.HandlerGroups,
+		},
+		Setpgid: true,
+	}
+}
+
+// handlerEnv builds the protocol-handler subprocess environment: connection
+// metadata, the listener's effective TLS material, and a minimal inherited
+// base. The TLS paths are passed explicitly because the handler re-reads the
+// config file itself -- without this, -tls-cert/-tls-key (or env) overrides
+// given to the listener would never reach the handler.
+func handlerEnv(cfg config.Config, clientIP string, mode config.ListenerMode) []string {
+	env := []string{
+		"SMTPD_CLIENT_IP=" + clientIP,
+		"SMTPD_LISTENER_MODE=" + string(mode),
+	}
+	if cfg.TLS.CertFile != "" {
+		env = append(env, "SMTPD_TLS_CERT_FILE="+cfg.TLS.CertFile)
+	}
+	if cfg.TLS.KeyFile != "" {
+		env = append(env, "SMTPD_TLS_KEY_FILE="+cfg.TLS.KeyFile)
+	}
+	return append(env, inheritEnv("PATH", "HOME", "USER", "TMPDIR", "TMP", "TEMP")...)
 }
 
 // inheritEnv returns "KEY=VALUE" strings for the named env vars that are set.

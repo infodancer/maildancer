@@ -74,7 +74,7 @@ func runServe() {
 		"listeners", len(cfg.Listeners),
 		"exec", execPath)
 
-	srv := smtp.NewSubprocessServer(cfg.Listeners, execPath, configPath, logger)
+	srv := smtp.NewSubprocessServer(cfg, execPath, configPath, logger)
 	if err := srv.Run(ctx); err != nil && err != context.Canceled {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)

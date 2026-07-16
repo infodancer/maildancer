@@ -137,6 +137,44 @@ func TestAuditLogEntries(t *testing.T) {
 	}
 }
 
+func TestDomainPermDrift(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	if err := metrics.Register(reg); err != nil {
+		t.Fatalf("Register returned error: %v", err)
+	}
+
+	metrics.DomainPermDrift.WithLabelValues("example.com").Set(3)
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather returned error: %v", err)
+	}
+
+	val := findGaugeValue(t, mfs, "webadmin_domain_perm_drift", map[string]string{"domain": "example.com"})
+	if val != 3 {
+		t.Errorf("expected gauge value 3, got %v", val)
+	}
+}
+
+func TestPermCheckLastRun(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	if err := metrics.Register(reg); err != nil {
+		t.Fatalf("Register returned error: %v", err)
+	}
+
+	metrics.PermCheckLastRun.SetToCurrentTime()
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather returned error: %v", err)
+	}
+
+	val := findGaugeValue(t, mfs, "webadmin_perm_check_last_run_timestamp_seconds", nil)
+	if val <= 0 {
+		t.Errorf("expected a positive unix timestamp, got %v", val)
+	}
+}
+
 func TestRegisterTwice(t *testing.T) {
 	reg1 := prometheus.NewRegistry()
 	if err := metrics.Register(reg1); err != nil {

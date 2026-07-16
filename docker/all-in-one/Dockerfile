@@ -12,7 +12,9 @@
 # not container-based. session-manager spawns mail-session and smtpd spawns its
 # protocol-handler / mail-deliver children as per-user/per-domain uids, so this
 # container must run as root (or with CAP_SETUID + CAP_SETGID). That is the
-# expected posture for an appliance mail image.
+# expected posture for an appliance mail image. pop3d and imapd, which spawn
+# nothing and reach storage only through session-manager's gRPC socket, run as
+# the fixed service accounts declared below (see internal/admin for the ids).
 #
 # Build context is the repository root.
 FROM golang:1.26-alpine AS builder
@@ -35,7 +37,7 @@ COPY . .
 # /mail-session and queue-manager is invoked with --binary /mail-remote.
 RUN set -eux; \
     for c in session-manager mail-session smtpd pop3d imapd \
-             queue-manager mail-remote webadmin auth-oidc userctl; do \
+             queue-manager mail-remote webadmin auth-oidc userctl tlsstage; do \
         CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o "/out/${c}" "./cmd/${c}"; \
     done
 
@@ -58,9 +60,28 @@ ADD https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLA
 RUN test "${TARGETARCH:-amd64}" = "amd64" \
     && tar -C / -Jxpf /tmp/s6-arch.tar.xz && rm /tmp/s6-arch.tar.xz
 
+# Service accounts with fixed ids (mirrored as constants in internal/admin,
+# next to the uid/gid allocator's 10000 floor -- these must stay below it).
+# mailsvc is the shared daemon group; cfgread names the config-tree read gid
+# (no members yet). Only pop3d/imapd drop root today; the other accounts are
+# inert until later issues.
+RUN addgroup -S -g 900 mailsvc \
+    && addgroup -S -g 65532 cfgread \
+    && adduser -S -D -H -u 901 -G mailsvc -s /sbin/nologin pop3d \
+    && adduser -S -D -H -u 902 -G mailsvc -s /sbin/nologin imapd \
+    && adduser -S -D -H -u 903 -G mailsvc -s /sbin/nologin smtpd \
+    && adduser -S -D -H -u 904 -G mailsvc -s /sbin/nologin queued \
+    && adduser -S -D -H -u 905 -G mailsvc -s /sbin/nologin webadmin
+
 # Daemons at / to match the config (mail_session_cmd = "/mail-session") and the
 # queue-manager --binary /mail-remote contract.
 COPY --from=builder /out/ /
+
+# Let the unprivileged daemons bind their standard low ports (110/995 and
+# 143/993); the in-container ports are unchanged.
+RUN apk add --no-cache libcap \
+    && setcap 'cap_net_bind_service=+ep' /pop3d \
+    && setcap 'cap_net_bind_service=+ep' /imapd
 
 # s6-rc service tree.
 COPY docker/all-in-one/rootfs/ /

@@ -3,9 +3,13 @@ name: Root permission-model test
 # The permission model in internal/admin/perms.go only chowns when running as
 # root, so the shared CI test job (off-root) never executes its enforcement --
 # every existing test skips the chown path. This job runs the
-# rootintegration-tagged test inside a container, where the default user is
-# root, so the ownership model and the nonroot reader contract actually run.
-# Local equivalent: `task test:root`.
+# rootintegration-tagged test in a golang container as root, so the ownership
+# model and the nonroot reader contract actually run.
+#
+# The container is driven via `docker run` rather than the workflow-level
+# `container:` feature: the self-hosted runners are themselves containerized
+# and cannot initialize Actions container jobs (no /proc/1/cgroup), but they
+# do carry a working docker CLI. Local equivalent: `task test:root`.
 
 on:
   push:
@@ -18,11 +22,11 @@ permissions:
 jobs:
   root-test:
     runs-on: [self-hosted, linux, ci]
-    container: golang:1.26
-    env:
-      # The container checkout is owned by a different uid than root; skip VCS
-      # stamping so git's dubious-ownership check cannot fail the build.
-      GOFLAGS: -buildvcs=false
     steps:
       - uses: actions/checkout@v6
-      - run: go test -tags rootintegration -count=1 ./internal/admin/
+      - run: >
+          docker run --rm
+          -v "$PWD":/src -w /src
+          -e GOFLAGS=-buildvcs=false
+          golang:1.26
+          go test -tags rootintegration -count=1 ./internal/admin/

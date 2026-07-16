@@ -32,8 +32,10 @@ func loadMap(path string) (map[string]uint32, error) {
 // storeMap atomically writes a flat "key" = uint map to a TOML file with the
 // given header comment. Keys are emitted sorted for stable diffs; values are
 // plain integers. The write is tmp-file + rename so a reader never sees a
-// partial file. The file mode is 0640 (root:root by deployment); the maps are
-// not secret but govern cross-user isolation, so they are not world-readable.
+// partial file. The file mode is 0640, owned root with the config-tree read
+// group (root:authReadGID via the setgid config dirs -- see
+// internal/admin/perms.go); the maps are not secret but govern cross-user
+// isolation, so they are not world-readable.
 func storeMap(path, header string, m map[string]uint32) error {
 	var b strings.Builder
 	for _, line := range strings.Split(strings.TrimRight(header, "\n"), "\n") {

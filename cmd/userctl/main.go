@@ -278,6 +278,7 @@ func usage() {
     userctl domain dkim   show   <domain>             DKIM key + DNS TXT record
     userctl domain dns    <domain> [--hostname <h>] [--ip <i>]   check public DNS records
     userctl domain fix      <domain> | --all          allocate missing ids + repair data-dir perms (run as root)
+    userctl domain check    <domain>                  read-only perm drift check (exit 1 on drift)
 
   Users:
     userctl user add    <user@domain> [--gen-keys] [--password-stdin]

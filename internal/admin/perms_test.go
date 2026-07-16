@@ -3,6 +3,7 @@ package admin
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -273,6 +274,183 @@ func TestCreateDomain_ProvisionsConfigTree(t *testing.T) {
 	}
 	if keysInfo.Mode()&os.ModeSetgid == 0 {
 		t.Errorf("keys dir missing setgid bit: %v", keysInfo.Mode())
+	}
+}
+
+// TestCheckDomain_CleanAfterFix: right after FixDomain the read-only checker
+// reports zero drift. Off-root, ownership is not compared (mirroring
+// applyPlan's chown skip), so every entry is marked Skipped -- mode drift is
+// still what the off-root doctor can fix, and that is what the check covers.
+func TestCheckDomain_CleanAfterFix(t *testing.T) {
+	p := newTestPaths(t)
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.CreateUser("example.com", "alice", "password123", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.FixDomain("example.com"); err != nil {
+		t.Fatalf("FixDomain: %v", err)
+	}
+
+	report, err := p.CheckDomain("example.com")
+	if err != nil {
+		t.Fatalf("CheckDomain: %v", err)
+	}
+	if report.Domain != "example.com" {
+		t.Errorf("report domain = %q", report.Domain)
+	}
+	if n := report.DriftCount(); n != 0 {
+		for _, e := range report.Entries {
+			if e.Changed {
+				t.Logf("drifted: %s want %d:%d %v got %d:%d %v err=%q",
+					e.Path, e.UID, e.GID, e.Mode, e.GotUID, e.GotGID, e.GotMode, e.Err)
+			}
+		}
+		t.Errorf("DriftCount = %d after FixDomain, want 0", n)
+	}
+	if len(report.Entries) < 5 {
+		t.Errorf("expected at least 5 entries (data, users, alice, config root, domain config), got %d", len(report.Entries))
+	}
+	if os.Geteuid() != 0 {
+		for _, e := range report.Entries {
+			if !e.Skipped {
+				t.Errorf("off-root, ownership comparison must be skipped: %s", e.Path)
+			}
+		}
+	}
+}
+
+// TestCheckDomain_ModeDrift: a chmod'd config.toml is reported as exactly one
+// drifted entry, with the observed mode; restoring the mode makes the check
+// clean again. The check itself must not repair anything.
+func TestCheckDomain_ModeDrift(t *testing.T) {
+	p := newTestPaths(t)
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.FixDomain("example.com"); err != nil {
+		t.Fatalf("FixDomain: %v", err)
+	}
+
+	configToml := filepath.Join(p.Config, "example.com", "config.toml")
+	if err := os.Chmod(configToml, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := p.CheckDomain("example.com")
+	if err != nil {
+		t.Fatalf("CheckDomain: %v", err)
+	}
+	if n := report.DriftCount(); n != 1 {
+		t.Fatalf("DriftCount = %d, want exactly 1", n)
+	}
+	var drifted *PermResult
+	for i := range report.Entries {
+		if report.Entries[i].Changed {
+			drifted = &report.Entries[i]
+		}
+	}
+	if drifted == nil || drifted.Path != configToml {
+		t.Fatalf("drifted entry = %+v, want %s", drifted, configToml)
+	}
+	if drifted.GotMode.Perm() != 0o750 {
+		t.Errorf("GotMode = %v, want 0750", drifted.GotMode)
+	}
+	if drifted.Mode.Perm() != 0o640 {
+		t.Errorf("want mode = %v, want 0640", drifted.Mode)
+	}
+
+	// CheckDomain is read-only: the drift is still there.
+	info, err := os.Stat(configToml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o750 {
+		t.Errorf("CheckDomain repaired the mode: %v", info.Mode())
+	}
+
+	// Restore and the check runs clean.
+	if err := os.Chmod(configToml, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	report, err = p.CheckDomain("example.com")
+	if err != nil {
+		t.Fatalf("CheckDomain after restore: %v", err)
+	}
+	if n := report.DriftCount(); n != 0 {
+		t.Errorf("DriftCount after restore = %d, want 0", n)
+	}
+}
+
+// TestCheckDomain_NoGIDIsFindingNotError: a domain with no allocated gid is a
+// drift finding, not an error that aborts the check -- and the check must not
+// allocate one (that is FixDomain's job).
+func TestCheckDomain_NoGIDIsFindingNotError(t *testing.T) {
+	p := newTestPaths(t)
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(p.Config, "gid.toml")); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := p.CheckDomain("example.com")
+	if err != nil {
+		t.Fatalf("CheckDomain must not fail on a missing gid: %v", err)
+	}
+	found := false
+	for _, e := range report.Entries {
+		if e.Changed && strings.Contains(e.Err, "gid") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected a drift finding about the missing gid")
+	}
+	if report.DriftCount() == 0 {
+		t.Error("missing gid must count as drift")
+	}
+
+	// Strictly read-only: no gid was allocated.
+	if _, err := p.domainGid("example.com"); err == nil {
+		t.Error("CheckDomain allocated a gid; it must not write")
+	}
+}
+
+// TestCheckDomain_MissingDirIsDriftNotCreated: a data directory the model says
+// should exist is reported as drift, and the check does not create it.
+func TestCheckDomain_MissingDirIsDriftNotCreated(t *testing.T) {
+	p := newTestPaths(t)
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.CreateUser("example.com", "alice", "password123", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.FixDomain("example.com"); err != nil {
+		t.Fatalf("FixDomain: %v", err)
+	}
+
+	aliceDir := filepath.Join(p.Data, "example.com", "users", "alice")
+	if err := os.RemoveAll(aliceDir); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := p.CheckDomain("example.com")
+	if err != nil {
+		t.Fatalf("CheckDomain: %v", err)
+	}
+	if n := report.DriftCount(); n != 1 {
+		t.Fatalf("DriftCount = %d, want 1 (missing user dir)", n)
+	}
+	for _, e := range report.Entries {
+		if e.Changed && e.Path != aliceDir {
+			t.Errorf("unexpected drifted entry %s", e.Path)
+		}
+	}
+	if _, err := os.Stat(aliceDir); !os.IsNotExist(err) {
+		t.Errorf("CheckDomain created the missing dir (stat err=%v); it must not write", err)
 	}
 }
 

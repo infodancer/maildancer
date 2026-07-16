@@ -86,6 +86,12 @@ func (p Paths) CreateDomain(name string) (uint32, error) {
 		return 0, fmt.Errorf("set data directory ownership: %w", err)
 	}
 
+	// Same for the config tree (root:authReadGID, setgid), so the nonroot
+	// auth-oidc reader can serve the domain from first boot.
+	if err := p.provisionDomainConfigTree(name); err != nil {
+		return 0, fmt.Errorf("set config directory ownership: %w", err)
+	}
+
 	return gid, nil
 }
 

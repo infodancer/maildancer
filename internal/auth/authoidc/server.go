@@ -48,6 +48,11 @@ type Server struct {
 	store   Store
 	domains map[string]*domainEntry
 
+	// failedDomains records domains that were present at init but failed to
+	// load and are being served fail-closed (degraded start). Diagnostic
+	// only; the serving path never consults it.
+	failedDomains map[string]string
+
 	sweepCancel context.CancelFunc
 	sweepDone   chan struct{}
 
@@ -63,6 +68,12 @@ type Server struct {
 // too. The store is a SQLite database at {DataDir}/oidc-state.db -- co-located with
 // per-domain signing keys under DataDir because OIDC state is server-private, not
 // domain-admin editable.
+//
+// A domain that fails to load does not abort startup: it is logged, recorded,
+// and served fail-closed (requests hit the unknown-domain path), so one broken
+// domain cannot take the IdP down for every tenant (issue #145). Startup still
+// fails when no domain loads at all but at least one was attempted -- that is
+// an environment-level breakage where crashing is the right signal.
 func New(cfg *Config) (*Server, error) {
 	store, err := newSQLiteStore(filepath.Join(cfg.Server.DataDir, "oidc-state.db"), nil)
 	if err != nil {
@@ -70,13 +81,19 @@ func New(cfg *Config) (*Server, error) {
 	}
 
 	s := &Server{
-		cfg:     cfg,
-		keys:    newKeyStore(),
-		store:   store,
-		domains: make(map[string]*domainEntry),
+		cfg:           cfg,
+		keys:          newKeyStore(),
+		store:         store,
+		domains:       make(map[string]*domainEntry),
+		failedDomains: make(map[string]string),
 	}
 
 	seen := make(map[string]struct{})
+	skipFailed := func(name string, err error) {
+		s.failedDomains[name] = err.Error()
+		slog.Error("authoidc: domain failed to load; serving fail-closed",
+			"event", "domain_load_failed", "domain", name, "err", err)
+	}
 
 	// Primary source: every domain provisioned under DomainDataPath. A domain
 	// directory is one carrying a config.toml; anything else (e.g. a stray
@@ -100,8 +117,7 @@ func New(cfg *Config) (*Server, error) {
 			}
 			seen[name] = struct{}{}
 			if err := s.loadDomain(name); err != nil {
-				_ = store.Close()
-				return nil, fmt.Errorf("domain %s: %w", name, err)
+				skipFailed(name, err)
 			}
 		}
 	}
@@ -114,9 +130,24 @@ func New(cfg *Config) (*Server, error) {
 		}
 		seen[c.Domain] = struct{}{}
 		if err := s.loadDomain(c.Domain); err != nil {
-			_ = store.Close()
-			return nil, fmt.Errorf("domain %s: %w", c.Domain, err)
+			skipFailed(c.Domain, err)
 		}
+	}
+
+	if len(s.domains) == 0 && len(s.failedDomains) > 0 {
+		_ = store.Close()
+		names := make([]string, 0, len(s.failedDomains))
+		for name := range s.failedDomains {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return nil, fmt.Errorf("no domain loaded (%d attempted, all failed: %s)",
+			len(names), strings.Join(names, ", "))
+	}
+	if len(s.failedDomains) > 0 {
+		slog.Warn("authoidc: started degraded",
+			"event", "degraded_start",
+			"loaded", len(s.domains), "failed", len(s.failedDomains))
 	}
 
 	sweepCtx, cancelSweep := context.WithCancel(context.Background())

@@ -92,6 +92,9 @@ func (p Paths) ChangePassword(domain, username, oldPassword, newPassword string)
 			return fmt.Errorf("activate re-sealed key (password already changed; key is sealed under the OLD password until this is fixed): %w", err)
 		}
 	}
+	if err := p.provisionDomainConfigTree(domain); err != nil {
+		return fmt.Errorf("config ownership: %w", err)
+	}
 	return nil
 }
 
@@ -145,6 +148,9 @@ func (p Paths) ResetPasswordRegenKeys(domain, username, newPassword string) (str
 	_ = keys.DeleteKeypair(p.domainKeysDir(domain), username)
 	if _, err := p.createUserKeypair(domain, username, newPassword); err != nil {
 		return "", fmt.Errorf("regenerate keypair (password already changed; old key is orphaned until this is fixed): %w", err)
+	}
+	if err := p.provisionDomainConfigTree(domain); err != nil {
+		return "", fmt.Errorf("config ownership: %w", err)
 	}
 	status := p.userKeyStatus(domain, username)
 	return status.Fingerprint, nil

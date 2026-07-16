@@ -212,8 +212,11 @@ const firstReservedGID = uint32(10000)
 const (
 	// MailsvcGID is the shared service group for the unprivileged daemons.
 	MailsvcGID = uint32(900)
-	// CfgreadGID names the config-tree read group (no members yet).
-	CfgreadGID = uint32(65532)
+	// CfgreadGID is the dedicated config-tree read group: an explicit grant
+	// for the tree's nonroot readers (auth-oidc via compose group_add,
+	// queued in the image). Deliberately not 65532 -- running as distroless
+	// nonroot must not convey config-tree access by accident (issue #152).
+	CfgreadGID = uint32(906)
 
 	// Pop3dUID is the pop3d daemon's service account.
 	Pop3dUID = uint32(901)

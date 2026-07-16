@@ -96,6 +96,12 @@ func (p Paths) CreateUser(domain, username, password string, generateKeys bool) 
 		}
 	}
 
+	// Re-assert the config-tree model: root-run userctl writes land
+	// root-owned inodes otherwise (#152).
+	if err := p.provisionDomainConfigTree(domain); err != nil {
+		return result, fmt.Errorf("config ownership: %w", err)
+	}
+
 	return result, nil
 }
 
@@ -146,6 +152,9 @@ func (p Paths) DeleteUser(domain, username string) error {
 	_ = keys.DeleteKeypair(p.userKeyringDir(domain, username), keyringName)
 	_ = keys.DeleteKeypair(filepath.Join(domainPath, "keys"), username)
 
+	if err := p.provisionDomainConfigTree(domain); err != nil {
+		return fmt.Errorf("config ownership: %w", err)
+	}
 	return nil
 }
 
@@ -184,6 +193,9 @@ func (p Paths) ResetPassword(domain, username, password string) error {
 	}
 	if err := passwd.SetPassword(passwdPath, username, password); err != nil {
 		return fmt.Errorf("update password: %w", err)
+	}
+	if err := p.provisionDomainConfigTree(domain); err != nil {
+		return fmt.Errorf("config ownership: %w", err)
 	}
 	return nil
 }

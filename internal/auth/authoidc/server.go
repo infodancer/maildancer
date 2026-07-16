@@ -49,8 +49,9 @@ type Server struct {
 	domains map[string]*domainEntry
 
 	// failedDomains records domains that were present at init but failed to
-	// load and are being served fail-closed (degraded start). Diagnostic
-	// only; the serving path never consults it.
+	// load and are being served fail-closed (degraded start). The OIDC
+	// serving path never consults it; only /healthz reads its size, and the
+	// names and error strings stay out of HTTP responses.
 	failedDomains map[string]string
 
 	sweepCancel context.CancelFunc
@@ -318,9 +319,7 @@ func (s *Server) Close() error {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	mux.HandleFunc("GET /healthz", s.healthz)
 
 	mux.HandleFunc("POST /register", s.register)
 	mux.HandleFunc("GET /.well-known/openid-configuration", s.discovery)
@@ -333,6 +332,33 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /logout", s.logout)
 
 	return mux
+}
+
+// healthzResponse is the /healthz body. Failed is omitted when zero so the
+// healthy response carries no vestigial field.
+type healthzResponse struct {
+	Status string `json:"status"`
+	Loaded int    `json:"loaded"`
+	Failed int    `json:"failed,omitempty"`
+}
+
+// healthz reports whether every configured domain loaded at startup. The
+// route is internet-reachable through the reverse proxy, so the body carries
+// counts only -- never domain names or load-error text (those go to logs).
+// domains and failedDomains are written only during New; serving-time reads
+// need no locking.
+func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
+	resp := healthzResponse{
+		Status: "ok",
+		Loaded: len(s.domains),
+		Failed: len(s.failedDomains),
+	}
+	status := http.StatusOK
+	if resp.Failed > 0 {
+		resp.Status = "degraded"
+		status = http.StatusServiceUnavailable
+	}
+	respondJSON(w, status, resp)
 }
 
 // issuerBase returns the OIDC issuer string for the request.

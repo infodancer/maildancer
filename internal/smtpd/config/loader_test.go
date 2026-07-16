@@ -397,8 +397,9 @@ log_level = "warn"
 }
 
 func TestLoadSmtpdDoesNotOverrideServer(t *testing.T) {
-	// Global settings (hostname, TLS) come from [server] only.
-	// [smtpd] values for these fields are ignored.
+	// The hostname is global and comes from [server] only; TLS is
+	// per-section overridable ([smtpd.tls] wins where set, [server.tls]
+	// fills the rest -- #157).
 	content := `
 [server]
 hostname = "shared.example.com"
@@ -422,13 +423,15 @@ cert_file = "/etc/ssl/smtp-cert.pem"
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	// Server values should win -- smtpd does not override global settings
+	// The hostname stays [server]-won; [smtpd] hostname is ignored.
 	if cfg.Hostname != "shared.example.com" {
 		t.Errorf("hostname = %q, want 'shared.example.com' ([server] should win)", cfg.Hostname)
 	}
 
-	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
-		t.Errorf("tls.cert_file = %q, want '/etc/ssl/shared-cert.pem' ([server] should win)", cfg.TLS.CertFile)
+	// [smtpd.tls] set only cert_file, so it wins there; key_file falls
+	// through to [server.tls].
+	if cfg.TLS.CertFile != "/etc/ssl/smtp-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want '/etc/ssl/smtp-cert.pem' ([smtpd.tls] should win)", cfg.TLS.CertFile)
 	}
 
 	if cfg.TLS.KeyFile != "/etc/ssl/shared-key.pem" {
@@ -537,4 +540,37 @@ func createTempConfig(t *testing.T, content string) string {
 		t.Fatalf("failed to create temp config: %v", err)
 	}
 	return path
+}
+
+// TestLoadSectionTLSWinsOverServer: an [smtpd.tls] block must apply, and must
+// override [server.tls] (section beats shared, matching every other setting
+// and the precedence tlsstage encodes). Regression for the merge dropping
+// src.TLS entirely (#157).
+func TestLoadSectionTLSWinsOverServer(t *testing.T) {
+	content := `
+[server.tls]
+cert_file = "/etc/ssl/shared-cert.pem"
+key_file = "/etc/ssl/shared-key.pem"
+min_version = "1.2"
+
+[smtpd.tls]
+cert_file = "/etc/ssl/smtpd-cert.pem"
+key_file = "/etc/ssl/smtpd-key.pem"
+min_version = "1.3"
+`
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TLS.CertFile != "/etc/ssl/smtpd-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want the [smtpd.tls] value", cfg.TLS.CertFile)
+	}
+	if cfg.TLS.KeyFile != "/etc/ssl/smtpd-key.pem" {
+		t.Errorf("tls.key_file = %q, want the [smtpd.tls] value", cfg.TLS.KeyFile)
+	}
+	if cfg.TLS.MinVersion != "1.3" {
+		t.Errorf("tls.min_version = %q, want the [smtpd.tls] value", cfg.TLS.MinVersion)
+	}
 }

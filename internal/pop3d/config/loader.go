@@ -131,12 +131,25 @@ func mergeServerConfig(dst Config, src ServerConfig) Config {
 	return dst
 }
 
-// mergeConfig merges pop3d-specific values from [pop3d] into dst.
-// Global settings (hostname, TLS) come from [server] via mergeServerConfig
-// and are not read from [pop3d].
+// mergeConfig merges pop3d-specific values from [pop3d] into dst. It runs
+// after mergeServerConfig, so a [pop3d.tls] block overrides [server.tls] --
+// section beats shared, the same order every other setting follows. The
+// hostname alone stays [server]-only.
 func mergeConfig(dst, src Config) Config {
 	if src.LogLevel != "" {
 		dst.LogLevel = src.LogLevel
+	}
+
+	if src.TLS.CertFile != "" {
+		dst.TLS.CertFile = src.TLS.CertFile
+	}
+
+	if src.TLS.KeyFile != "" {
+		dst.TLS.KeyFile = src.TLS.KeyFile
+	}
+
+	if src.TLS.MinVersion != "" {
+		dst.TLS.MinVersion = src.TLS.MinVersion
 	}
 
 	if len(src.Listeners) > 0 {

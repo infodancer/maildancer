@@ -160,12 +160,25 @@ func mergeSessionManagerConfig(dst Config, src SessionManagerConfig) Config {
 	return dst
 }
 
-// mergeConfig merges imapd-specific values from [imapd] into dst.
-// Global settings (hostname, domains_path, domains_data_path, TLS) come from
-// [server] via mergeServerConfig and are not read from [imapd].
+// mergeConfig merges imapd-specific values from [imapd] into dst. It runs
+// after mergeServerConfig, so an [imapd.tls] block overrides [server.tls] --
+// section beats shared, the same order every other setting follows. The
+// hostname and domain paths stay [server]-only.
 func mergeConfig(dst, src Config) Config {
 	if src.LogLevel != "" {
 		dst.LogLevel = src.LogLevel
+	}
+
+	if src.TLS.CertFile != "" {
+		dst.TLS.CertFile = src.TLS.CertFile
+	}
+
+	if src.TLS.KeyFile != "" {
+		dst.TLS.KeyFile = src.TLS.KeyFile
+	}
+
+	if src.TLS.MinVersion != "" {
+		dst.TLS.MinVersion = src.TLS.MinVersion
 	}
 
 	if len(src.Listeners) > 0 {

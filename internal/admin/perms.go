@@ -26,6 +26,21 @@ import (
 // mail-session, spawned as the recipient, can read and write its own maildir
 // and keyring.
 //
+// The read-only config tree has its own model (issue #145):
+//
+//	config/                    root:65532   2750  (drwxr-s---)
+//	config/{domain}/           root:65532   2750
+//	config/{domain}/*          root:65532   0640  (files; subdirs 2750)
+//
+// Root is the only writer; the group grants read to auth-oidc, the OIDC IdP,
+// which reads each domain's config.toml and passwd as the distroless nonroot
+// uid over a read-only mount. It is the only legitimate nonroot config-tree
+// reader: mail-session (recipient uid) is deliberately denied and degrades to
+// defaults (see auth/domain/filesystem.go). The setgid bit on the directories
+// makes every file a root process writes later -- webadmin's temp+rename
+// saves, userctl, the id allocator -- inherit the group with no cooperation
+// from the write sites.
+//
 // Ownership changes require root; on a non-root process (dev, tests, rootless)
 // applyPlan is a no-op for chown and reports it, since the uid/gid model is only
 // meaningful under privilege separation anyway.
@@ -39,6 +54,17 @@ const userDirMode = os.FileMode(0o700)
 
 // rootUID owns the shared domain/users directories.
 const rootUID = 0
+
+// authReadGID is the group granted read access to the config tree: the
+// distroless nonroot gid auth-oidc runs as. Chosen because it requires no
+// deployment change; exposure is controlled by what mounts the tree, not by
+// the gid value. Moving to a dedicated gid later is this constant plus a
+// fix-perms run plus a compose group_add.
+const authReadGID = 65532
+
+// configFileMode is the mode for config-tree files: rw-r----- so root writes
+// and the IdP group reads; no world bits keeps passwd private to the two.
+const configFileMode = os.FileMode(0o640)
 
 // permEntry is one path's desired ownership and mode.
 type permEntry struct {
@@ -111,6 +137,56 @@ func (p Paths) domainPermPlan(domain string) ([]permEntry, error) {
 		})
 	}
 	return plan, nil
+}
+
+// configPermPlan returns the desired ownership/mode for a domain's config-tree
+// paths, plus the shared config root and its ledger files: everything
+// root:authReadGID, dirs setgid. File entries are planned only when the file
+// exists -- the doctor repairs ownership, it does not invent files.
+func (p Paths) configPermPlan(domain string) []permEntry {
+	domainDir := filepath.Join(p.Config, domain)
+	plan := []permEntry{
+		{Path: p.Config, UID: rootUID, GID: authReadGID, Mode: sharedDirMode},
+		{Path: domainDir, UID: rootUID, GID: authReadGID, Mode: sharedDirMode},
+	}
+
+	// Shared files at the config root, then the domain's own files.
+	for _, f := range []string{
+		filepath.Join(p.Config, "gid.toml"),
+		filepath.Join(p.Config, "config.toml"),
+		filepath.Join(domainDir, "config.toml"),
+		filepath.Join(domainDir, "passwd"),
+		filepath.Join(domainDir, "uid.toml"),
+		filepath.Join(domainDir, "forwards"),
+	} {
+		if info, err := os.Stat(f); err == nil && info.Mode().IsRegular() {
+			plan = append(plan, permEntry{Path: f, UID: rootUID, GID: authReadGID, Mode: configFileMode})
+		}
+	}
+
+	// Optional subdirectories and their files (keys/ is auth-oidc's legacy
+	// flat-key read-fallback; user_forwards/ is read by root-side delivery).
+	for _, d := range []string{
+		filepath.Join(domainDir, "keys"),
+		filepath.Join(domainDir, "user_forwards"),
+	} {
+		info, err := os.Stat(d)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		plan = append(plan, permEntry{Path: d, UID: rootUID, GID: authReadGID, Mode: sharedDirMode})
+		entries, err := os.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if !e.Type().IsRegular() {
+				continue
+			}
+			plan = append(plan, permEntry{Path: filepath.Join(d, e.Name()), UID: rootUID, GID: authReadGID, Mode: configFileMode})
+		}
+	}
+	return plan
 }
 
 // applyPlan applies a permission plan, creating missing directories. Ownership
@@ -195,6 +271,15 @@ func (p Paths) provisionDomainDataDirs(domain string) error {
 	return report.firstError()
 }
 
+// provisionDomainConfigTree applies the config-tree ownership model to a
+// freshly created domain (root:authReadGID, setgid dirs, 0640 files) so
+// auth-oidc can read it from first boot. Ownership is a no-op off-root; modes
+// still apply.
+func (p Paths) provisionDomainConfigTree(domain string) error {
+	report := applyPlan(p.configPermPlan(domain), false)
+	return report.firstError()
+}
+
 // provisionUserDataDir creates and owns a single user's data directory
 // (uid:gid 0700). Called at user creation, before any keyring is written.
 func (p Paths) provisionUserDataDir(domain, username string, uid uint32) error {
@@ -245,6 +330,7 @@ func (p Paths) FixDomain(domain string) (PermReport, error) {
 	if err != nil {
 		return PermReport{}, err
 	}
+	plan = append(plan, p.configPermPlan(domain)...)
 	report := applyPlan(plan, true)
 	report.Domain = domain
 	report.Allocated = allocated

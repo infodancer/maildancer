@@ -169,3 +169,48 @@ idle_timeout = "not-a-duration"
 		t.Fatal("expected error for invalid idle_timeout")
 	}
 }
+
+func TestLoad_SocketGroup(t *testing.T) {
+	content := `
+[session-manager]
+socket = "/tmp/test.sock"
+socket_group = "mailsvc"
+domains_path = "/etc/mail/domains"
+mail_session_cmd = "/usr/local/bin/mail-session"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.SocketGroup != "mailsvc" {
+		t.Errorf("SocketGroup = %q, want %q", cfg.SocketGroup, "mailsvc")
+	}
+}
+
+func TestLoad_SocketGroupDefaultEmpty(t *testing.T) {
+	content := `
+[session-manager]
+socket = "/tmp/test.sock"
+domains_path = "/etc/mail/domains"
+mail_session_cmd = "/usr/local/bin/mail-session"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.SocketGroup != "" {
+		t.Errorf("SocketGroup = %q, want empty", cfg.SocketGroup)
+	}
+}

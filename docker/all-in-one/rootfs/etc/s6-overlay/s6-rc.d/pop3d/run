@@ -1,2 +1,11 @@
 #!/command/with-contenv sh
-exec /pop3d serve -config /etc/infodancer/config.toml
+# Stage the TLS material somewhere the pop3d service account can read it:
+# the /etc/letsencrypt mount is read-only with a root-0600 key. When the
+# config names no TLS material nothing is staged and pop3d starts without
+# the overrides (TLS-less dev setups).
+/tlsstage -config /etc/infodancer/config.toml -section pop3d -out /run/tls/pop3d
+TLSFLAGS=""
+if [ -f /run/tls/pop3d/privkey.pem ]; then
+    TLSFLAGS="-tls-cert /run/tls/pop3d/fullchain.pem -tls-key /run/tls/pop3d/privkey.pem"
+fi
+exec s6-setuidgid pop3d /pop3d serve -config /etc/infodancer/config.toml $TLSFLAGS

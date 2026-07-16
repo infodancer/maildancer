@@ -1,2 +1,11 @@
 #!/command/with-contenv sh
-exec /imapd -config /etc/infodancer/config.toml
+# Stage the TLS material somewhere the imapd service account can read it:
+# the /etc/letsencrypt mount is read-only with a root-0600 key. When the
+# config names no TLS material nothing is staged and imapd starts without
+# the overrides (TLS-less dev setups).
+/tlsstage -config /etc/infodancer/config.toml -section imapd -out /run/tls/imapd
+TLSFLAGS=""
+if [ -f /run/tls/imapd/privkey.pem ]; then
+    TLSFLAGS="-tls-cert /run/tls/imapd/fullchain.pem -tls-key /run/tls/imapd/privkey.pem"
+fi
+exec s6-setuidgid imapd /imapd -config /etc/infodancer/config.toml $TLSFLAGS

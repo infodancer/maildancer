@@ -40,6 +40,7 @@ func main() {
 func runServe() {
 	configPath := flag.String("config", "", "path to TOML config file (required)")
 	socketPath := flag.String("socket", "", "unix socket path (overrides config)")
+	socketGroup := flag.String("socket-group", "", "group given connect access to the unix socket (overrides config)")
 	flag.Parse()
 
 	if *configPath == "" {
@@ -58,6 +59,9 @@ func runServe() {
 
 	if *socketPath != "" {
 		cfg.Socket = *socketPath
+	}
+	if *socketGroup != "" {
+		cfg.SocketGroup = *socketGroup
 	}
 	if cfg.Socket == "" && cfg.Listen == "" {
 		slog.Error("socket or listen address required (set in config or via --socket)")
@@ -118,7 +122,7 @@ func runServe() {
 			os.Exit(1)
 		}
 	} else {
-		if err := srv.ServeUnix(cfg.Socket); err != nil {
+		if err := srv.ServeUnix(cfg.Socket, cfg.SocketGroup); err != nil {
 			slog.Error("server", "error", err)
 			os.Exit(1)
 		}

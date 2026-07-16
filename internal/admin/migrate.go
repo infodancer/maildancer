@@ -204,6 +204,29 @@ func (p Paths) adoptDomainGID(domain string) (gid uint32, source string) {
 // by a lower gid (e.g. root) is not a real domain allocation to adopt.
 const firstReservedGID = uint32(10000)
 
+// Service accounts baked into the all-in-one Docker image. The unprivileged
+// daemons run under these fixed ids so that image rebuilds never reshuffle
+// ownership of anything they touch. They must stay below firstReservedGID
+// (the 10000 allocator floor) so they can never collide with an allocated
+// per-domain gid or per-user uid.
+const (
+	// MailsvcGID is the shared service group for the unprivileged daemons.
+	MailsvcGID = uint32(900)
+	// CfgreadGID names the config-tree read group (no members yet).
+	CfgreadGID = uint32(65532)
+
+	// Pop3dUID is the pop3d daemon's service account.
+	Pop3dUID = uint32(901)
+	// ImapdUID is the imapd daemon's service account.
+	ImapdUID = uint32(902)
+	// SmtpdUID is the smtpd daemon's service account.
+	SmtpdUID = uint32(903)
+	// QueuedUID is the queue-manager daemon's service account.
+	QueuedUID = uint32(904)
+	// WebadminUID is the webadmin daemon's service account.
+	WebadminUID = uint32(905)
+)
+
 // tomlDomainGID reads `[domain] gid` from a TOML file; 0 if absent/unreadable.
 func tomlDomainGID(path string) uint32 {
 	data, err := os.ReadFile(path)

@@ -14,6 +14,12 @@ type Config struct {
 	// Socket is the unix domain socket path the session manager listens on.
 	Socket string `toml:"socket"`
 
+	// SocketGroup optionally names a group given connect access to the unix
+	// socket: when set and running as root the socket is chowned
+	// root:<group> and chmoded 0770 so unprivileged protocol daemons in
+	// that group can reach it. Unset keeps the socket root-only (0600).
+	SocketGroup string `toml:"socket_group"`
+
 	// DomainsPath is the directory containing per-domain subdirectories
 	// (each with config.toml, passwd, etc.).
 	DomainsPath string `toml:"domains_path"`

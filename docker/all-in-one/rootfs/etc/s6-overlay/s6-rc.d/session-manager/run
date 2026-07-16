@@ -2,5 +2,8 @@
 # session-manager owns the per-user mail-session lifecycle and the unix socket
 # the protocol daemons proxy through. It must come up first; the socket lives
 # inside this container, so the directory is created here rather than shared.
+# -socket-group opens the socket to the mailsvc service group (pop3d/imapd run
+# unprivileged); a flag rather than config so the host-managed config file
+# needs no edits.
 mkdir -p /run/session-manager
-exec /session-manager -config /etc/infodancer/config.toml
+exec /session-manager -config /etc/infodancer/config.toml -socket-group mailsvc

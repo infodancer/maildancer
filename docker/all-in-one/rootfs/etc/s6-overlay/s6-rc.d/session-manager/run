@@ -3,7 +3,10 @@
 # the protocol daemons proxy through. It must come up first; the socket lives
 # inside this container, so the directory is created here rather than shared.
 # -socket-group opens the socket to the mailsvc service group (pop3d/imapd run
-# unprivileged); a flag rather than config so the host-managed config file
+# unprivileged); -queue-owner assigns enqueued outbound mail to the queued
+# account (queue-manager runs unprivileged, while this process writes the
+# queue as root). Flags rather than config so the host-managed config file
 # needs no edits.
 mkdir -p /run/session-manager
-exec /session-manager -config /etc/infodancer/config.toml -socket-group mailsvc
+exec /session-manager -config /etc/infodancer/config.toml -socket-group mailsvc \
+    -queue-owner queued

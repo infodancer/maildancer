@@ -40,6 +40,24 @@ tasks:
       - go test -coverprofile=coverage.out ./...
       - go tool cover -html=coverage.out -o coverage.html
 
+  test:root:
+    desc: >-
+      Run the root-context permission-model integration test
+      (internal/admin, tag rootintegration) as root in a Linux container.
+      Mounts the host module cache so no network fetch is needed.
+    cmds:
+      - >-
+        docker run --rm
+        -v {{.ROOT_DIR}}:/src
+        -v {{.GOMODCACHE}}:/go/pkg/mod
+        -w /src
+        -e GOFLAGS=-buildvcs=false
+        golang:1.26
+        go test -tags rootintegration -count=1 -run . ./internal/admin/
+    vars:
+      GOMODCACHE:
+        sh: go env GOMODCACHE
+
   fmt:
     desc: Check formatting
     cmds:

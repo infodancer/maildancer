@@ -35,6 +35,13 @@ timeout_minutes = 30
 # [webadmin.prometheus]
 # urls = ["http://prometheus:9090"]
 
+# Optional: periodic permission-drift sweep. Runs a read-only CheckDomain
+# across all domains and exports webadmin_domain_perm_drift{domain=...}
+# (drifted path count) plus a last-run timestamp gauge.
+# Interval is a Go duration; default "1h", "0" disables the sweep.
+# [webadmin.perm_check]
+# interval = "1h"
+
 # rspamd connection settings live in [spamcheck] alongside smtpd's config.
 # webadmin edits these in-place when the super_admin saves settings.
 # [spamcheck]

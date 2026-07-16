@@ -102,6 +102,47 @@ func TestRunDomainSubcommand_DelForce(t *testing.T) {
 	}
 }
 
+// TestRunDomainSubcommand_Check: `domain check` reports clean (nil error,
+// exit 0 via exitOnErr) on a fixed domain, errors (exit 1) when a config file
+// mode has drifted, and is clean again after `domain fix` repairs it.
+func TestRunDomainSubcommand_Check(t *testing.T) {
+	p := testPaths(t)
+	if err := runDomainSubcommand([]string{"create", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatalf("domain create: %v", err)
+	}
+	if err := runDomainSubcommand([]string{"fix", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatalf("domain fix: %v", err)
+	}
+
+	if err := runDomainSubcommand([]string{"check", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatalf("domain check on a fixed domain: %v", err)
+	}
+
+	configToml := filepath.Join(p.Config, "example.com", "config.toml")
+	if err := os.Chmod(configToml, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := runDomainSubcommand([]string{"check", "example.com"}, p, strings.NewReader("")); err == nil {
+		t.Fatal("domain check with drifted config.toml succeeded, want error (exit 1)")
+	}
+
+	// Check must not have repaired it.
+	info, err := os.Stat(configToml)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o750 {
+		t.Errorf("domain check repaired the mode: %v", info.Mode())
+	}
+
+	if err := runDomainSubcommand([]string{"fix", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Fatalf("domain fix (repair): %v", err)
+	}
+	if err := runDomainSubcommand([]string{"check", "example.com"}, p, strings.NewReader("")); err != nil {
+		t.Errorf("domain check after repair: %v", err)
+	}
+}
+
 func TestRunDomainSubcommand_Errors(t *testing.T) {
 	p := testPaths(t)
 	cases := [][]string{
@@ -110,7 +151,9 @@ func TestRunDomainSubcommand_Errors(t *testing.T) {
 		{"create", "not_a_domain"}, // invalid name
 		{"show", "nosuch.org"},     // missing domain
 		{"set", "nosuch.org", "dkim.selector", "x"}, // missing domain
-		{"bogus", "example.com"},                    // unknown action
+		{"check"},                // missing domain argument
+		{"check", "nosuch.org"},  // missing domain
+		{"bogus", "example.com"}, // unknown action
 	}
 	for _, args := range cases {
 		if err := runDomainSubcommand(args, p, strings.NewReader("")); err == nil {

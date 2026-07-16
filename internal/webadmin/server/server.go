@@ -597,6 +597,17 @@ func (s *Server) Run(ctx context.Context) error {
 		slog.String("address", ln.Addr().String()),
 		slog.Bool("tls", s.cfg.TLSEnabled()))
 
+	// Periodic permission-drift sweep (see permcheck.go). Validate rejects a
+	// malformed interval at startup, so the error branch is belt-and-braces.
+	if interval, err := s.cfg.PermCheckInterval(); err != nil {
+		s.logger.Warn("perm drift sweep disabled", slog.String("error", err.Error()))
+	} else if interval > 0 {
+		s.logger.Info("perm drift sweep enabled", slog.Duration("interval", interval))
+		go s.runPermCheckLoop(ctx, interval)
+	} else {
+		s.logger.Info("perm drift sweep disabled by config")
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		if s.cfg.TLSEnabled() {

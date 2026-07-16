@@ -1,2 +1,16 @@
 #!/command/with-contenv sh
-exec /smtpd serve -config /etc/infodancer/config.toml
+# Stage the TLS material somewhere the protocol-handler subprocesses can read
+# it: the /etc/letsencrypt mount is read-only with a root-0600 key. The
+# listener itself stays root (it binds 25/465/587 and spawns each handler
+# under another uid), but the per-connection handlers drop to the smtpd
+# service account (uid 903, primary group mailsvc gid 900), so they need the
+# staged root:mailsvc copies. The tlsrefresh service re-stages after certbot
+# renewals; handlers load the cert per connection, so renewals apply without
+# a restart. When the config names no TLS material nothing is staged and
+# smtpd starts without the overrides (TLS-less dev setups).
+/tlsstage -config /etc/infodancer/config.toml -section smtpd -out /run/tls/smtpd
+TLSFLAGS=""
+if [ -f /run/tls/smtpd/privkey.pem ]; then
+    TLSFLAGS="-tls-cert /run/tls/smtpd/fullchain.pem -tls-key /run/tls/smtpd/privkey.pem"
+fi
+exec /smtpd serve -config /etc/infodancer/config.toml -handler-uid 903 -handler-gid 900 $TLSFLAGS

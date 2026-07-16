@@ -224,3 +224,95 @@ func TestRootPermissionModel(t *testing.T) {
 		t.Errorf("mail user %d:%d read own data file %s: exit %d, want %d", aliceUID, domainGid, mailFile, code, probeOK)
 	}
 }
+
+// TestRootCheckDomainDrift pins CheckDomain's root-context contract: as root,
+// ownership IS compared (no Skipped entries), so a chown-to-root of a config
+// file -- the exact drift class behind the production outage -- shows up as
+// drift, and a re-run of FixDomain makes the check clean again. Off-root
+// tests can only cover the mode side of this.
+func TestRootCheckDomainDrift(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root; run via 'task test:root' (containerized)")
+	}
+
+	base := t.TempDir()
+	p := Paths{
+		Config: filepath.Join(base, "config"),
+		Data:   filepath.Join(base, "data"),
+	}
+	if err := os.MkdirAll(p.Config, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(p.Data, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.CreateDomain("example.com"); err != nil {
+		t.Fatalf("CreateDomain: %v", err)
+	}
+	if _, err := p.CreateUser("example.com", "alice", "password123", false); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := p.FixDomain("example.com"); err != nil {
+		t.Fatalf("FixDomain: %v", err)
+	}
+
+	// Clean right after a root FixDomain -- and nothing skipped, because root
+	// compares ownership as well as modes.
+	report, err := p.CheckDomain("example.com")
+	if err != nil {
+		t.Fatalf("CheckDomain: %v", err)
+	}
+	if n := report.DriftCount(); n != 0 {
+		for _, e := range report.Entries {
+			if e.Changed {
+				t.Logf("drifted: %s want %d:%d %v got %d:%d %v err=%q",
+					e.Path, e.UID, e.GID, e.Mode, e.GotUID, e.GotGID, e.GotMode, e.Err)
+			}
+		}
+		t.Fatalf("DriftCount = %d after root FixDomain, want 0", n)
+	}
+	for _, e := range report.Entries {
+		if e.Skipped {
+			t.Errorf("entry skipped under root: %s", e.Path)
+		}
+	}
+
+	// Chown a config file to root:root -- losing the authReadGID group that
+	// lets auth-oidc read it. This is ownership-only drift (mode untouched),
+	// invisible to an off-root check.
+	configToml := filepath.Join(p.Config, "example.com", "config.toml")
+	if err := os.Chown(configToml, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	report, err = p.CheckDomain("example.com")
+	if err != nil {
+		t.Fatalf("CheckDomain after chown: %v", err)
+	}
+	if n := report.DriftCount(); n != 1 {
+		t.Fatalf("DriftCount = %d after chown-to-root, want exactly 1", n)
+	}
+	for _, e := range report.Entries {
+		if !e.Changed {
+			continue
+		}
+		if e.Path != configToml {
+			t.Errorf("unexpected drifted entry %s", e.Path)
+		}
+		if e.GotGID != 0 || e.GID != authReadGID {
+			t.Errorf("drift entry gid = got %d want-field %d; expected got 0, want %d", e.GotGID, e.GID, authReadGID)
+		}
+	}
+
+	// FixDomain repairs it; the check runs clean again.
+	if _, err := p.FixDomain("example.com"); err != nil {
+		t.Fatalf("FixDomain (repair): %v", err)
+	}
+	report, err = p.CheckDomain("example.com")
+	if err != nil {
+		t.Fatalf("CheckDomain after repair: %v", err)
+	}
+	if n := report.DriftCount(); n != 0 {
+		t.Errorf("DriftCount = %d after repair, want 0", n)
+	}
+}

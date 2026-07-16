@@ -20,6 +20,7 @@ s6 supervises these long-running services (see `rootfs/etc/s6-overlay/s6-rc.d/`)
 | imapd | `/imapd -config …` | ports 143 / 993 |
 | queue-manager | `/queue-manager --config … --queue … --binary /mail-remote` | outbound; spawns `/mail-remote` |
 | webadmin | `/webadmin -config …` | port 8080 |
+| tlsrefresh | `/tlsstage … -refresh 1h` | keeps `/run/tls/smtpd` current after certbot renewals |
 
 `userctl` and `auth-oidc` are also installed at `/` for `docker exec` use
 (user/key provisioning, the leaf IdP) but are not started as services.
@@ -30,11 +31,12 @@ session-manager, which depends on the s6 `base` bundle.
 ## Why it must run as root
 
 Privilege separation in maildancer is **uid/gid-based**, not container-based:
-session-manager spawns mail-session and smtpd spawns its protocol-handler /
-mail-deliver children under per-user, per-domain uids via
-`SysProcAttr.Credential`. The container therefore needs root (or `CAP_SETUID` +
-`CAP_SETGID`). Putting the daemons in one container does not weaken that
-boundary -- the boundary was always the uid, never the container.
+session-manager spawns mail-session under per-user uids, and smtpd's listener
+(root, to bind 25/465/587) spawns a protocol-handler per connection dropped to
+the smtpd service account -- both via `SysProcAttr.Credential`. The container
+therefore needs root (or `CAP_SETUID` + `CAP_SETGID`). Putting the daemons in
+one container does not weaken that boundary -- the boundary was always the
+uid, never the container.
 
 ## What stays outside
 

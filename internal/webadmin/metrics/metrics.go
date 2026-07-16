@@ -24,6 +24,14 @@ var (
 
 	// AuditLogEntries counts audit log entries. Labels: operation
 	AuditLogEntries *prometheus.CounterVec
+
+	// DomainPermDrift tracks the number of paths drifted from the permission
+	// security model per domain (gauge, set by the periodic sweep). Labels: domain
+	DomainPermDrift *prometheus.GaugeVec
+
+	// PermCheckLastRun is the unix timestamp of the last completed
+	// permission-drift sweep (gauge).
+	PermCheckLastRun prometheus.Gauge
 )
 
 // Register initializes and registers all metrics with the given registerer.
@@ -74,6 +82,19 @@ func Register(reg prometheus.Registerer) error {
 		[]string{"operation"},
 	)
 
+	DomainPermDrift = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "webadmin_domain_perm_drift",
+			Help: "Number of paths drifted from the permission security model per domain.",
+		},
+		[]string{"domain"},
+	)
+
+	PermCheckLastRun = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "webadmin_perm_check_last_run_timestamp_seconds",
+		Help: "Unix timestamp of the last completed permission-drift sweep.",
+	})
+
 	for _, c := range []prometheus.Collector{
 		AdminAuthAttempts,
 		AdminOperations,
@@ -81,6 +102,8 @@ func Register(reg prometheus.Registerer) error {
 		UserCount,
 		KeyOperations,
 		AuditLogEntries,
+		DomainPermDrift,
+		PermCheckLastRun,
 	} {
 		if err := reg.Register(c); err != nil {
 			var are prometheus.AlreadyRegisteredError

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDefaults(t *testing.T) {
@@ -155,6 +156,52 @@ func TestLoadNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/config.toml")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestPermCheckInterval(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval string
+		want     time.Duration
+		wantErr  bool
+	}{
+		{name: "empty defaults to 1h", interval: "", want: time.Hour},
+		{name: "explicit duration", interval: "15m", want: 15 * time.Minute},
+		{name: "zero disables", interval: "0", want: 0},
+		{name: "garbage errors", interval: "often", wantErr: true},
+		{name: "negative errors", interval: "-5m", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &WebAdminConfig{PermCheck: PermCheckConfig{Interval: tt.interval}}
+			got, err := cfg.PermCheckInterval()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("PermCheckInterval() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && got != tt.want {
+				t.Errorf("PermCheckInterval() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValidatePermCheckInterval: a bad interval fails validation at startup
+// rather than being discovered when the sweep never runs.
+func TestValidatePermCheckInterval(t *testing.T) {
+	cfg := Config{
+		WebAdmin: WebAdminConfig{
+			DomainsPath: "/etc/mail/domains",
+			Auth:        AuthConfig{PasswdFile: "/etc/mail/admin-passwd"},
+			PermCheck:   PermCheckConfig{Interval: "often"},
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for unparseable perm_check.interval")
+	}
+	cfg.WebAdmin.PermCheck.Interval = "30m"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("Validate() with valid interval: %v", err)
 	}
 }
 

@@ -9,10 +9,11 @@
 # skew between session-manager and the daemons that talk to it.
 #
 # Privilege separation is unchanged: it is uid/gid-based (SysProcAttr.Credential),
-# not container-based. session-manager spawns mail-session and smtpd spawns its
-# protocol-handler / mail-deliver children as per-user/per-domain uids, so this
-# container must run as root (or with CAP_SETUID + CAP_SETGID). That is the
-# expected posture for an appliance mail image. pop3d and imapd, which spawn
+# not container-based. session-manager spawns mail-session per-user, and smtpd's
+# listener stays root -- it binds 25/465/587 and spawns a protocol-handler per
+# connection dropped to the smtpd service account (uid 903, group mailsvc) --
+# so this container must run as root (or with CAP_SETUID + CAP_SETGID). That is
+# the expected posture for an appliance mail image. pop3d and imapd, which spawn
 # nothing and reach storage only through session-manager's gRPC socket, run as
 # the fixed service accounts declared below (see internal/admin for the ids);
 # queue-manager runs as queued, and mail-remote inherits that via exec.
@@ -65,7 +66,9 @@ RUN test "${TARGETARCH:-amd64}" = "amd64" \
 # next to the uid/gid allocator's 10000 floor -- these must stay below it).
 # mailsvc is the shared daemon group; cfgread names the config-tree read gid
 # (queued joins it: queue-manager reads per-domain outbound routing config
-# from the root:cfgread 0640 config tree).
+# from the root:cfgread 0640 config tree). pop3d/imapd and queue-manager drop
+# root at exec and smtpd's per-connection handlers drop to the smtpd account;
+# webadmin stays root until its own issue.
 RUN addgroup -S -g 900 mailsvc \
     && addgroup -S -g 65532 cfgread \
     && adduser -S -D -H -u 901 -G mailsvc -s /sbin/nologin pop3d \

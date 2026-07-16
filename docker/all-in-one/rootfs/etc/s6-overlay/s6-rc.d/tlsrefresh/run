@@ -1,0 +1,8 @@
+#!/command/with-contenv sh
+# Re-stage smtpd's TLS material into /run/tls/smtpd when the source files
+# change (certbot drops renewed certs into the read-only /etc/letsencrypt
+# mount). smtpd's run script does the initial stage itself before exec, so
+# smtpd never starts without its certs; this service only keeps the staged
+# copies current. Handlers load the cert fresh per connection, so a restage
+# is picked up immediately without restarting smtpd.
+exec /tlsstage -config /etc/infodancer/config.toml -section smtpd -out /run/tls/smtpd -refresh 1h

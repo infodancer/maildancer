@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
@@ -18,6 +20,52 @@ type Flags struct {
 	TLSKey         string
 	MaxMessageSize int
 	MaxRecipients  int
+	HandlerUID     uint32
+	HandlerGID     uint32
+	HandlerGroups  []uint32
+}
+
+// uint32Value adapts a uint32 field to flag.Value with range checking.
+type uint32Value uint32
+
+func (v *uint32Value) String() string { return strconv.FormatUint(uint64(*v), 10) }
+
+func (v *uint32Value) Set(s string) error {
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return err
+	}
+	*v = uint32Value(n)
+	return nil
+}
+
+// gidListValue adapts a []uint32 field to flag.Value, parsing a
+// comma-separated list of numeric gids.
+type gidListValue []uint32
+
+func (v *gidListValue) String() string {
+	parts := make([]string, len(*v))
+	for i, g := range *v {
+		parts[i] = strconv.FormatUint(uint64(g), 10)
+	}
+	return strings.Join(parts, ",")
+}
+
+func (v *gidListValue) Set(s string) error {
+	if strings.TrimSpace(s) == "" {
+		*v = nil
+		return nil
+	}
+	var gids []uint32
+	for part := range strings.SplitSeq(s, ",") {
+		n, err := strconv.ParseUint(strings.TrimSpace(part), 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid gid %q: %w", part, err)
+		}
+		gids = append(gids, uint32(n))
+	}
+	*v = gids
+	return nil
 }
 
 // ParseFlags parses command-line flags and returns a Flags struct.
@@ -32,6 +80,9 @@ func ParseFlags() *Flags {
 	flag.StringVar(&f.TLSKey, "tls-key", "", "TLS key file path")
 	flag.IntVar(&f.MaxMessageSize, "max-message-size", 0, "Maximum message size in bytes")
 	flag.IntVar(&f.MaxRecipients, "max-recipients", 0, "Maximum recipients per message")
+	flag.Var((*uint32Value)(&f.HandlerUID), "handler-uid", "Uid to run protocol-handler subprocesses as (0 = no drop)")
+	flag.Var((*uint32Value)(&f.HandlerGID), "handler-gid", "Gid to run protocol-handler subprocesses as")
+	flag.Var((*gidListValue)(&f.HandlerGroups), "handler-groups", "Comma-separated supplementary gids for protocol-handler subprocesses")
 	flag.Parse()
 	return f
 }
@@ -108,6 +159,18 @@ func ApplyFlags(cfg Config, f *Flags) Config {
 		cfg.Limits.MaxRecipients = f.MaxRecipients
 	}
 
+	if f.HandlerUID != 0 {
+		cfg.HandlerUID = f.HandlerUID
+	}
+
+	if f.HandlerGID != 0 {
+		cfg.HandlerGID = f.HandlerGID
+	}
+
+	if len(f.HandlerGroups) > 0 {
+		cfg.HandlerGroups = f.HandlerGroups
+	}
+
 	return cfg
 }
 
@@ -154,6 +217,18 @@ func mergeConfig(dst, src Config) Config {
 
 	if len(src.Listeners) > 0 {
 		dst.Listeners = src.Listeners
+	}
+
+	if src.HandlerUID != 0 {
+		dst.HandlerUID = src.HandlerUID
+	}
+
+	if src.HandlerGID != 0 {
+		dst.HandlerGID = src.HandlerGID
+	}
+
+	if len(src.HandlerGroups) > 0 {
+		dst.HandlerGroups = src.HandlerGroups
 	}
 
 	if src.Limits.MaxMessageSize > 0 {

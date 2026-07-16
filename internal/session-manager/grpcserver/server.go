@@ -68,6 +68,18 @@ func New(mgr *manager.Manager, cfg *config.Config, mc metrics.Collector) (*Serve
 			MessageTTL: cfg.Queue.GetMessageTTL(),
 			Hostname:   cfg.Queue.Hostname,
 		}
+		// A configured owner that fails to resolve is a hard startup
+		// error: falling back to entries owned by this (privileged)
+		// process would strand mail the queue consumer cannot read.
+		if cfg.Queue.Owner != "" {
+			owner, err := resolveQueueOwner(cfg.Queue.Owner)
+			if err != nil {
+				return nil, fmt.Errorf("resolve queue owner %q: %w", cfg.Queue.Owner, err)
+			}
+			queueCfg.Owner = owner
+			slog.Info("queue entries will be owned by",
+				"user", cfg.Queue.Owner, "uid", owner.UID, "gid", owner.GID)
+		}
 		pb.RegisterOutboundServiceServer(gsrv, &outboundServer{
 			queueCfg:    queueCfg,
 			domainsPath: cfg.DomainsPath,
@@ -136,6 +148,24 @@ func applySocketAccess(socketPath, socketGroup string) error {
 		return fmt.Errorf("chmod socket: %w", err)
 	}
 	return nil
+}
+
+// resolveQueueOwner looks up a user account by name and returns its uid and
+// primary gid as a queue.Owner.
+func resolveQueueOwner(name string) (*queue.Owner, error) {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return nil, err
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return nil, fmt.Errorf("user %q has non-numeric uid %q", name, u.Uid)
+	}
+	gid, err := strconv.Atoi(u.Gid)
+	if err != nil {
+		return nil, fmt.Errorf("user %q has non-numeric gid %q", name, u.Gid)
+	}
+	return &queue.Owner{UID: uid, GID: gid}, nil
 }
 
 // resolveGID looks up a group by name and returns its numeric gid.

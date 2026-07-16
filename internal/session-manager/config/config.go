@@ -71,6 +71,12 @@ type QueueConfig struct {
 
 	// Hostname is the VERP domain. Falls back to the system hostname if empty.
 	Hostname string `toml:"hostname"`
+
+	// Owner optionally names the account that should own queue entries on
+	// disk (e.g. "queued"). session-manager writes the queue privileged;
+	// naming the (unprivileged) queue-manager account here keeps every new
+	// entry readable by it. Empty leaves entries owned by this process.
+	Owner string `toml:"owner"`
 }
 
 // GetMessageTTL parses MessageTTL as a duration, defaulting to 7 days.

@@ -214,3 +214,28 @@ mail_session_cmd = "/usr/local/bin/mail-session"
 		t.Errorf("SocketGroup = %q, want empty", cfg.SocketGroup)
 	}
 }
+
+func TestLoad_QueueOwner(t *testing.T) {
+	content := `
+[session-manager]
+socket = "/tmp/test.sock"
+mail_session_cmd = "/usr/local/bin/mail-session"
+
+[session-manager.queue]
+dir = "/var/spool/mail-queue"
+owner = "queued"
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Queue.Owner != "queued" {
+		t.Errorf("Queue.Owner = %q, want %q", cfg.Queue.Owner, "queued")
+	}
+}

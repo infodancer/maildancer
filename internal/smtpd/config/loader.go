@@ -219,6 +219,21 @@ func mergeConfig(dst, src Config) Config {
 		dst.Listeners = src.Listeners
 	}
 
+	// Section TLS overrides [server.tls]: section beats shared, the same
+	// order every other setting follows, and the precedence tlsstage already
+	// encodes when staging per-daemon material.
+	if src.TLS.CertFile != "" {
+		dst.TLS.CertFile = src.TLS.CertFile
+	}
+
+	if src.TLS.KeyFile != "" {
+		dst.TLS.KeyFile = src.TLS.KeyFile
+	}
+
+	if src.TLS.MinVersion != "" {
+		dst.TLS.MinVersion = src.TLS.MinVersion
+	}
+
 	if src.HandlerUID != 0 {
 		dst.HandlerUID = src.HandlerUID
 	}

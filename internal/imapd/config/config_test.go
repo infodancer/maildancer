@@ -183,12 +183,13 @@ cert_file = "/etc/ssl/imap-cert.pem"
 		t.Fatalf("Load returned error: %v", err)
 	}
 
-	// Server values should win for global settings
+	// The hostname is global: [server] wins and [imapd] hostname is ignored.
 	if cfg.Hostname != "shared.example.com" {
 		t.Errorf("hostname = %q, want %q ([server] should win)", cfg.Hostname, "shared.example.com")
 	}
-	if cfg.TLS.CertFile != "/etc/ssl/shared-cert.pem" {
-		t.Errorf("tls.cert_file = %q, want %q ([server] should win)", cfg.TLS.CertFile, "/etc/ssl/shared-cert.pem")
+	// TLS is per-section overridable: [imapd.tls] beats [server.tls] (#157).
+	if cfg.TLS.CertFile != "/etc/ssl/imap-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want %q ([imapd.tls] should win)", cfg.TLS.CertFile, "/etc/ssl/imap-cert.pem")
 	}
 
 	// Imapd-specific settings still apply
@@ -678,4 +679,36 @@ func writeTempTOML(t *testing.T, content string) string {
 		t.Fatalf("failed to write temp config file: %v", err)
 	}
 	return path
+}
+
+// TestLoadSectionTLSWinsOverServer: an [imapd.tls] block must apply, and must
+// override [server.tls] (section beats shared, matching the merge order every
+// other section follows). Regression for the merge dropping src.TLS entirely,
+// which made [imapd.tls] parse but never apply (#157).
+func TestLoadSectionTLSWinsOverServer(t *testing.T) {
+	const tomlContent = `
+[server.tls]
+cert_file = "/etc/ssl/shared-cert.pem"
+key_file = "/etc/ssl/shared-key.pem"
+min_version = "1.2"
+
+[imapd.tls]
+cert_file = "/etc/ssl/imapd-cert.pem"
+key_file = "/etc/ssl/imapd-key.pem"
+min_version = "1.3"
+`
+	path := writeTempTOML(t, tomlContent)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TLS.CertFile != "/etc/ssl/imapd-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want the [imapd.tls] value", cfg.TLS.CertFile)
+	}
+	if cfg.TLS.KeyFile != "/etc/ssl/imapd-key.pem" {
+		t.Errorf("tls.key_file = %q, want the [imapd.tls] value", cfg.TLS.KeyFile)
+	}
+	if cfg.TLS.MinVersion != "1.3" {
+		t.Errorf("tls.min_version = %q, want the [imapd.tls] value", cfg.TLS.MinVersion)
+	}
 }

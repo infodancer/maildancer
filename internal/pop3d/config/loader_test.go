@@ -388,3 +388,55 @@ func createTempConfig(t *testing.T, content string) string {
 	}
 	return path
 }
+
+// TestLoadSectionTLSWinsOverServer: a [pop3d.tls] block must apply, and must
+// override [server.tls] (section beats shared, matching the merge order every
+// other section follows). Regression for the merge dropping src.TLS entirely,
+// which made [pop3d.tls] parse but never apply (#157).
+func TestLoadSectionTLSWinsOverServer(t *testing.T) {
+	content := `
+[server.tls]
+cert_file = "/etc/ssl/shared-cert.pem"
+key_file = "/etc/ssl/shared-key.pem"
+min_version = "1.2"
+
+[pop3d.tls]
+cert_file = "/etc/ssl/pop3d-cert.pem"
+key_file = "/etc/ssl/pop3d-key.pem"
+min_version = "1.3"
+`
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TLS.CertFile != "/etc/ssl/pop3d-cert.pem" {
+		t.Errorf("tls.cert_file = %q, want the [pop3d.tls] value", cfg.TLS.CertFile)
+	}
+	if cfg.TLS.KeyFile != "/etc/ssl/pop3d-key.pem" {
+		t.Errorf("tls.key_file = %q, want the [pop3d.tls] value", cfg.TLS.KeyFile)
+	}
+	if cfg.TLS.MinVersion != "1.3" {
+		t.Errorf("tls.min_version = %q, want the [pop3d.tls] value", cfg.TLS.MinVersion)
+	}
+}
+
+// TestLoadSectionTLSAlone: [pop3d.tls] with no [server.tls] must apply on its
+// own.
+func TestLoadSectionTLSAlone(t *testing.T) {
+	content := `
+[pop3d.tls]
+cert_file = "/etc/ssl/pop3d-cert.pem"
+key_file = "/etc/ssl/pop3d-key.pem"
+`
+	path := createTempConfig(t, content)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.TLS.CertFile != "/etc/ssl/pop3d-cert.pem" || cfg.TLS.KeyFile != "/etc/ssl/pop3d-key.pem" {
+		t.Errorf("tls = %q/%q, want the [pop3d.tls] values", cfg.TLS.CertFile, cfg.TLS.KeyFile)
+	}
+}

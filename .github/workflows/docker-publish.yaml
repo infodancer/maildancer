@@ -30,6 +30,10 @@ jobs:
         include:
           - component: queue-manager
             dockerfile: cmd/queue-manager/Dockerfile
+          # Leaf OIDC IdP; replaces the retired auth repo's ghcr.io/infodancer/auth
+          # image (frozen pre-monorepo -- deployments must repoint here).
+          - component: auth-oidc
+            dockerfile: docker/auth-oidc.Dockerfile
           # All-in-one: the whole stack in one container (see docker/all-in-one).
           # The common, obvious deployment; the per-component images above remain
           # for operators who want to isolate each daemon.

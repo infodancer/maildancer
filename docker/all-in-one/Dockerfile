@@ -15,7 +15,8 @@
 # so this container must run as root (or with CAP_SETUID + CAP_SETGID). That is
 # the expected posture for an appliance mail image. pop3d and imapd, which spawn
 # nothing and reach storage only through session-manager's gRPC socket, run as
-# the fixed service accounts declared below (see internal/admin for the ids).
+# the fixed service accounts declared below (see internal/admin for the ids);
+# queue-manager runs as queued, and mail-remote inherits that via exec.
 #
 # Build context is the repository root.
 FROM golang:1.26-alpine AS builder
@@ -64,16 +65,18 @@ RUN test "${TARGETARCH:-amd64}" = "amd64" \
 # Service accounts with fixed ids (mirrored as constants in internal/admin,
 # next to the uid/gid allocator's 10000 floor -- these must stay below it).
 # mailsvc is the shared daemon group; cfgread names the config-tree read gid
-# (no members yet). pop3d/imapd drop root at exec and smtpd's per-connection
-# handlers drop to the smtpd account; the other accounts are inert until
-# later issues.
+# (queued joins it: queue-manager reads per-domain outbound routing config
+# from the root:cfgread 0640 config tree). pop3d/imapd and queue-manager drop
+# root at exec and smtpd's per-connection handlers drop to the smtpd account;
+# webadmin stays root until its own issue.
 RUN addgroup -S -g 900 mailsvc \
     && addgroup -S -g 65532 cfgread \
     && adduser -S -D -H -u 901 -G mailsvc -s /sbin/nologin pop3d \
     && adduser -S -D -H -u 902 -G mailsvc -s /sbin/nologin imapd \
     && adduser -S -D -H -u 903 -G mailsvc -s /sbin/nologin smtpd \
     && adduser -S -D -H -u 904 -G mailsvc -s /sbin/nologin queued \
-    && adduser -S -D -H -u 905 -G mailsvc -s /sbin/nologin webadmin
+    && adduser -S -D -H -u 905 -G mailsvc -s /sbin/nologin webadmin \
+    && adduser queued cfgread
 
 # Daemons at / to match the config (mail_session_cmd = "/mail-session") and the
 # queue-manager --binary /mail-remote contract.

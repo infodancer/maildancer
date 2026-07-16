@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -475,5 +476,73 @@ func TestWriteRejectsInvalidPresetMsgID(t *testing.T) {
 		if err == nil {
 			t.Errorf("Write accepted invalid preset msgid %q, want error", bad)
 		}
+	}
+}
+
+// TestWriteOwnerAssignsOwnership verifies that with Owner set, every
+// directory level below the queue root and every written file carries the
+// requested uid/gid. Run unprivileged this can only chown to the process's
+// own ids, but that still exercises the chown calls on every path; the
+// root-owned-writer case is covered by the container integration test.
+func TestWriteOwnerAssignsOwnership(t *testing.T) {
+	cfg := testConfig(t)
+	uid, gid := os.Getuid(), os.Getgid()
+	cfg.Owner = &Owner{UID: uid, GID: gid}
+
+	body := strings.NewReader("From: alice@example.com\r\n\r\nHello\r\n")
+	if _, err := Write(cfg, "alice@example.com", []string{"bob@gmail.com"}, "", body); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	checkOwner := func(path string) {
+		t.Helper()
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Skip("no Stat_t on this platform")
+		}
+		if int(st.Uid) != uid || int(st.Gid) != gid {
+			t.Errorf("%s owned %d:%d, want %d:%d", path, st.Uid, st.Gid, uid, gid)
+		}
+	}
+
+	msgDomainDir := filepath.Join(cfg.Dir, "msg", "com", "example")
+	envDomainDir := filepath.Join(cfg.Dir, "env", "com", "gmail")
+	for _, dir := range []string{
+		filepath.Join(cfg.Dir, "msg"),
+		filepath.Join(cfg.Dir, "msg", "com"),
+		msgDomainDir,
+		filepath.Join(cfg.Dir, "env"),
+		filepath.Join(cfg.Dir, "env", "com"),
+		envDomainDir,
+	} {
+		checkOwner(dir)
+	}
+	for _, name := range readDir(t, msgDomainDir) {
+		checkOwner(filepath.Join(msgDomainDir, name))
+	}
+	envs := readDir(t, envDomainDir)
+	if len(envs) != 1 {
+		t.Fatalf("expected 1 envelope, got %v", envs)
+	}
+	checkOwner(filepath.Join(envDomainDir, envs[0]))
+}
+
+// TestWriteOwnerChownFailureIsAnError verifies a failed chown fails the
+// write loudly: silently leaving entries owned by the writing process would
+// strand mail the unprivileged queue consumer cannot read.
+func TestWriteOwnerChownFailureIsAnError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root can chown to any owner; failure path needs an unprivileged run")
+	}
+	cfg := testConfig(t)
+	cfg.Owner = &Owner{UID: 0, GID: 0}
+
+	body := strings.NewReader("body")
+	if _, err := Write(cfg, "alice@example.com", []string{"bob@gmail.com"}, "", body); err == nil {
+		t.Fatal("Write succeeded despite impossible chown, want error")
 	}
 }

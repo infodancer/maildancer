@@ -165,7 +165,9 @@ url = "http://rspamd:11333"
 # --- queue manager (outbound delivery driver) ---
 [queue-manager]
 hostname = "mail.example.com"
-domain_config_path = "/opt/infodancer/domains"
+# Per-domain [outbound] overrides live in the CONFIG tree
+# (/etc/infodancer/domains/<domain>/config.toml), not the mail data tree.
+domain_config_path = "/etc/infodancer/domains"
 
 [queue-manager.session-manager]
 socket = "/run/session-manager/session-manager.sock"

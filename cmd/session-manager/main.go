@@ -41,6 +41,7 @@ func runServe() {
 	configPath := flag.String("config", "", "path to TOML config file (required)")
 	socketPath := flag.String("socket", "", "unix socket path (overrides config)")
 	socketGroup := flag.String("socket-group", "", "group given connect access to the unix socket (overrides config)")
+	queueOwner := flag.String("queue-owner", "", "user assigned ownership of enqueued outbound mail (overrides config)")
 	flag.Parse()
 
 	if *configPath == "" {
@@ -62,6 +63,9 @@ func runServe() {
 	}
 	if *socketGroup != "" {
 		cfg.SocketGroup = *socketGroup
+	}
+	if *queueOwner != "" {
+		cfg.Queue.Owner = *queueOwner
 	}
 	if cfg.Socket == "" && cfg.Listen == "" {
 		slog.Error("socket or listen address required (set in config or via --socket)")

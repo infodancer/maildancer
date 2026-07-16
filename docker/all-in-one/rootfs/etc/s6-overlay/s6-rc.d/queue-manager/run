@@ -1,3 +1,10 @@
 #!/command/with-contenv sh
-exec /queue-manager --config /etc/infodancer/config.toml \
+# The queue volume may hold root-owned entries from images that ran
+# queue-manager (or wrote the queue) as root, so repair ownership before
+# dropping privileges. chown -R is O(queue size) on every boot; the queue is
+# a small retry buffer, not message storage, so that is acceptable. Entries
+# enqueued after boot arrive owned queued via session-manager's -queue-owner.
+mkdir -p /var/spool/mail-queue
+chown -R queued:mailsvc /var/spool/mail-queue
+exec s6-setuidgid queued /queue-manager --config /etc/infodancer/config.toml \
     --queue /var/spool/mail-queue --binary /mail-remote

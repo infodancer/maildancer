@@ -102,7 +102,13 @@ func (p Paths) SetDomainConfig(domain, key, value string) error {
 	}
 
 	patched := PatchSectionValue(content, field.section, field.key, rawValue)
-	return writeFileAtomic(configPath, patched, 0o640)
+	if err := writeFileAtomic(configPath, patched, 0o640); err != nil {
+		return err
+	}
+	if err := p.provisionDomainConfigTree(domain); err != nil {
+		return fmt.Errorf("config ownership: %w", err)
+	}
+	return nil
 }
 
 // GetDomainConfigValue returns the current raw TOML value for a whitelisted

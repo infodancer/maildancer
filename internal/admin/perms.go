@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/infodancer/maildancer/auth/identity"
 	"github.com/infodancer/maildancer/auth/passwd"
@@ -86,15 +87,25 @@ type PermReport struct {
 	Entries  []PermResult
 }
 
-// PermResult is the per-path outcome of an apply.
+// PermResult is the per-path outcome of an apply or a check.
 type PermResult struct {
-	Path    string
-	UID     int
-	GID     int
-	Mode    os.FileMode
-	Changed bool   // ownership/mode actually changed
-	Skipped bool   // not applied (e.g. chown without privilege)
-	Err     string // non-empty when this path could not be fully fixed
+	Path string
+	UID  int
+	GID  int
+	Mode os.FileMode
+	// Changed means the apply changed this path -- or, in a CheckDomain
+	// report, that the path has drifted from the model.
+	Changed bool
+	// Skipped means chown was not applied (apply) or ownership was not
+	// compared (check) because the process is not root.
+	Skipped bool
+	Err     string // non-empty when this path could not be fully fixed/checked
+	// GotUID, GotGID, and GotMode record the observed owner and mode bits in
+	// a CheckDomain report (-1 uid/gid when the path is missing). Apply
+	// reports leave them zero.
+	GotUID  int
+	GotGID  int
+	GotMode os.FileMode
 }
 
 // domainPermPlan returns the desired ownership/mode for a domain's data tree
@@ -336,6 +347,104 @@ func (p Paths) FixDomain(domain string) (PermReport, error) {
 	report.Allocated = allocated
 	report.Warnings = p.shadowWarnings(domain)
 	return report, report.firstError()
+}
+
+// permModeBits are the mode bits the model prescribes and the checker
+// compares: the permission bits plus setuid/setgid/sticky. Comparing
+// info.Mode() whole would always mismatch on directories (ModeDir is set).
+const permModeBits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+
+// CheckDomain is FixDomain's read-only sibling: it builds the same plans and
+// reports where the tree has drifted from the security model, without
+// allocating ids, creating directories, or touching modes or ownership. No
+// lock is taken -- the plans are advisory, and a racing fix simply shows up
+// as a clean re-check. Off-root only modes are compared (see checkPlan). A
+// domain with no allocated gid is reported as a drift finding, not an error:
+// the check must never allocate.
+func (p Paths) CheckDomain(domain string) (PermReport, error) {
+	if !ValidDomainName(domain) {
+		return PermReport{}, ErrInvalidDomainName
+	}
+	if !p.DomainExists(domain) {
+		return PermReport{}, ErrDomainNotFound
+	}
+
+	report := PermReport{Domain: domain}
+	plan, err := p.domainPermPlan(domain)
+	switch {
+	case errors.Is(err, identity.ErrNoGID):
+		// The data-tree plan cannot be built; the config-tree plan below does
+		// not depend on the gid and is still checked.
+		report.Entries = append(report.Entries, PermResult{
+			Path:    filepath.Join(p.Data, domain),
+			Changed: true,
+			GotUID:  -1,
+			GotGID:  -1,
+			Err:     "domain has no allocated gid (run userctl domain fix)",
+		})
+		plan = nil
+	case err != nil:
+		return PermReport{}, err
+	}
+	plan = append(plan, p.configPermPlan(domain)...)
+	report.Entries = append(report.Entries, checkPlan(plan).Entries...)
+	return report, nil
+}
+
+// checkPlan is applyPlan's read-only sibling: it stats each planned path and
+// reports drift without changing anything. Changed=true means drifted.
+// Off-root, ownership is not compared (mirroring applyPlan's chown skip --
+// the uid/gid model is only meaningful under privilege separation) and every
+// entry is marked Skipped; modes are always compared. A missing path is
+// drift: plan file entries are built from existing files, so only
+// directories can be missing.
+func checkPlan(plan []permEntry) PermReport {
+	root := os.Geteuid() == 0
+	report := PermReport{}
+	for _, e := range plan {
+		res := PermResult{Path: e.Path, UID: e.UID, GID: e.GID, Mode: e.Mode, GotUID: -1, GotGID: -1}
+		if !root {
+			res.Skipped = true
+		}
+
+		info, statErr := os.Stat(e.Path)
+		if statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
+				res.Changed = true
+				res.Err = "missing"
+			} else {
+				res.Err = statErr.Error()
+			}
+			report.Entries = append(report.Entries, res)
+			continue
+		}
+
+		res.GotMode = info.Mode() & permModeBits
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			res.GotUID = int(st.Uid)
+			res.GotGID = int(st.Gid)
+		}
+		if res.GotMode != e.Mode&permModeBits {
+			res.Changed = true
+		}
+		if root && (res.GotUID != e.UID || res.GotGID != e.GID) {
+			res.Changed = true
+		}
+		report.Entries = append(report.Entries, res)
+	}
+	return report
+}
+
+// DriftCount returns the number of drifted entries in a check report (or,
+// for an apply report, the number of paths actually changed).
+func (r PermReport) DriftCount() int {
+	n := 0
+	for _, e := range r.Entries {
+		if e.Changed {
+			n++
+		}
+	}
+	return n
 }
 
 // firstError returns the first per-path error in a report, or nil.

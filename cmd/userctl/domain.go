@@ -105,6 +105,13 @@ func runDomainSubcommand(args []string, paths admin.Paths, stdin io.Reader) erro
 		}
 		return cmdDomainFix(paths, strings.ToLower(strings.TrimSpace(names[0])))
 
+	case "check":
+		if len(rest) != 1 {
+			domainUsage()
+			return fmt.Errorf("domain check: expected <domain>")
+		}
+		return cmdDomainCheck(paths, strings.ToLower(strings.TrimSpace(rest[0])))
+
 	case "key":
 		return runDomainKeyAction(rest, paths, stdin)
 
@@ -224,6 +231,58 @@ func printPermReport(report admin.PermReport) {
 	for _, w := range report.Warnings {
 		fmt.Printf("  warning: %s\n", w)
 	}
+}
+
+// cmdDomainCheck runs the read-only drift check and prints each drifted
+// entry (want vs got owner and mode). Drift is a non-nil error so the exit
+// code is 1 and scripts/monitoring can gate on it; a clean tree exits 0.
+func cmdDomainCheck(paths admin.Paths, name string) error {
+	report, err := paths.CheckDomain(name)
+	if err != nil {
+		return err
+	}
+	drift := report.DriftCount()
+	if drift == 0 {
+		fmt.Printf("domain %s: clean\n", name)
+		return nil
+	}
+
+	fmt.Printf("domain %s:\n", name)
+	skippedOwnership := false
+	for _, e := range report.Entries {
+		if e.Skipped {
+			skippedOwnership = true
+		}
+		if !e.Changed {
+			continue
+		}
+		if e.Err != "" {
+			fmt.Printf("  %-60s want %d:%d %04o  %s\n", e.Path, e.UID, e.GID, octalMode(e.Mode), e.Err)
+			continue
+		}
+		fmt.Printf("  %-60s want %d:%d %04o  got %d:%d %04o\n",
+			e.Path, e.UID, e.GID, octalMode(e.Mode), e.GotUID, e.GotGID, octalMode(e.GotMode))
+	}
+	if skippedOwnership {
+		fmt.Println("  note: not running as root; ownership was not compared, only modes")
+	}
+	return fmt.Errorf("domain %s: %d drifted path(s); run `userctl domain fix %s` as root to repair", name, drift, name)
+}
+
+// octalMode renders a FileMode in the familiar chmod octal form, including
+// the setuid/setgid/sticky bits (e.g. 2750), which Mode.Perm() drops.
+func octalMode(m os.FileMode) uint32 {
+	v := uint32(m.Perm())
+	if m&os.ModeSetuid != 0 {
+		v |= 0o4000
+	}
+	if m&os.ModeSetgid != 0 {
+		v |= 0o2000
+	}
+	if m&os.ModeSticky != 0 {
+		v |= 0o1000
+	}
+	return v
 }
 
 func cmdDomainDel(paths admin.Paths, name string, force bool) error {
@@ -463,6 +522,9 @@ func domainUsage() {
   userctl domain fix    <domain> | --all            allocate any missing gid/uids, then repair
                                                     data-dir ownership/modes per the security
                                                     model (run as root to apply uid:gid)
+  userctl domain check  <domain>                    read-only drift check against the security
+                                                    model; exits 1 and lists drifted paths
+                                                    (run as root to compare ownership too)
   userctl domain dkim   create <domain> [--selector <s>] [--force]
                                                     generate Ed25519 DKIM key and print
                                                     the DNS TXT record (default selector

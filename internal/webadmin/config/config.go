@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -53,6 +54,10 @@ type WebAdminConfig struct {
 	// Prometheus holds optional Prometheus integration for mail server stats.
 	Prometheus PrometheusConfig `toml:"prometheus"`
 
+	// PermCheck configures the periodic permission-drift sweep that feeds
+	// the webadmin_domain_perm_drift gauge.
+	PermCheck PermCheckConfig `toml:"perm_check"`
+
 	// FilePath is the path to the config file this struct was loaded from.
 	// Not a TOML field -- set programmatically by Load(). Used by handlers
 	// that need to write back to the shared config file (e.g. rspamd settings).
@@ -83,6 +88,14 @@ type AuditConfig struct {
 	// LogFile is the path to write JSON audit log lines.
 	// If empty, audit events go to slog only.
 	LogFile string `toml:"log_file"`
+}
+
+// PermCheckConfig holds settings for the periodic permission-drift sweep.
+type PermCheckConfig struct {
+	// Interval is the time between drift sweeps as a Go duration string
+	// (e.g. "1h", "30m"). Empty means the default of 1h; "0" disables the
+	// sweep entirely.
+	Interval string `toml:"interval"`
 }
 
 // SessionConfig holds session management settings.
@@ -118,7 +131,26 @@ func (c *Config) Validate() error {
 	if c.WebAdmin.TLS.KeyFile != "" && c.WebAdmin.TLS.CertFile == "" {
 		return fmt.Errorf("webadmin.tls.cert_file is required when key_file is set")
 	}
+	if _, err := c.WebAdmin.PermCheckInterval(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// PermCheckInterval returns the parsed permission-drift sweep interval.
+// Empty defaults to 1h; zero disables the sweep.
+func (c *WebAdminConfig) PermCheckInterval() (time.Duration, error) {
+	if c.PermCheck.Interval == "" {
+		return time.Hour, nil
+	}
+	d, err := time.ParseDuration(c.PermCheck.Interval)
+	if err != nil {
+		return 0, fmt.Errorf("webadmin.perm_check.interval: %w", err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("webadmin.perm_check.interval must not be negative")
+	}
+	return d, nil
 }
 
 // EffectiveDataPath returns DataPath if set, otherwise DomainsPath (backward compat).

@@ -28,6 +28,9 @@ func testServer(t *testing.T) *Server {
 		ListenAddress: "localhost:0",
 		DomainsPath:   t.TempDir(),
 		Session:       config.SessionConfig{TimeoutMinutes: 30},
+		// Disable the background drift sweep: it reads the package-level
+		// metric vars, which other tests re-Register concurrently.
+		PermCheck: config.PermCheckConfig{Interval: "0"},
 	}
 	deps := Deps{AuthAgent: &mockAuthAgent{}}
 	srv, err := New(cfg, deps, slog.Default())

@@ -24,6 +24,7 @@ type mockDeliveryServer struct {
 	temporary         bool
 	reason            string
 	redirectAddresses []string
+	folder            string
 
 	// captured values
 	metadata *pb.DeliverMetadata
@@ -56,6 +57,7 @@ func (s *mockDeliveryServer) Deliver(stream grpc.ClientStreamingServer[pb.Delive
 		Temporary:         s.temporary,
 		Reason:            s.reason,
 		RedirectAddresses: s.redirectAddresses,
+		Folder:            s.folder,
 	})
 }
 
@@ -82,6 +84,7 @@ func startMockServer(t *testing.T, srv *mockDeliveryServer) string {
 func TestSessionManagerDelivery_Delivered(t *testing.T) {
 	mock := &mockDeliveryServer{
 		result: pb.DeliverResult_DELIVER_RESULT_DELIVERED,
+		folder: "Junk",
 	}
 	socketPath := startMockServer(t, mock)
 
@@ -96,12 +99,15 @@ func TestSessionManagerDelivery_Delivered(t *testing.T) {
 	body := "Subject: Test\r\n\r\nHello, world!\r\n"
 	receivedTime := time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)
 
-	err = agent.Deliver(context.Background(),
+	folder, err := agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
 		"192.168.1.1", "mail.example.com",
 		receivedTime, false, "", strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("deliver: %v", err)
+	}
+	if folder != "Junk" {
+		t.Errorf("folder = %q, want %q", folder, "Junk")
 	}
 
 	// Verify metadata was passed correctly.
@@ -146,7 +152,7 @@ func TestSessionManagerDelivery_Rejected(t *testing.T) {
 	}
 	defer func() { _ = agent.Close() }()
 
-	err = agent.Deliver(context.Background(),
+	_, err = agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
 		"", "", time.Time{}, false, "", strings.NewReader("test"))
 	if err == nil {
@@ -176,7 +182,7 @@ func TestSessionManagerDelivery_RejectedTemporary(t *testing.T) {
 	}
 	defer func() { _ = agent.Close() }()
 
-	err = agent.Deliver(context.Background(),
+	_, err = agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
 		"", "", time.Time{}, false, "", strings.NewReader("test"))
 	if err == nil {
@@ -202,7 +208,7 @@ func TestSessionManagerDelivery_Redirected(t *testing.T) {
 	}
 	defer func() { _ = agent.Close() }()
 
-	err = agent.Deliver(context.Background(),
+	_, err = agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
 		"", "", time.Time{}, false, "", strings.NewReader("test"))
 	if err == nil {
@@ -238,7 +244,7 @@ func TestSessionManagerDelivery_LargeMessage(t *testing.T) {
 	// 256KB message -- forces multiple 64KB chunks.
 	largeBody := strings.Repeat("X", 256*1024)
 
-	err = agent.Deliver(context.Background(),
+	_, err = agent.Deliver(context.Background(),
 		"sender@example.com", "user@example.com",
 		"", "", time.Time{}, false, "", strings.NewReader(largeBody))
 	if err != nil {

@@ -124,6 +124,33 @@ if header :contains "Subject" "no-such-subject" {
 	})
 }
 
+func TestSieve_FileInto_ReportsFolder(t *testing.T) {
+	dlvr := setupDomainFixture(t, "")
+	writeSieve(t, dlvr, `require "fileinto";
+fileinto "Archive";
+`)
+
+	resp := deliverAlice(t, dlvr, false)
+	if resp.Result != ResultDelivered {
+		t.Fatalf("want ResultDelivered, got %v (reason: %q)", resp.Result, resp.Reason)
+	}
+	if resp.Folder != "Archive" {
+		t.Errorf("want Folder %q, got %q", "Archive", resp.Folder)
+	}
+}
+
+func TestSieve_ImplicitKeep_ReportsInboxFolder(t *testing.T) {
+	dlvr := setupDomainFixture(t, "")
+	// No .sieve script -- falls through to normal delivery (deliverLocal).
+	resp := deliverAlice(t, dlvr, false)
+	if resp.Result != ResultDelivered {
+		t.Fatalf("want ResultDelivered, got %v (reason: %q)", resp.Result, resp.Reason)
+	}
+	if resp.Folder != "INBOX" {
+		t.Errorf("want Folder %q, got %q", "INBOX", resp.Folder)
+	}
+}
+
 func TestSieve_FileIntoINBOX(t *testing.T) {
 	// fileinto "INBOX" must deliver to the inbox, not create a ".INBOX" folder.
 	dlvr := setupDomainFixture(t, "")

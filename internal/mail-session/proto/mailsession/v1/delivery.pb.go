@@ -279,8 +279,14 @@ type DeliverResponse struct {
 	Reason string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
 	// Redirect target addresses when result is REDIRECTED.
 	RedirectAddresses []string `protobuf:"bytes,4,rep,name=redirect_addresses,json=redirectAddresses,proto3" json:"redirect_addresses,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The mailbox folder the message was actually written to when result is
+	// DELIVERED (e.g. "INBOX", "Junk"). Empty when not applicable (rejected,
+	// redirected, or a pipeline path that predates this field). Lets callers
+	// (e.g. smtpd's IMAP IDLE notification) report the real outcome instead of
+	// re-deriving a guess from the spam-check verdict.
+	Folder        string `protobuf:"bytes,5,opt,name=folder,proto3" json:"folder,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeliverResponse) Reset() {
@@ -341,6 +347,13 @@ func (x *DeliverResponse) GetRedirectAddresses() []string {
 	return nil
 }
 
+func (x *DeliverResponse) GetFolder() string {
+	if x != nil {
+		return x.Folder
+	}
+	return ""
+}
+
 var File_mailsession_v1_delivery_proto protoreflect.FileDescriptor
 
 const file_mailsession_v1_delivery_proto_rawDesc = "" +
@@ -357,12 +370,13 @@ const file_mailsession_v1_delivery_proto_rawDesc = "" +
 	"\x0fclient_hostname\x18\x04 \x01(\tR\x0eclientHostname\x12\x1c\n" +
 	"\tforwarded\x18\x05 \x01(\bR\tforwarded\x12#\n" +
 	"\rreceived_time\x18\a \x01(\tR\freceivedTime\x12\x14\n" +
-	"\x05msgid\x18\b \x01(\tR\x05msgidJ\x04\b\x06\x10\aR\x13encryption_key_hint\"\xad\x01\n" +
+	"\x05msgid\x18\b \x01(\tR\x05msgidJ\x04\b\x06\x10\aR\x13encryption_key_hint\"\xc5\x01\n" +
 	"\x0fDeliverResponse\x125\n" +
 	"\x06result\x18\x01 \x01(\x0e2\x1d.mailsession.v1.DeliverResultR\x06result\x12\x1c\n" +
 	"\ttemporary\x18\x02 \x01(\bR\ttemporary\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12-\n" +
-	"\x12redirect_addresses\x18\x04 \x03(\tR\x11redirectAddresses*\x89\x01\n" +
+	"\x12redirect_addresses\x18\x04 \x03(\tR\x11redirectAddresses\x12\x16\n" +
+	"\x06folder\x18\x05 \x01(\tR\x06folder*\x89\x01\n" +
 	"\rDeliverResult\x12\x1e\n" +
 	"\x1aDELIVER_RESULT_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18DELIVER_RESULT_DELIVERED\x10\x01\x12\x1b\n" +

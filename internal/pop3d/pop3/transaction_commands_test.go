@@ -10,6 +10,37 @@ import (
 	"github.com/infodancer/maildancer/msgstore"
 )
 
+// simpleCommandCase is one state/args/expected-response case for a
+// no-argument command whose behavior is fully captured by OK + Message --
+// shared by the several transaction-state commands (STAT, RSET, ...) that
+// only vary in which command runs and what the messages say.
+type simpleCommandCase struct {
+	name        string
+	sess        *Session
+	args        []string
+	wantOK      bool
+	wantMessage string
+}
+
+// runSimpleCommandCases executes cmd against each case and checks OK/Message.
+func runSimpleCommandCases(t *testing.T, cmd Command, cases []simpleCommandCase) {
+	t.Helper()
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := cmd.Execute(context.Background(), tt.sess, newMockConnection(), tt.args)
+			if err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			if resp.OK != tt.wantOK {
+				t.Errorf("Execute() OK = %v, want %v", resp.OK, tt.wantOK)
+			}
+			if resp.Message != tt.wantMessage {
+				t.Errorf("Execute() Message = %q, want %q", resp.Message, tt.wantMessage)
+			}
+		})
+	}
+}
+
 // mockMessageStore is a test double for MessageStore.
 type mockMessageStore struct {
 	messages    []msgstore.MessageInfo
@@ -89,13 +120,7 @@ func newTransactionSession(store msgstore.MessageStore) *Session {
 }
 
 func TestStatCommand(t *testing.T) {
-	tests := []struct {
-		name        string
-		sess        *Session
-		args        []string
-		wantOK      bool
-		wantMessage string
-	}{
+	runSimpleCommandCases(t, &statCommand{}, []simpleCommandCase{
 		{
 			name:        "STAT in AUTHORIZATION state fails",
 			sess:        newTestSession(config.ModePop3s, true),
@@ -117,26 +142,7 @@ func TestStatCommand(t *testing.T) {
 			wantOK:      true,
 			wantMessage: "3 600", // 3 messages, 600 bytes total
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmd := &statCommand{}
-			resp, err := cmd.Execute(context.Background(), tt.sess, newMockConnection(), tt.args)
-
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
-
-			if resp.OK != tt.wantOK {
-				t.Errorf("Execute() OK = %v, want %v", resp.OK, tt.wantOK)
-			}
-
-			if resp.Message != tt.wantMessage {
-				t.Errorf("Execute() Message = %q, want %q", resp.Message, tt.wantMessage)
-			}
-		})
-	}
+	})
 }
 
 func TestListCommand(t *testing.T) {
@@ -353,13 +359,7 @@ func TestDeleAlreadyDeleted(t *testing.T) {
 }
 
 func TestRsetCommand(t *testing.T) {
-	tests := []struct {
-		name        string
-		sess        *Session
-		args        []string
-		wantOK      bool
-		wantMessage string
-	}{
+	runSimpleCommandCases(t, &rsetCommand{}, []simpleCommandCase{
 		{
 			name:        "RSET in AUTHORIZATION state fails",
 			sess:        newTestSession(config.ModePop3s, true),
@@ -381,26 +381,7 @@ func TestRsetCommand(t *testing.T) {
 			wantOK:      true,
 			wantMessage: "maildrop has 3 messages",
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmd := &rsetCommand{}
-			resp, err := cmd.Execute(context.Background(), tt.sess, newMockConnection(), tt.args)
-
-			if err != nil {
-				t.Fatalf("Execute() error = %v", err)
-			}
-
-			if resp.OK != tt.wantOK {
-				t.Errorf("Execute() OK = %v, want %v", resp.OK, tt.wantOK)
-			}
-
-			if resp.Message != tt.wantMessage {
-				t.Errorf("Execute() Message = %q, want %q", resp.Message, tt.wantMessage)
-			}
-		})
-	}
+	})
 }
 
 func TestRsetRestoresDeletions(t *testing.T) {

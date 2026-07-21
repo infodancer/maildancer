@@ -28,6 +28,64 @@ func mustNew(t *testing.T, cfg Config) *Scheduler {
 	return s
 }
 
+// queuePermFailEnvelope writes a single-recipient envelope (aged 10 minutes,
+// so it's ready) plus its body under dir, using envContent verbatim as the
+// envelope JSON -- letting callers vary fields like "origin" while sharing
+// the rest of the queue-layout boilerplate. Returns the queue root, the
+// per-domain envelope dir (what processDomainDir takes), and the envelope
+// file path.
+func queuePermFailEnvelope(t *testing.T, msgid, envContent string) (dir, envDir, envFile string) {
+	t.Helper()
+	dir = t.TempDir()
+
+	bodyDir := filepath.Join(dir, "msg", "com", "example")
+	if err := os.MkdirAll(bodyDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("From: a@b.com\r\n\r\nbody"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	envDir = filepath.Join(dir, "env", "com", "gmail")
+	if err := os.MkdirAll(envDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	envFile = filepath.Join(envDir, "alice@"+msgid+".0")
+	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-10 * time.Minute)
+	if err := os.Chtimes(envFile, old, old); err != nil {
+		t.Fatal(err)
+	}
+	return dir, envDir, envFile
+}
+
+// newMockDeliveryServer starts a mockDeliveryServer behind a real gRPC
+// listener and returns it alongside a delivery.Client pointed at it. Both the
+// server and client are torn down via t.Cleanup.
+func newMockDeliveryServer(t *testing.T) (*mockDeliveryServer, *delivery.Client) {
+	t.Helper()
+
+	mock := &mockDeliveryServer{}
+	lis, err := net.Listen("tcp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	pb.RegisterDeliveryServiceServer(srv, mock)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	cl, err := delivery.NewClient(lis.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cl.Close() })
+
+	return mock, cl
+}
+
 // --- extractMsgID ---
 
 func TestExtractMsgID(t *testing.T) {
@@ -977,23 +1035,7 @@ func TestProcessDomainDir_DSNOnPermFail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Start mock delivery server.
-	mock := &mockDeliveryServer{}
-	lis, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := grpc.NewServer()
-	pb.RegisterDeliveryServiceServer(srv, mock)
-	go func() { _ = srv.Serve(lis) }()
-	defer srv.Stop()
-
-	// Create delivery client pointing to mock server.
-	cl, err := delivery.NewClient(lis.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cl.Close() }()
+	mock, cl := newMockDeliveryServer(t)
 
 	// Create scheduler with DSN enabled and inject the delivery client.
 	s := mustNew(t, Config{
@@ -1042,47 +1084,11 @@ func TestProcessDomainDir_DSNOnPermFail(t *testing.T) {
 
 func TestProcessDomainDir_DSNSkippedWhenDisabled(t *testing.T) {
 	fakeBin := buildFakeMailRemotePermFail(t)
-	dir := t.TempDir()
 	msgid := "nodsntest"
-
-	bodyDir := filepath.Join(dir, "msg", "com", "example")
-	if err := os.MkdirAll(bodyDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("From: a@b.com\r\n\r\nbody"), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	envDir := filepath.Join(dir, "env", "com", "gmail")
-	if err := os.MkdirAll(envDir, 0700); err != nil {
-		t.Fatal(err)
-	}
 	envContent := fmt.Sprintf(`{"msgid":"%s","origin":"user@example.com","recipient":"alice@gmail.com"}`, msgid)
-	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
-	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-10 * time.Minute)
-	if err := os.Chtimes(envFile, old, old); err != nil {
-		t.Fatal(err)
-	}
+	dir, envDir, _ := queuePermFailEnvelope(t, msgid, envContent)
 
-	// Start mock delivery server.
-	mock := &mockDeliveryServer{}
-	lis, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := grpc.NewServer()
-	pb.RegisterDeliveryServiceServer(srv, mock)
-	go func() { _ = srv.Serve(lis) }()
-	defer srv.Stop()
-
-	cl, err := delivery.NewClient(lis.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cl.Close() }()
+	mock, cl := newMockDeliveryServer(t)
 
 	// DSN disabled -- should not deliver.
 	s := mustNew(t, Config{
@@ -1181,21 +1187,7 @@ func main() {
 		t.Fatal(err)
 	}
 
-	mock := &mockDeliveryServer{}
-	lis, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := grpc.NewServer()
-	pb.RegisterDeliveryServiceServer(srv, mock)
-	go func() { _ = srv.Serve(lis) }()
-	defer srv.Stop()
-
-	cl, err := delivery.NewClient(lis.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cl.Close() }()
+	mock, cl := newMockDeliveryServer(t)
 
 	s := mustNew(t, Config{
 		QueueDir: dir,
@@ -1233,47 +1225,12 @@ func main() {
 
 func TestProcessDomainDir_DSNMissingOrigin(t *testing.T) {
 	fakeBin := buildFakeMailRemotePermFail(t)
-	dir := t.TempDir()
 	msgid := "noorigin"
-
-	bodyDir := filepath.Join(dir, "msg", "com", "example")
-	if err := os.MkdirAll(bodyDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(bodyDir, msgid), []byte("From: a@b.com\r\n\r\nbody"), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	envDir := filepath.Join(dir, "env", "com", "gmail")
-	if err := os.MkdirAll(envDir, 0700); err != nil {
-		t.Fatal(err)
-	}
 	// No origin field -- pre-migration envelope.
 	envContent := fmt.Sprintf(`{"msgid":"%s","recipient":"alice@gmail.com"}`, msgid)
-	envFile := filepath.Join(envDir, "alice@"+msgid+".0")
-	if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-10 * time.Minute)
-	if err := os.Chtimes(envFile, old, old); err != nil {
-		t.Fatal(err)
-	}
+	dir, envDir, _ := queuePermFailEnvelope(t, msgid, envContent)
 
-	mock := &mockDeliveryServer{}
-	lis, err := net.Listen("tcp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := grpc.NewServer()
-	pb.RegisterDeliveryServiceServer(srv, mock)
-	go func() { _ = srv.Serve(lis) }()
-	defer srv.Stop()
-
-	cl, err := delivery.NewClient(lis.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cl.Close() }()
+	mock, cl := newMockDeliveryServer(t)
 
 	s := mustNew(t, Config{
 		QueueDir: dir,

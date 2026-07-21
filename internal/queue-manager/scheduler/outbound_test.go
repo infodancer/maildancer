@@ -65,131 +65,116 @@ func TestSenderDomainFromBodyPath(t *testing.T) {
 
 // --- loadOutboundConfig ---
 
-func TestLoadOutboundConfig_SystemDefaultOnly(t *testing.T) {
-	dir := t.TempDir()
-	content := `
+// TestLoadOutboundConfig tables the global/per-domain merge scenarios for
+// loadOutboundConfig: a global config.toml, an optional per-domain override
+// under <dir>/<domain>/config.toml, and the four fields the merge produces.
+func TestLoadOutboundConfig(t *testing.T) {
+	cases := []struct {
+		name          string
+		globalTOML    string
+		domain        string
+		domainTOML    string // empty = no per-domain file written
+		wantStrategy  string
+		wantSmarthost string
+		wantUser      string
+		wantPassFile  string
+	}{
+		{
+			name: "system default only",
+			globalTOML: `
 [outbound]
 strategy = "smarthost"
 smarthost = "smtp.relay.example.com:587"
 smarthost_user = "relay-user"
 password_file = "relay-pass"
-`
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := loadOutboundConfig(dir, "example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Strategy != "smarthost" {
-		t.Errorf("Strategy = %q, want smarthost", cfg.Strategy)
-	}
-	if cfg.Smarthost != "smtp.relay.example.com:587" {
-		t.Errorf("Smarthost = %q", cfg.Smarthost)
-	}
-	if cfg.SmarthostUser != "relay-user" {
-		t.Errorf("SmarthostUser = %q", cfg.SmarthostUser)
-	}
-	if cfg.PasswordFile != "relay-pass" {
-		t.Errorf("PasswordFile = %q", cfg.PasswordFile)
-	}
-}
-
-func TestLoadOutboundConfig_DomainOverride(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`
+`,
+			domain:        "example.com",
+			wantStrategy:  "smarthost",
+			wantSmarthost: "smtp.relay.example.com:587",
+			wantUser:      "relay-user",
+			wantPassFile:  "relay-pass",
+		},
+		{
+			name: "domain override replaces the default entirely",
+			globalTOML: `
 [outbound]
 strategy = "direct"
-`), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	domDir := filepath.Join(dir, "otherdomain.com")
-	if err := os.MkdirAll(domDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(domDir, "config.toml"), []byte(`
+`,
+			domain: "otherdomain.com",
+			domainTOML: `
 [outbound]
 strategy = "smarthost"
 smarthost = "ses.amazonaws.com:587"
 smarthost_user = "AKIA123"
 password_file = "ses-pass"
-`), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := loadOutboundConfig(dir, "otherdomain.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Strategy != "smarthost" {
-		t.Errorf("Strategy = %q, want smarthost", cfg.Strategy)
-	}
-	if cfg.Smarthost != "ses.amazonaws.com:587" {
-		t.Errorf("Smarthost = %q", cfg.Smarthost)
-	}
-	if cfg.SmarthostUser != "AKIA123" {
-		t.Errorf("SmarthostUser = %q", cfg.SmarthostUser)
-	}
-	if cfg.PasswordFile != "ses-pass" {
-		t.Errorf("PasswordFile = %q", cfg.PasswordFile)
-	}
-}
-
-func TestLoadOutboundConfig_MissingFiles(t *testing.T) {
-	dir := t.TempDir()
-	cfg, err := loadOutboundConfig(dir, "missing.com")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.Strategy != "" {
-		t.Errorf("Strategy = %q, want empty", cfg.Strategy)
-	}
-	if cfg.Smarthost != "" {
-		t.Errorf("Smarthost = %q, want empty", cfg.Smarthost)
-	}
-}
-
-func TestLoadOutboundConfig_MergePartialOverride(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`
+`,
+			wantStrategy:  "smarthost",
+			wantSmarthost: "ses.amazonaws.com:587",
+			wantUser:      "AKIA123",
+			wantPassFile:  "ses-pass",
+		},
+		{
+			name:         "missing files",
+			domain:       "missing.com",
+			wantStrategy: "",
+		},
+		{
+			name: "merge keeps default fields the override omits",
+			globalTOML: `
 [outbound]
 strategy = "smarthost"
 smarthost = "default-relay:587"
 smarthost_user = "default-user"
 password_file = "default-pass"
-`), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	domDir := filepath.Join(dir, "custom.com")
-	if err := os.MkdirAll(domDir, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(domDir, "config.toml"), []byte(`
+`,
+			domain: "custom.com",
+			domainTOML: `
 [outbound]
 smarthost = "custom-relay:465"
 smarthost_user = "custom-user"
-`), 0600); err != nil {
-		t.Fatal(err)
+`,
+			wantStrategy:  "smarthost", // from system default
+			wantSmarthost: "custom-relay:465",
+			wantUser:      "custom-user",
+			wantPassFile:  "default-pass", // from system default
+		},
 	}
 
-	cfg, err := loadOutboundConfig(dir, "custom.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Strategy != "smarthost" {
-		t.Errorf("Strategy = %q, want smarthost (from system default)", cfg.Strategy)
-	}
-	if cfg.Smarthost != "custom-relay:465" {
-		t.Errorf("Smarthost = %q, want custom-relay:465", cfg.Smarthost)
-	}
-	if cfg.SmarthostUser != "custom-user" {
-		t.Errorf("SmarthostUser = %q, want custom-user", cfg.SmarthostUser)
-	}
-	if cfg.PasswordFile != "default-pass" {
-		t.Errorf("PasswordFile = %q, want default-pass (from system default)", cfg.PasswordFile)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if tc.globalTOML != "" {
+				if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(tc.globalTOML), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.domainTOML != "" {
+				domDir := filepath.Join(dir, tc.domain)
+				if err := os.MkdirAll(domDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(domDir, "config.toml"), []byte(tc.domainTOML), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			cfg, err := loadOutboundConfig(dir, tc.domain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Strategy != tc.wantStrategy {
+				t.Errorf("Strategy = %q, want %q", cfg.Strategy, tc.wantStrategy)
+			}
+			if cfg.Smarthost != tc.wantSmarthost {
+				t.Errorf("Smarthost = %q, want %q", cfg.Smarthost, tc.wantSmarthost)
+			}
+			if cfg.SmarthostUser != tc.wantUser {
+				t.Errorf("SmarthostUser = %q, want %q", cfg.SmarthostUser, tc.wantUser)
+			}
+			if cfg.PasswordFile != tc.wantPassFile {
+				t.Errorf("PasswordFile = %q, want %q", cfg.PasswordFile, tc.wantPassFile)
+			}
+		})
 	}
 }
 

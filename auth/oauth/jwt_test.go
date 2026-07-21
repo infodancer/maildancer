@@ -99,327 +99,181 @@ func (ks *testKeySet) serveJWKS(t *testing.T) *httptest.Server {
 	}))
 }
 
-func TestJWTAgent_ValidateToken_Success(t *testing.T) {
+// TestJWTAgent_ValidateToken tables the ValidateToken cases that all share
+// the same shape: build an agent against the shared JWKS server, build and
+// sign a token, then check the outcome. Cases needing an error-free path also
+// set wantUsername; wantErr nil means success.
+func TestJWTAgent_ValidateToken(t *testing.T) {
 	ks := newTestKeySet(t)
 	server := ks.serveJWKS(t)
 	defer server.Close()
 
 	ctx := context.Background()
 
-	agent, err := NewJWTAgent(ctx, JWTAgentConfig{
-		JWKSURL:       server.URL,
-		Issuer:        "https://test-issuer.example.com",
-		Audience:      "smtp-server",
-		UsernameClaim: "email",
-	})
-	if err != nil {
-		t.Fatalf("failed to create agent: %v", err)
-	}
-	defer func() { _ = agent.Close() }()
-
-	// Create a valid token
-	token, err := jwt.NewBuilder().
-		Issuer("https://test-issuer.example.com").
-		Audience([]string{"smtp-server"}).
-		Subject("user123").
-		Claim("email", "user@example.com").
-		IssuedAt(time.Now()).
-		Expiration(time.Now().Add(1 * time.Hour)).
-		Build()
-	if err != nil {
-		t.Fatalf("failed to build token: %v", err)
-	}
-
-	signedToken := ks.signToken(t, token)
-
-	username, err := agent.ValidateToken(ctx, signedToken)
-	if err != nil {
-		t.Fatalf("ValidateToken failed: %v", err)
-	}
-
-	if username != "user@example.com" {
-		t.Errorf("expected username 'user@example.com', got %q", username)
-	}
-}
-
-func TestJWTAgent_ValidateToken_ExpiredToken(t *testing.T) {
-	ks := newTestKeySet(t)
-	server := ks.serveJWKS(t)
-	defer server.Close()
-
-	ctx := context.Background()
-
-	agent, err := NewJWTAgent(ctx, JWTAgentConfig{
-		JWKSURL:       server.URL,
-		Issuer:        "https://test-issuer.example.com",
-		Audience:      "smtp-server",
-		UsernameClaim: "email",
-	})
-	if err != nil {
-		t.Fatalf("failed to create agent: %v", err)
-	}
-	defer func() { _ = agent.Close() }()
-
-	// Create an expired token
-	token, err := jwt.NewBuilder().
-		Issuer("https://test-issuer.example.com").
-		Audience([]string{"smtp-server"}).
-		Subject("user123").
-		Claim("email", "user@example.com").
-		IssuedAt(time.Now().Add(-2 * time.Hour)).
-		Expiration(time.Now().Add(-1 * time.Hour)).
-		Build()
-	if err != nil {
-		t.Fatalf("failed to build token: %v", err)
-	}
-
-	signedToken := ks.signToken(t, token)
-
-	_, err = agent.ValidateToken(ctx, signedToken)
-	if err != ErrTokenExpired {
-		t.Errorf("expected ErrTokenExpired, got %v", err)
-	}
-}
-
-func TestJWTAgent_ValidateToken_WrongIssuer(t *testing.T) {
-	ks := newTestKeySet(t)
-	server := ks.serveJWKS(t)
-	defer server.Close()
-
-	ctx := context.Background()
-
-	agent, err := NewJWTAgent(ctx, JWTAgentConfig{
-		JWKSURL:       server.URL,
-		Issuer:        "https://test-issuer.example.com",
-		Audience:      "smtp-server",
-		UsernameClaim: "email",
-	})
-	if err != nil {
-		t.Fatalf("failed to create agent: %v", err)
-	}
-	defer func() { _ = agent.Close() }()
-
-	// Create a token with wrong issuer
-	token, err := jwt.NewBuilder().
-		Issuer("https://wrong-issuer.example.com").
-		Audience([]string{"smtp-server"}).
-		Subject("user123").
-		Claim("email", "user@example.com").
-		IssuedAt(time.Now()).
-		Expiration(time.Now().Add(1 * time.Hour)).
-		Build()
-	if err != nil {
-		t.Fatalf("failed to build token: %v", err)
-	}
-
-	signedToken := ks.signToken(t, token)
-
-	_, err = agent.ValidateToken(ctx, signedToken)
-	if err != ErrIssuerMismatch {
-		t.Errorf("expected ErrIssuerMismatch, got %v", err)
-	}
-}
-
-func TestJWTAgent_ValidateToken_WrongAudience(t *testing.T) {
-	ks := newTestKeySet(t)
-	server := ks.serveJWKS(t)
-	defer server.Close()
-
-	ctx := context.Background()
-
-	agent, err := NewJWTAgent(ctx, JWTAgentConfig{
-		JWKSURL:       server.URL,
-		Issuer:        "https://test-issuer.example.com",
-		Audience:      "smtp-server",
-		UsernameClaim: "email",
-	})
-	if err != nil {
-		t.Fatalf("failed to create agent: %v", err)
-	}
-	defer func() { _ = agent.Close() }()
-
-	// Create a token with wrong audience
-	token, err := jwt.NewBuilder().
-		Issuer("https://test-issuer.example.com").
-		Audience([]string{"wrong-audience"}).
-		Subject("user123").
-		Claim("email", "user@example.com").
-		IssuedAt(time.Now()).
-		Expiration(time.Now().Add(1 * time.Hour)).
-		Build()
-	if err != nil {
-		t.Fatalf("failed to build token: %v", err)
+	cases := []struct {
+		name         string
+		cfg          JWTAgentConfig // JWKSURL is filled in from the shared server
+		buildToken   func() (jwt.Token, error)
+		wantErr      error
+		wantUsername string
+	}{
+		{
+			name: "success",
+			cfg:  JWTAgentConfig{Issuer: "https://test-issuer.example.com", Audience: "smtp-server", UsernameClaim: "email"},
+			buildToken: func() (jwt.Token, error) {
+				return jwt.NewBuilder().
+					Issuer("https://test-issuer.example.com").
+					Audience([]string{"smtp-server"}).
+					Subject("user123").
+					Claim("email", "user@example.com").
+					IssuedAt(time.Now()).
+					Expiration(time.Now().Add(1 * time.Hour)).
+					Build()
+			},
+			wantUsername: "user@example.com",
+		},
+		{
+			name: "expired token",
+			cfg:  JWTAgentConfig{Issuer: "https://test-issuer.example.com", Audience: "smtp-server", UsernameClaim: "email"},
+			buildToken: func() (jwt.Token, error) {
+				return jwt.NewBuilder().
+					Issuer("https://test-issuer.example.com").
+					Audience([]string{"smtp-server"}).
+					Subject("user123").
+					Claim("email", "user@example.com").
+					IssuedAt(time.Now().Add(-2 * time.Hour)).
+					Expiration(time.Now().Add(-1 * time.Hour)).
+					Build()
+			},
+			wantErr: ErrTokenExpired,
+		},
+		{
+			name: "wrong issuer",
+			cfg:  JWTAgentConfig{Issuer: "https://test-issuer.example.com", Audience: "smtp-server", UsernameClaim: "email"},
+			buildToken: func() (jwt.Token, error) {
+				return jwt.NewBuilder().
+					Issuer("https://wrong-issuer.example.com").
+					Audience([]string{"smtp-server"}).
+					Subject("user123").
+					Claim("email", "user@example.com").
+					IssuedAt(time.Now()).
+					Expiration(time.Now().Add(1 * time.Hour)).
+					Build()
+			},
+			wantErr: ErrIssuerMismatch,
+		},
+		{
+			name: "wrong audience",
+			cfg:  JWTAgentConfig{Issuer: "https://test-issuer.example.com", Audience: "smtp-server", UsernameClaim: "email"},
+			buildToken: func() (jwt.Token, error) {
+				return jwt.NewBuilder().
+					Issuer("https://test-issuer.example.com").
+					Audience([]string{"wrong-audience"}).
+					Subject("user123").
+					Claim("email", "user@example.com").
+					IssuedAt(time.Now()).
+					Expiration(time.Now().Add(1 * time.Hour)).
+					Build()
+			},
+			wantErr: ErrAudienceMismatch,
+		},
+		{
+			name: "domain restriction",
+			cfg: JWTAgentConfig{
+				Issuer: "https://test-issuer.example.com", Audience: "smtp-server", UsernameClaim: "email",
+				AllowedDomains: []string{"allowed.com"},
+			},
+			buildToken: func() (jwt.Token, error) {
+				return jwt.NewBuilder().
+					Issuer("https://test-issuer.example.com").
+					Audience([]string{"smtp-server"}).
+					Subject("user123").
+					Claim("email", "user@notallowed.com").
+					IssuedAt(time.Now()).
+					Expiration(time.Now().Add(1 * time.Hour)).
+					Build()
+			},
+			wantErr: ErrDomainNotAllowed,
+		},
+		{
+			name: "allowed domain, case-insensitive",
+			cfg: JWTAgentConfig{
+				Issuer: "https://test-issuer.example.com", Audience: "smtp-server", UsernameClaim: "email",
+				AllowedDomains: []string{"allowed.com", "EXAMPLE.COM"},
+			},
+			buildToken: func() (jwt.Token, error) {
+				return jwt.NewBuilder().
+					Issuer("https://test-issuer.example.com").
+					Audience([]string{"smtp-server"}).
+					Subject("user123").
+					Claim("email", "user@Example.Com").
+					IssuedAt(time.Now()).
+					Expiration(time.Now().Add(1 * time.Hour)).
+					Build()
+			},
+			wantUsername: "user@Example.Com",
+		},
+		{
+			name: "fallback claim",
+			cfg:  JWTAgentConfig{Issuer: "https://test-issuer.example.com", Audience: "smtp-server", UsernameClaim: "custom_claim"}, // claim won't exist
+			buildToken: func() (jwt.Token, error) {
+				return jwt.NewBuilder().
+					Issuer("https://test-issuer.example.com").
+					Audience([]string{"smtp-server"}).
+					Subject("user123").
+					Claim("preferred_username", "fallback@example.com").
+					IssuedAt(time.Now()).
+					Expiration(time.Now().Add(1 * time.Hour)).
+					Build()
+			},
+			wantUsername: "fallback@example.com",
+		},
+		{
+			name: "missing username",
+			cfg:  JWTAgentConfig{Issuer: "https://test-issuer.example.com", Audience: "smtp-server", UsernameClaim: "custom_claim"},
+			buildToken: func() (jwt.Token, error) {
+				// No custom_claim, no sub -- no username claim to fall back to.
+				return jwt.NewBuilder().
+					Issuer("https://test-issuer.example.com").
+					Audience([]string{"smtp-server"}).
+					IssuedAt(time.Now()).
+					Expiration(time.Now().Add(1 * time.Hour)).
+					Build()
+			},
+			wantErr: ErrUsernameMissing,
+		},
 	}
 
-	signedToken := ks.signToken(t, token)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.cfg
+			cfg.JWKSURL = server.URL
+			agent, err := NewJWTAgent(ctx, cfg)
+			if err != nil {
+				t.Fatalf("failed to create agent: %v", err)
+			}
+			defer func() { _ = agent.Close() }()
 
-	_, err = agent.ValidateToken(ctx, signedToken)
-	if err != ErrAudienceMismatch {
-		t.Errorf("expected ErrAudienceMismatch, got %v", err)
-	}
-}
+			token, err := tc.buildToken()
+			if err != nil {
+				t.Fatalf("failed to build token: %v", err)
+			}
+			signedToken := ks.signToken(t, token)
 
-func TestJWTAgent_ValidateToken_DomainRestriction(t *testing.T) {
-	ks := newTestKeySet(t)
-	server := ks.serveJWKS(t)
-	defer server.Close()
-
-	ctx := context.Background()
-
-	agent, err := NewJWTAgent(ctx, JWTAgentConfig{
-		JWKSURL:        server.URL,
-		Issuer:         "https://test-issuer.example.com",
-		Audience:       "smtp-server",
-		UsernameClaim:  "email",
-		AllowedDomains: []string{"allowed.com"},
-	})
-	if err != nil {
-		t.Fatalf("failed to create agent: %v", err)
-	}
-	defer func() { _ = agent.Close() }()
-
-	// Create a token with disallowed domain
-	token, err := jwt.NewBuilder().
-		Issuer("https://test-issuer.example.com").
-		Audience([]string{"smtp-server"}).
-		Subject("user123").
-		Claim("email", "user@notallowed.com").
-		IssuedAt(time.Now()).
-		Expiration(time.Now().Add(1 * time.Hour)).
-		Build()
-	if err != nil {
-		t.Fatalf("failed to build token: %v", err)
-	}
-
-	signedToken := ks.signToken(t, token)
-
-	_, err = agent.ValidateToken(ctx, signedToken)
-	if err != ErrDomainNotAllowed {
-		t.Errorf("expected ErrDomainNotAllowed, got %v", err)
-	}
-}
-
-func TestJWTAgent_ValidateToken_AllowedDomain(t *testing.T) {
-	ks := newTestKeySet(t)
-	server := ks.serveJWKS(t)
-	defer server.Close()
-
-	ctx := context.Background()
-
-	agent, err := NewJWTAgent(ctx, JWTAgentConfig{
-		JWKSURL:        server.URL,
-		Issuer:         "https://test-issuer.example.com",
-		Audience:       "smtp-server",
-		UsernameClaim:  "email",
-		AllowedDomains: []string{"allowed.com", "EXAMPLE.COM"},
-	})
-	if err != nil {
-		t.Fatalf("failed to create agent: %v", err)
-	}
-	defer func() { _ = agent.Close() }()
-
-	// Create a token with allowed domain (case-insensitive)
-	token, err := jwt.NewBuilder().
-		Issuer("https://test-issuer.example.com").
-		Audience([]string{"smtp-server"}).
-		Subject("user123").
-		Claim("email", "user@Example.Com").
-		IssuedAt(time.Now()).
-		Expiration(time.Now().Add(1 * time.Hour)).
-		Build()
-	if err != nil {
-		t.Fatalf("failed to build token: %v", err)
-	}
-
-	signedToken := ks.signToken(t, token)
-
-	username, err := agent.ValidateToken(ctx, signedToken)
-	if err != nil {
-		t.Fatalf("ValidateToken failed: %v", err)
-	}
-
-	if username != "user@Example.Com" {
-		t.Errorf("expected username 'user@Example.Com', got %q", username)
-	}
-}
-
-func TestJWTAgent_ValidateToken_FallbackClaim(t *testing.T) {
-	ks := newTestKeySet(t)
-	server := ks.serveJWKS(t)
-	defer server.Close()
-
-	ctx := context.Background()
-
-	agent, err := NewJWTAgent(ctx, JWTAgentConfig{
-		JWKSURL:       server.URL,
-		Issuer:        "https://test-issuer.example.com",
-		Audience:      "smtp-server",
-		UsernameClaim: "custom_claim", // This claim won't exist
-	})
-	if err != nil {
-		t.Fatalf("failed to create agent: %v", err)
-	}
-	defer func() { _ = agent.Close() }()
-
-	// Create a token without custom_claim but with preferred_username
-	token, err := jwt.NewBuilder().
-		Issuer("https://test-issuer.example.com").
-		Audience([]string{"smtp-server"}).
-		Subject("user123").
-		Claim("preferred_username", "fallback@example.com").
-		IssuedAt(time.Now()).
-		Expiration(time.Now().Add(1 * time.Hour)).
-		Build()
-	if err != nil {
-		t.Fatalf("failed to build token: %v", err)
-	}
-
-	signedToken := ks.signToken(t, token)
-
-	username, err := agent.ValidateToken(ctx, signedToken)
-	if err != nil {
-		t.Fatalf("ValidateToken failed: %v", err)
-	}
-
-	if username != "fallback@example.com" {
-		t.Errorf("expected username 'fallback@example.com', got %q", username)
-	}
-}
-
-func TestJWTAgent_ValidateToken_MissingUsername(t *testing.T) {
-	ks := newTestKeySet(t)
-	server := ks.serveJWKS(t)
-	defer server.Close()
-
-	ctx := context.Background()
-
-	agent, err := NewJWTAgent(ctx, JWTAgentConfig{
-		JWKSURL:       server.URL,
-		Issuer:        "https://test-issuer.example.com",
-		Audience:      "smtp-server",
-		UsernameClaim: "custom_claim",
-	})
-	if err != nil {
-		t.Fatalf("failed to create agent: %v", err)
-	}
-	defer func() { _ = agent.Close() }()
-
-	// Create a token without any username claims (not even sub)
-	token, err := jwt.NewBuilder().
-		Issuer("https://test-issuer.example.com").
-		Audience([]string{"smtp-server"}).
-		IssuedAt(time.Now()).
-		Expiration(time.Now().Add(1 * time.Hour)).
-		Build()
-	if err != nil {
-		t.Fatalf("failed to build token: %v", err)
-	}
-
-	signedToken := ks.signToken(t, token)
-
-	_, err = agent.ValidateToken(ctx, signedToken)
-	if err != ErrUsernameMissing {
-		t.Errorf("expected ErrUsernameMissing, got %v", err)
+			username, err := agent.ValidateToken(ctx, signedToken)
+			if tc.wantErr != nil {
+				if err != tc.wantErr {
+					t.Errorf("expected %v, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateToken failed: %v", err)
+			}
+			if username != tc.wantUsername {
+				t.Errorf("expected username %q, got %q", tc.wantUsername, username)
+			}
+		})
 	}
 }
 

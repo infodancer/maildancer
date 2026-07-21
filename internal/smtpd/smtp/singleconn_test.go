@@ -176,7 +176,7 @@ func TestRunSingleConn_SessionEndsAfterQuit(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		srv.RunSingleConn(serverConn, config.ModeSmtp, nil) //nolint:errcheck
+		srv.RunSingleConn(serverConn, config.ModeSmtp, nil) //nolint:errcheck // test connection torn down by the pipe closing; the resulting error is expected and not checked
 		close(done)
 	}()
 
@@ -204,7 +204,7 @@ func TestRunSingleConn_NoSecondConn(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		srv.RunSingleConn(serverConn, config.ModeSmtp, nil) //nolint:errcheck
+		srv.RunSingleConn(serverConn, config.ModeSmtp, nil) //nolint:errcheck // test connection torn down by the pipe closing; the resulting error is expected and not checked
 		close(done)
 	}()
 

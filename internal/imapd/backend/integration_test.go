@@ -113,7 +113,7 @@ func TestStack_IMAPFullStack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStack: %v", err)
 	}
-	defer stack.Close() //nolint:errcheck
+	defer stack.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -83,7 +83,7 @@ func TestRunSingleConn_SessionEndsAfterQuit(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		stack.RunSingleConn(serverConn, config.ModePop3, nil) //nolint:errcheck
+		stack.RunSingleConn(serverConn, config.ModePop3, nil) //nolint:errcheck // test connection torn down by the pipe closing; the resulting error is expected and not checked
 		close(done)
 	}()
 
@@ -122,7 +122,7 @@ func TestRunSingleConn_NoSecondConn(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		stack.RunSingleConn(serverConn, config.ModePop3, nil) //nolint:errcheck
+		stack.RunSingleConn(serverConn, config.ModePop3, nil) //nolint:errcheck // test connection torn down by the pipe closing; the resulting error is expected and not checked
 		close(done)
 	}()
 
@@ -154,7 +154,7 @@ func TestRunSingleConn_ConcurrentSessions(t *testing.T) {
 
 			done := make(chan struct{})
 			go func() {
-				stack.RunSingleConn(serverConn, config.ModePop3, nil) //nolint:errcheck
+				stack.RunSingleConn(serverConn, config.ModePop3, nil) //nolint:errcheck // test connection torn down by the pipe closing; the resulting error is expected and not checked
 				close(done)
 			}()
 

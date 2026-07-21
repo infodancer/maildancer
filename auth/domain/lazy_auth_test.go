@@ -47,7 +47,7 @@ func TestLazyAuthAgent_DomainLoadsWithoutPasswdAccess(t *testing.T) {
 	}
 
 	provider := NewFilesystemDomainProvider(tmpDir, nil).WithDefaults(defaults)
-	defer provider.Close() //nolint:errcheck
+	defer provider.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 
 	// GetDomain should succeed -- lazy auth doesn't open passwd yet.
 	d := provider.GetDomain("example.com")
@@ -100,7 +100,7 @@ func TestLazyAuthAgent_InitCalledOnce(t *testing.T) {
 	}
 
 	provider := NewFilesystemDomainProvider(tmpDir, nil).WithDefaults(defaults)
-	defer provider.Close() //nolint:errcheck
+	defer provider.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 
 	d := provider.GetDomain("example.com")
 	if d == nil {

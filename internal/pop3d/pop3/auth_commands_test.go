@@ -34,7 +34,7 @@ func newMockConnection() *mockConnection {
 // the tests verify that missing TLS *activity* rejects auth, not that TLS
 // is unconfigured.
 func newTestSession(mode config.ListenerMode, isTLS bool) *Session {
-	return NewSession("test.example.com", mode, &tls.Config{}, isTLS) //nolint:gosec
+	return NewSession("test.example.com", mode, &tls.Config{}, isTLS) //nolint:gosec // test-only helper; no real TLS handshake happens here
 }
 
 // newTestSMClient creates a SessionManagerClient connected to a test gRPC server

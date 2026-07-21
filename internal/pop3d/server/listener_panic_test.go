@@ -54,7 +54,7 @@ func TestHandleConnection_RecoversHandlerPanic(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
 	// Drain anything the server writes so no goroutine blocks on the sync pipe.
-	go io.Copy(io.Discard, clientConn) //nolint:errcheck
+	go io.Copy(io.Discard, clientConn) //nolint:errcheck // draining a pipe that gets closed at test teardown; the resulting error is expected and not checked
 
 	// handleConnection calls wg.Done(); balance it so the deferred decrement is valid.
 	l.wg.Add(1)
@@ -115,7 +115,7 @@ func TestHandleConnection_SurvivesToServeAgain(t *testing.T) {
 
 	for i := 0; i < 2; i++ {
 		clientConn, serverConn := net.Pipe()
-		go io.Copy(io.Discard, clientConn) //nolint:errcheck
+		go io.Copy(io.Discard, clientConn) //nolint:errcheck // draining a pipe that gets closed at test teardown; the resulting error is expected and not checked
 
 		l.wg.Add(1)
 		done := make(chan struct{})

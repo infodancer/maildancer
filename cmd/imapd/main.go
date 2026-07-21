@@ -67,7 +67,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error building stack: %v\n", err)
 		os.Exit(1)
 	}
-	defer stack.Close() //nolint:errcheck
+	defer stack.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 
 	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

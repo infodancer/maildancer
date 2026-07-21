@@ -461,7 +461,7 @@ func TestFilesystemDomainProvider_Domains_WithDefaults(t *testing.T) {
 	}
 
 	provider := NewFilesystemDomainProvider(tmpDir, nil).WithDefaults(defaults)
-	defer provider.Close() //nolint:errcheck
+	defer provider.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 
 	domains := provider.Domains()
 	if len(domains) != 2 {

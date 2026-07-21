@@ -92,7 +92,7 @@ func startTestServer(t *testing.T) (addr string, be *testBackend, stop func()) {
 		t.Fatalf("listen: %v", err)
 	}
 
-	go srv.Serve(ln) //nolint:errcheck
+	go srv.Serve(ln) //nolint:errcheck // test server torn down via listener close; the resulting Serve error is expected and not checked
 
 	stop = func() {
 		_ = srv.Close()

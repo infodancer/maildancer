@@ -53,7 +53,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 
 	smDelivery, err := NewSessionManagerDeliveryAgent(cfg.Config.SessionManager, logger)
 	if err != nil {
-		s.Close() //nolint:errcheck
+		s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 		return nil, err
 	}
 	s.closers = append(s.closers, smDelivery)
@@ -64,7 +64,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	if cfg.Config.Redis.URL != "" {
 		opts, err := goredis.ParseURL(cfg.Config.Redis.URL)
 		if err != nil {
-			s.Close() //nolint:errcheck
+			s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 			return nil, err
 		}
 		if cfg.Config.Redis.Password != "" {
@@ -104,7 +104,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		Logger:         logger,
 	})
 	if err != nil {
-		s.Close() //nolint:errcheck
+		s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 		return nil, err
 	}
 

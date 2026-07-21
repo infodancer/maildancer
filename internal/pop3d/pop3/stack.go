@@ -67,7 +67,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		Logger:    logger,
 	})
 	if err != nil {
-		s.Close() //nolint:errcheck
+		s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 		return nil, err
 	}
 

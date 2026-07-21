@@ -63,7 +63,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		var err error
 		subscriber, err = notify.NewSubscriber(cfg.Config.Redis.URL, cfg.Config.Redis.Password, logger)
 		if err != nil {
-			s.Close() //nolint:errcheck
+			s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 			return nil, err
 		}
 		s.closers = append(s.closers, subscriber)
@@ -73,7 +73,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	// Create session-manager client.
 	smClient, err := NewSessionManagerClient(cfg.Config.SessionManager, logger)
 	if err != nil {
-		s.Close() //nolint:errcheck
+		s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 		return nil, err
 	}
 	s.closers = append(s.closers, smClient)
@@ -113,7 +113,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		switch lc.Mode {
 		case config.ModeImaps:
 			if cfg.TLSConfig == nil {
-				s.Close() //nolint:errcheck
+				s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 				return nil, errors.New("listener " + lc.Address + " requires TLS but no TLS config provided")
 			}
 			ln, err = tls.Listen("tcp", lc.Address, cfg.TLSConfig)
@@ -121,7 +121,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 			ln, err = net.Listen("tcp", lc.Address)
 		}
 		if err != nil {
-			s.Close() //nolint:errcheck
+			s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 			return nil, err
 		}
 		s.listeners = append(s.listeners, ln)

@@ -416,6 +416,60 @@ func TestMaildirStore_DeliverSubaddress_FolderMissing(t *testing.T) {
 	}
 }
 
+func TestMaildirStore_Deliver_ReportsDeliveredFolders(t *testing.T) {
+	// Deliver fills the caller's DeliveredFolders map with where each copy
+	// actually landed -- the routed folder when the +extension folder exists,
+	// INBOX when it does not (#168).
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	if err := store.CreateFolder(ctx, "user@example.com", "lists"); err != nil {
+		t.Fatalf("CreateFolder: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		recipient string
+		want      string
+	}{
+		{"routed to existing folder", "user+lists@example.com", "lists"},
+		{"no extension", "user@example.com", "INBOX"},
+		{"extension with no folder", "user+nosuchfolder@example.com", "INBOX"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			envelope := msgstore.Envelope{
+				From:             "sender@example.com",
+				Recipients:       []string{tt.recipient},
+				DeliveredFolders: map[string]string{},
+			}
+			if err := store.Deliver(ctx, envelope, strings.NewReader("Subject: F\r\n\r\nBody")); err != nil {
+				t.Fatalf("Deliver: %v", err)
+			}
+			if got := envelope.DeliveredFolders["user@example.com"]; got != tt.want {
+				t.Errorf("DeliveredFolders = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaildirStore_Deliver_NilDeliveredFolders(t *testing.T) {
+	// A caller that does not want the bookkeeping leaves the map nil, and
+	// delivery must not panic writing to it.
+	basePath := t.TempDir()
+	store := NewStore(basePath, "", "")
+	ctx := context.Background()
+
+	envelope := msgstore.Envelope{
+		From:       "sender@example.com",
+		Recipients: []string{"user@example.com"},
+	}
+	if err := store.Deliver(ctx, envelope, strings.NewReader("Subject: F\r\n\r\nBody")); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+}
+
 func TestMaildirStore_DeliverSubaddress_InvalidExtension(t *testing.T) {
 	// An invalid extension (e.g. path traversal attempt) falls back to inbox.
 	basePath := t.TempDir()

@@ -374,9 +374,11 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 		// The user controls which folders accept subaddressed mail: if the
 		// folder does not exist, fall back to the inbox silently.
 		var dir maildir.Dir
+		folder := "INBOX"
 		if parsed.Extension != "" {
 			if folderDir, ok := s.folderIfExists(parsed.Address, parsed.Extension); ok {
 				dir = folderDir
+				folder = parsed.Extension
 			}
 		}
 		if dir == "" {
@@ -405,6 +407,10 @@ func (s *MaildirStore) Deliver(ctx context.Context, envelope msgstore.Envelope, 
 		if err := delivery.Close(); err != nil {
 			lastErr = err
 			continue
+		}
+
+		if envelope.DeliveredFolders != nil {
+			envelope.DeliveredFolders[parsed.Address] = folder
 		}
 
 		delivered++

@@ -48,6 +48,9 @@ type DeliverResponse struct {
 	Temporary         bool
 	Reason            string
 	RedirectAddresses []string
+	// Folder is the mailbox folder the message was actually written to when
+	// Result is ResultDelivered (e.g. "INBOX", "Junk"). Empty otherwise.
+	Folder string
 }
 
 // DeliverRequest holds the envelope information for delivery.
@@ -213,6 +216,7 @@ func (dlvr *Deliverer) deliverLocal(ctx context.Context, dom *domain.Domain, req
 		slog.String("recipient", req.Recipient))
 	return DeliverResponse{
 		Result: ResultDelivered,
+		Folder: "INBOX",
 	}, nil
 }
 

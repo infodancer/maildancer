@@ -670,7 +670,7 @@ func (s *Session) Data(r io.Reader) error {
 		// never itself a forward (forwarded=false); the recipient's forwarding
 		// rules are resolved by the mail-session delivery path, which signals a
 		// configured forward by returning a *RedirectError.
-		deliverErr := s.backend.smDelivery.Deliver(ctx,
+		deliveredFolder, deliverErr := s.backend.smDelivery.Deliver(ctx,
 			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, withHeaders(received, tmp))
 
 		var redirectErr *RedirectError
@@ -705,10 +705,16 @@ func (s *Session) Data(r io.Reader) error {
 		// message was forwarded away: the original recipient has nothing new in
 		// their INBOX. The actual local forward target is already notified inside
 		// followRedirect; an external target has no local mailbox to notify.
+		//
+		// The folder comes from mail-session's DeliverResponse -- the actual
+		// destination the delivery pipeline chose (INBOX, a sieve fileinto
+		// target, etc.) -- rather than being re-derived from the spam-check
+		// verdict, which can disagree with the real filing decision (#143).
+		// Fall back to INBOX for older mail-session builds that don't report it.
 		if !redirected {
-			folder := "INBOX"
-			if checkResult != nil && checkResult.Action == spamcheck.ActionFlag {
-				folder = "Junk"
+			folder := deliveredFolder
+			if folder == "" {
+				folder = "INBOX"
 			}
 			for _, rcpt := range s.recipients {
 				s.backend.notifier.NotifyNewMail(ctx, rcpt, folder)
@@ -839,7 +845,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 		// forwarding rules are not re-resolved (1-hop ceiling). A second redirect
 		// here is a configuration error.
 		now := time.Now()
-		err = s.backend.smDelivery.Deliver(ctx,
+		_, err = s.backend.smDelivery.Deliver(ctx,
 			s.from, target, s.clientIP, s.helo, now, true, msgid, withHeaders(fwdHeaders, tmp))
 
 		var nested *RedirectError

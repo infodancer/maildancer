@@ -73,6 +73,13 @@ message DeliverResponse {
 
   // Redirect target addresses when result is REDIRECTED.
   repeated string redirect_addresses = 4;
+
+  // The mailbox folder the message was actually written to when result is
+  // DELIVERED (e.g. "INBOX", "Junk"). Empty when not applicable (rejected,
+  // redirected, or a pipeline path that predates this field). Lets callers
+  // (e.g. smtpd's IMAP IDLE notification) report the real outcome instead of
+  // re-deriving a guess from the spam-check verdict.
+  string folder = 5;
 }
 
 // DeliverResult indicates the outcome of a delivery attempt.

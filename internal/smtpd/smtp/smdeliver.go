@@ -135,10 +135,13 @@ func (a *SessionManagerDeliveryAgent) ValidateRecipient(ctx context.Context, add
 // forwarded marks this delivery as the result of resolving a forward. When
 // true, the mail-session delivery path will not re-resolve forwarding rules
 // for the recipient, which closes the 1-hop gap and prevents mail loops.
-func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, forwarded bool, msgid string, message io.Reader) error {
+// Deliver returns the mailbox folder the message was actually written to
+// (e.g. "INBOX", "Junk") on a successful, non-redirected delivery. The folder
+// is empty for rejections and redirects.
+func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recipient, clientIP, clientHostname string, receivedTime time.Time, forwarded bool, msgid string, message io.Reader) (string, error) {
 	stream, err := a.delivery.Deliver(ctx)
 	if err != nil {
-		return fmt.Errorf("session-manager delivery: open stream: %w", err)
+		return "", fmt.Errorf("session-manager delivery: open stream: %w", err)
 	}
 
 	meta := &pb.DeliverMetadata{
@@ -156,7 +159,7 @@ func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recip
 	if err := stream.Send(&pb.DeliverRequest{
 		Payload: &pb.DeliverRequest_Metadata{Metadata: meta},
 	}); err != nil {
-		return fmt.Errorf("session-manager delivery: send metadata: %w", err)
+		return "", fmt.Errorf("session-manager delivery: send metadata: %w", err)
 	}
 
 	// Stream body in 64KB chunks.
@@ -167,26 +170,26 @@ func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recip
 			if err := stream.Send(&pb.DeliverRequest{
 				Payload: &pb.DeliverRequest_Data{Data: buf[:n]},
 			}); err != nil {
-				return fmt.Errorf("session-manager delivery: send body: %w", err)
+				return "", fmt.Errorf("session-manager delivery: send body: %w", err)
 			}
 		}
 		if readErr == io.EOF {
 			break
 		}
 		if readErr != nil {
-			return fmt.Errorf("session-manager delivery: read message: %w", readErr)
+			return "", fmt.Errorf("session-manager delivery: read message: %w", readErr)
 		}
 	}
 
 	resp, err := stream.CloseAndRecv()
 	if err != nil {
-		return fmt.Errorf("session-manager delivery: close stream: %w", err)
+		return "", fmt.Errorf("session-manager delivery: close stream: %w", err)
 	}
 
 	switch resp.GetResult() {
 	case pb.DeliverResult_DELIVER_RESULT_DELIVERED:
 		a.logger.Debug("session-manager delivery complete", slog.String("recipient", recipient))
-		return nil
+		return resp.GetFolder(), nil
 
 	case pb.DeliverResult_DELIVER_RESULT_REJECTED:
 		code := "550"
@@ -197,20 +200,20 @@ func (a *SessionManagerDeliveryAgent) Deliver(ctx context.Context, sender, recip
 			slog.String("recipient", recipient),
 			slog.String("code", code),
 			slog.String("reason", resp.GetReason()))
-		return fmt.Errorf("delivery rejected (%s): %s", code, resp.GetReason())
+		return "", fmt.Errorf("delivery rejected (%s): %s", code, resp.GetReason())
 
 	case pb.DeliverResult_DELIVER_RESULT_REDIRECTED:
 		a.logger.Info("session-manager delivery redirected",
 			slog.String("recipient", recipient),
 			slog.Int("redirect_count", len(resp.GetRedirectAddresses())),
 			slog.String("addresses", strings.Join(resp.GetRedirectAddresses(), ", ")))
-		return &RedirectError{
+		return "", &RedirectError{
 			Addresses: resp.GetRedirectAddresses(),
 			Temporary: resp.GetTemporary(),
 		}
 
 	default:
-		return fmt.Errorf("session-manager delivery: unknown result %d", resp.GetResult())
+		return "", fmt.Errorf("session-manager delivery: unknown result %d", resp.GetResult())
 	}
 }
 

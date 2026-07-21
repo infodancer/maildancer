@@ -212,10 +212,19 @@ func (dlvr *Deliverer) applySieve(ctx context.Context, dom *domain.Domain, req D
 
 	mailbox := msgstore.ParseRecipient(req.Recipient).Address
 
+	// A script can write to several folders (fileinto + keep both delivering,
+	// or multiple fileinto targets). The IMAP IDLE notification only carries
+	// one folder, so track the last one actually written -- for the common
+	// single-target cases (plain fileinto, plain keep) this is exact; for a
+	// script combining several it's a reasonable "most recent" choice rather
+	// than a guess derived from the spam verdict.
+	var deliveredFolder string
+
 	for _, target := range outcome.fileinto {
 		if err := dlvr.deliverToFolder(ctx, dom, req, mailbox, target, msg, encInfo); err != nil {
 			return DeliverResponse{}, err
 		}
+		deliveredFolder = target.folder
 	}
 
 	if outcome.keep {
@@ -225,12 +234,15 @@ func (dlvr *Deliverer) applySieve(ctx context.Context, dom *domain.Domain, req D
 			if err != nil {
 				return DeliverResponse{}, err
 			}
+			deliveredFolder = "INBOX"
 		} else {
 			// Flagless keep goes through the standard delivery path so
 			// subaddress folder routing still applies.
-			if resp, err := dlvr.deliverLocal(ctx, dom, req, msg, encInfo); err != nil || resp.Result != ResultDelivered {
+			resp, err := dlvr.deliverLocal(ctx, dom, req, msg, encInfo)
+			if err != nil || resp.Result != ResultDelivered {
 				return resp, err
 			}
+			deliveredFolder = resp.Folder
 		}
 	}
 
@@ -240,7 +252,7 @@ func (dlvr *Deliverer) applySieve(ctx context.Context, dom *domain.Domain, req D
 			RedirectAddresses: dedupeFold(outcome.redirects),
 		}, nil
 	}
-	return DeliverResponse{Result: ResultDelivered}, nil
+	return DeliverResponse{Result: ResultDelivered, Folder: deliveredFolder}, nil
 }
 
 // deliverToFolder writes the message to a folder in the recipient's mailbox.

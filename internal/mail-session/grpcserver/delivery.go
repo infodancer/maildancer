@@ -70,6 +70,7 @@ func (d *DeliveryServer) Deliver(stream pb.DeliveryService_DeliverServer) error 
 		Temporary:         resp.Temporary,
 		Reason:            resp.Reason,
 		RedirectAddresses: resp.RedirectAddresses,
+		Folder:            resp.Folder,
 	}
 	switch resp.Result {
 	case deliver.ResultDelivered:

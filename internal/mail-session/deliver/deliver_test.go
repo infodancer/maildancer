@@ -33,6 +33,14 @@ const minimalMsg = "From: sender@example.com\r\nTo: alice@example.com\r\nSubject
 // so callers can inject forwarding rules without modifying production code.
 func setupDomainFixture(t *testing.T, forwards string) *Deliverer {
 	t.Helper()
+	dlvr, _ := setupDomainFixtureBase(t, forwards)
+	return dlvr
+}
+
+// setupDomainFixtureBase is setupDomainFixture for tests that also need the
+// domains root, e.g. to pre-create a Maildir++ folder on disk.
+func setupDomainFixtureBase(t *testing.T, forwards string) (*Deliverer, string) {
+	t.Helper()
 
 	base := t.TempDir()
 	domainDir := filepath.Join(base, "example.com")
@@ -92,7 +100,63 @@ maildir_subdir = "Maildir"
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { _ = dlvr.Close() })
-	return dlvr
+	return dlvr, base
+}
+
+// TestDeliver_Subaddress_ReportsFolder covers #168: mail to alice+lists@ is
+// filed in the "lists" folder, and DeliverResponse must say so. Reporting
+// INBOX here sends the IMAP IDLE notification -- and the client -- to a
+// mailbox the message is not in.
+func TestDeliver_Subaddress_ReportsFolder(t *testing.T) {
+	dlvr, base := setupDomainFixtureBase(t, "")
+
+	// Delivery only routes to a +extension folder that already exists, so
+	// create the Maildir++ folder first.
+	for _, sub := range []string{"cur", "new", "tmp"} {
+		p := filepath.Join(base, "example.com", "users", "alice", "Maildir", ".lists", sub)
+		if err := os.MkdirAll(p, 0755); err != nil {
+			t.Fatalf("create folder maildir %s: %v", p, err)
+		}
+	}
+
+	resp, err := dlvr.Deliver(context.Background(),
+		DeliverRequest{
+			Sender:    "sender@example.com",
+			Recipient: "alice+lists@example.com",
+		},
+		[]byte(minimalMsg))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Result != ResultDelivered {
+		t.Fatalf("want ResultDelivered, got %v (reason: %q)", resp.Result, resp.Reason)
+	}
+	if resp.Folder != "lists" {
+		t.Errorf("want Folder %q, got %q", "lists", resp.Folder)
+	}
+}
+
+// TestDeliver_SubaddressUnknownFolder_ReportsInbox is the other half of #168:
+// an extension with no matching folder falls back to the inbox, and the
+// reported folder must follow the message rather than the address.
+func TestDeliver_SubaddressUnknownFolder_ReportsInbox(t *testing.T) {
+	dlvr := setupDomainFixture(t, "")
+
+	resp, err := dlvr.Deliver(context.Background(),
+		DeliverRequest{
+			Sender:    "sender@example.com",
+			Recipient: "alice+nosuchfolder@example.com",
+		},
+		[]byte(minimalMsg))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.Result != ResultDelivered {
+		t.Fatalf("want ResultDelivered, got %v (reason: %q)", resp.Result, resp.Reason)
+	}
+	if resp.Folder != "INBOX" {
+		t.Errorf("want Folder %q, got %q", "INBOX", resp.Folder)
+	}
 }
 
 // TestDeliver_HappyPath is a smoke test: a well-formed delivery to a known

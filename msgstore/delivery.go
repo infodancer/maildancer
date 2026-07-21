@@ -85,6 +85,21 @@ type Envelope struct {
 	// Set by deliver.go stage 4 (from DeliverRequest.Forwarded) and by
 	// MailDeliveryAgent when recursing into a locally-served forward target.
 	Forwarded bool
+
+	// DeliveredFolders is an output parameter. When a caller sets it to a
+	// non-nil map, the delivery agent records the folder each recipient's copy
+	// actually landed in, keyed by the recipient's base address ("INBOX", or a
+	// folder name for subaddress-routed mail). A nil map means the caller does
+	// not care and agents skip the bookkeeping.
+	//
+	// Callers that need the real destination -- smtpd's IMAP IDLE
+	// notification, which must not tell a client to look in the wrong folder
+	// (#143, #168) -- read it back after Deliver returns. It lives on the
+	// envelope rather than in Deliver's signature because the delivery path is
+	// a chain of wrappers (EncryptingDeliveryAgent, MailDeliveryAgent); an
+	// optional interface would vanish silently the first time a wrapper forgot
+	// to forward it, which is the exact failure this is meant to fix.
+	DeliveredFolders map[string]string
 }
 
 // SpamResult carries the outcome of a spam check as envelope metadata.

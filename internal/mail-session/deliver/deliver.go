@@ -197,6 +197,11 @@ func (dlvr *Deliverer) deliverLocal(ctx context.Context, dom *domain.Domain, req
 		// does not resolve forwarding rules a second time (1-hop enforcement).
 		Forwarded:  req.Forwarded,
 		Encryption: encInfo,
+		// Ask the agent to report where it actually filed the message. The
+		// recipient may carry a +extension that routes to a folder, so INBOX
+		// is a guess, and a wrong folder in the IDLE notification sends the
+		// client looking in the wrong place (#168).
+		DeliveredFolders: map[string]string{},
 	}
 	if req.ReceivedTime != "" {
 		if t, err := time.Parse(time.RFC3339, req.ReceivedTime); err == nil {
@@ -211,12 +216,21 @@ func (dlvr *Deliverer) deliverLocal(ctx context.Context, dom *domain.Domain, req
 		return DeliverResponse{}, fmt.Errorf("maildir delivery to %s: %w", req.Recipient, err)
 	}
 
-	slog.Debug("message delivered to inbox",
+	// The agent reports the folder it chose, keyed by base address (the
+	// recipient minus any +extension). Fall back to INBOX for agents that do
+	// not fill the map in.
+	folder := envelope.DeliveredFolders[msgstore.ParseRecipient(req.Recipient).Address]
+	if folder == "" {
+		folder = "INBOX"
+	}
+
+	slog.Debug("message delivered",
 		slog.String("msgid", req.MsgID),
-		slog.String("recipient", req.Recipient))
+		slog.String("recipient", req.Recipient),
+		slog.String("folder", folder))
 	return DeliverResponse{
 		Result: ResultDelivered,
-		Folder: "INBOX",
+		Folder: folder,
 	}, nil
 }
 

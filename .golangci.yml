@@ -19,7 +19,14 @@ linters:
     - unused
     - ineffassign
     - depguard
+    - dupl
+    - nolintlint
   settings:
+    dupl:
+      threshold: 150 # tokens; golangci-lint default
+    nolintlint:
+      require-explanation: true # a bare //nolint:x with no reason is as bad as no comment
+      require-specific: true # forbid bare //nolint; must name the linter(s)
     errcheck:
       # Close() on connections and files is idiomatic to ignore in cleanup paths.
       exclude-functions:

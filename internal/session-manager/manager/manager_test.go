@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -12,6 +13,28 @@ import (
 	"github.com/infodancer/maildancer/internal/session-manager/config"
 	"github.com/infodancer/maildancer/internal/session-manager/metrics"
 )
+
+func TestMailSessionSysProcAttr(t *testing.T) {
+	attr := mailSessionSysProcAttr(1234, 5678)
+
+	if attr == nil {
+		t.Fatal("mailSessionSysProcAttr() = nil, want non-nil")
+	}
+	if attr.Credential == nil {
+		t.Fatal("Credential = nil, want uid/gid set")
+	}
+	if attr.Credential.Uid != 1234 {
+		t.Errorf("Uid = %d, want 1234", attr.Credential.Uid)
+	}
+	if attr.Credential.Gid != 5678 {
+		t.Errorf("Gid = %d, want 5678", attr.Credential.Gid)
+	}
+	// Pdeathsig makes an orphaned mail-session die with an ungracefully-killed
+	// session-manager (crash/OOM/SIGKILL), the case Close() cannot cover.
+	if attr.Pdeathsig != syscall.SIGTERM {
+		t.Errorf("Pdeathsig = %v, want SIGTERM", attr.Pdeathsig)
+	}
+}
 
 // mockClients are embedded interface stubs for sessionEntry fields.
 type mockMailboxClient struct{ pb.MailboxServiceClient }

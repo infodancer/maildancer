@@ -277,12 +277,7 @@ func (m *Manager) DeliverySession(ctx context.Context, recipient string) (pb.Del
 
 	cmd := exec.CommandContext(ctx, m.cfg.MailSessionCmd, args...)
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{
-			Uid: creds.UID,
-			Gid: creds.GID,
-		},
-	}
+	cmd.SysProcAttr = mailSessionSysProcAttr(creds.UID, creds.GID)
 
 	if err := m.startAndWaitReady(cmd); err != nil {
 		_ = os.RemoveAll(socketDir)
@@ -351,6 +346,32 @@ func keyPipe(privKey []byte) (*os.File, error) {
 	return r, nil
 }
 
+// mailSessionSysProcAttr builds the SysProcAttr for a spawned mail-session:
+// the recipient uid/gid credentials, plus a parent-death signal so an orphaned
+// child dies with the session-manager.
+//
+// Graceful shutdown already terminates children (main wires SIGTERM/SIGINT to
+// Manager.Close, which SIGTERMs every session). Pdeathsig covers only the
+// *ungraceful* cases Close cannot -- SIGKILL, OOM-kill, panic, hard reboot --
+// where children would otherwise reparent to init and keep holding the maildir,
+// socket, and locks until their idle timer fires, contending with the fresh
+// mail-session a restarted session-manager spawns for the same user.
+//
+// Go re-arms PR_SET_PDEATHSIG after applying the Credential (syscall/exec_linux
+// sets it a second time post-setuid), so it survives the uid change. The
+// residual caveat is that the signal fires on death of the parent *thread*, not
+// process; spawns run on ordinary (unlocked) goroutines whose worker threads
+// the runtime parks rather than destroys, so this does not misfire in practice.
+func mailSessionSysProcAttr(uid, gid uint32) *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid: uid,
+			Gid: gid,
+		},
+		Pdeathsig: syscall.SIGTERM,
+	}
+}
+
 // spawnSession starts a new mail-session daemon process for the given user.
 // When privKey is a 32-byte session key, it is passed to the child over fd 3
 // so the mail-session decrypting store can serve plaintext to pop3d/imapd.
@@ -395,12 +416,7 @@ func (m *Manager) spawnSession(username, mailbox string, privKey []byte) (*sessi
 
 	cmd := exec.Command(m.cfg.MailSessionCmd, args...)
 	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Credential: &syscall.Credential{
-			Uid: creds.UID,
-			Gid: creds.GID,
-		},
-	}
+	cmd.SysProcAttr = mailSessionSysProcAttr(creds.UID, creds.GID)
 
 	// Pass the session key (if any) over fd 3. The parent's read end is
 	// closed once the child has started; the envelope lives only in the

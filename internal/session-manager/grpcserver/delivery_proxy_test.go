@@ -2,6 +2,7 @@ package grpcserver
 
 import (
 	"context"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -98,11 +99,16 @@ func sendDelivery(t *testing.T, client pb.DeliveryServiceClient, meta *pb.Delive
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Send(&pb.DeliverRequest{Payload: &pb.DeliverRequest_Metadata{Metadata: meta}}); err != nil {
+	// A Send may race the server terminating the RPC early: when a delivery
+	// falls through to a failing spawn (e.g. a forwarded delivery that bypasses
+	// redirect resolution), the handler returns before the client finishes
+	// sending. gRPC surfaces that as io.EOF on Send, and the real status must be
+	// read from CloseAndRecv -- so io.EOF here is expected, not a failure.
+	if err := stream.Send(&pb.DeliverRequest{Payload: &pb.DeliverRequest_Metadata{Metadata: meta}}); err != nil && err != io.EOF {
 		t.Fatal(err)
 	}
 	// A body, to confirm the proxy drains it on the redirect path.
-	if err := stream.Send(&pb.DeliverRequest{Payload: &pb.DeliverRequest_Data{Data: []byte("From: s@x\r\n\r\nhi\r\n")}}); err != nil {
+	if err := stream.Send(&pb.DeliverRequest{Payload: &pb.DeliverRequest_Data{Data: []byte("From: s@x\r\n\r\nhi\r\n")}}); err != nil && err != io.EOF {
 		t.Fatal(err)
 	}
 	return stream.CloseAndRecv()

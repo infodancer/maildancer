@@ -4,7 +4,7 @@
 # listener itself stays root (it binds 25/465/587 and spawns each handler
 # under another uid), but the per-connection handlers drop to the smtpd
 # service account (uid 903, primary group mailsvc gid 900), so they need the
-# staged root:mailsvc copies. The tlsrefresh service re-stages after certbot
+# staged root:mailsvc copies. The tlsrefresh-smtpd service re-stages after certbot
 # renewals; handlers load the cert per connection, so renewals apply without
 # a restart. When the config names no TLS material nothing is staged and
 # smtpd starts without the overrides (TLS-less dev setups).

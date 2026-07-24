@@ -1,8 +1,10 @@
 #!/command/with-contenv sh
 # Stage the TLS material somewhere the imapd service account can read it:
-# the /etc/letsencrypt mount is read-only with a root-0600 key. When the
-# config names no TLS material nothing is staged and imapd starts without
-# the overrides (TLS-less dev setups).
+# the /etc/letsencrypt mount is read-only with a root-0600 key. The
+# tlsrefresh-imapd service keeps the staged copies current after certbot
+# renewals; handlers load the cert per connection, so renewals apply without
+# a restart. When the config names no TLS material nothing is staged and
+# imapd starts without the overrides (TLS-less dev setups).
 /tlsstage -config /etc/infodancer/config.toml -section imapd -out /run/tls/imapd
 TLSFLAGS=""
 if [ -f /run/tls/imapd/privkey.pem ]; then

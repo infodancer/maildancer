@@ -91,21 +91,22 @@ func TestStack_IMAPFullStack(t *testing.T) {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { srv.Stop() })
 
-	// Pick a free port for the IMAP listener.
+	// The test owns the TCP listener; each accepted connection is served
+	// through Stack.ServeConn -- the exact code path the forked
+	// protocol-handler subprocess runs (#179). Fork/exec itself is covered
+	// by forkperconn_test.go.
 	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("get free port: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
+	defer tcpLn.Close()
 	addr := tcpLn.Addr().String()
-	tcpLn.Close()
 
-	// Build config.
+	// Build config. No listeners: the Stack serves individual connections.
 	cfg := config.Default()
 	cfg.Hostname = "test.local"
 	cfg.SessionManager = config.SessionManagerConfig{Socket: sock}
-	cfg.Listeners = []config.ListenerConfig{
-		{Address: addr, Mode: config.ModeImap},
-	}
+	cfg.Listeners = nil
 
 	stack, err := backend.NewStack(backend.StackConfig{
 		Config: cfg,
@@ -115,17 +116,15 @@ func TestStack_IMAPFullStack(t *testing.T) {
 	}
 	defer stack.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	go func() {
-		if err := stack.Run(ctx); err != nil {
-			t.Logf("stack.Run: %v", err)
+		for {
+			c, aerr := tcpLn.Accept()
+			if aerr != nil {
+				return
+			}
+			go func() { _ = stack.ServeConn(c, config.ModeImap) }()
 		}
 	}()
-
-	// Give the server a moment to start.
-	time.Sleep(100 * time.Millisecond)
 
 	// Connect and run IMAP conversation.
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)

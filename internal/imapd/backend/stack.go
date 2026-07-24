@@ -12,6 +12,7 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/infodancer/logging"
+	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 	"github.com/infodancer/maildancer/internal/imapd/notify"
@@ -30,6 +31,7 @@ type StackConfig struct {
 // Stack owns all components of a running imapd instance and manages their lifecycle.
 type Stack struct {
 	srv       *imapserver.Server
+	tlsConfig *tls.Config
 	listeners []net.Listener
 	closers   []io.Closer
 	logger    *slog.Logger
@@ -47,7 +49,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		collector = &metrics.NoopCollector{}
 	}
 
-	s := &Stack{logger: logger}
+	s := &Stack{logger: logger, tlsConfig: cfg.TLSConfig}
 
 	// Session-manager is required.
 	if !cfg.Config.SessionManager.IsEnabled() {
@@ -130,6 +132,28 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 
 	return s, nil
+}
+
+// ServeConn serves exactly one IMAP session on conn and returns when the
+// session ends. It is the protocol-handler entry point in the
+// fork-per-connection model (#179): the dispatcher accepts the connection,
+// the handler subprocess serves it. ModeImaps wraps conn for implicit TLS
+// using the stack's TLS config; ModeImap relies on go-imap's STARTTLS via
+// Options.TLSConfig. go-imap only exposes Serve(net.Listener), so the single
+// connection is fed through a one-shot listener; the net.ErrClosed that ends
+// that listener after the session is filtered as success.
+func (s *Stack) ServeConn(conn net.Conn, mode config.ListenerMode) error {
+	if mode == config.ModeImaps {
+		if s.tlsConfig == nil {
+			_ = conn.Close()
+			return errors.New("imaps connection requires a TLS configuration")
+		}
+		conn = tls.Server(conn, s.tlsConfig)
+	}
+	if err := s.srv.Serve(connfork.NewOneConnListener(conn)); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	return nil
 }
 
 // Run starts serving on all listeners and blocks until ctx is cancelled.

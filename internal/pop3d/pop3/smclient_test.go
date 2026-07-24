@@ -12,7 +12,6 @@ import (
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -311,7 +310,7 @@ func TestSessionManagerClient_DeleteAndExpunge(t *testing.T) {
 	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
-	if err := client.DeleteMessage(ctx, "tok", 1); err != nil {
+	if err := client.Delete(ctx, "tok", 1); err != nil {
 		t.Fatalf("DeleteMessage: %v", err)
 	}
 	if deletedUID != 1 {
@@ -458,16 +457,9 @@ func TestSessionManagerStore_Close_CallsLogout(t *testing.T) {
 	socketPath, cleanup := startTestServer(t, sessionSvc, mailboxSvc)
 	defer cleanup()
 
-	// Use a direct gRPC connection since we need to bypass NewSessionManagerClient's lifecycle.
-	conn, err := grpc.NewClient("unix:"+socketPath, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	client, err := NewSessionManagerClient(config.SessionManagerConfig{Socket: socketPath}, nil)
 	if err != nil {
-		t.Fatalf("dial: %v", err)
-	}
-
-	client := &SessionManagerClient{
-		conn:    conn,
-		session: smpb.NewSessionServiceClient(conn),
-		mailbox: pb.NewMailboxServiceClient(conn),
+		t.Fatalf("NewSessionManagerClient: %v", err)
 	}
 
 	store := newSessionManagerStore(client, "logout-test-token")

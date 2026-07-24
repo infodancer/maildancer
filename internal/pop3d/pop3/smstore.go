@@ -54,7 +54,7 @@ func (s *sessionManagerStore) Retrieve(ctx context.Context, mailbox string, uid 
 }
 
 func (s *sessionManagerStore) Delete(ctx context.Context, mailbox string, uid uint32) error {
-	return s.client.DeleteMessage(ctx, s.token, uid)
+	return s.client.Delete(ctx, s.token, uid)
 }
 
 func (s *sessionManagerStore) Expunge(ctx context.Context, mailbox string) error {

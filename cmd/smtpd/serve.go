@@ -15,6 +15,7 @@ import (
 	"github.com/infodancer/maildancer/internal/smtpd/rspamd"
 	"github.com/infodancer/maildancer/internal/smtpd/smtp"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func runServe() {
@@ -58,9 +59,12 @@ func runServe() {
 		cancel()
 	}()
 
-	// Metrics HTTP server runs in the parent process. Per-connection metrics
-	// are not aggregated from subprocesses in this release.
+	// Metrics run in the parent process: it serves /metrics and aggregates the
+	// per-connection series each protocol-handler subprocess reports at exit.
+	var parentMetrics *metrics.ParentMetrics
 	if cfg.Metrics.Enabled {
+		parentMetrics = metrics.NewParentMetrics(prometheus.DefaultRegisterer)
+
 		metricsServer := metrics.NewPrometheusServer(cfg.Metrics.Address, cfg.Metrics.Path)
 		go func() {
 			if err := metricsServer.Start(ctx); err != nil && err != context.Canceled {
@@ -74,7 +78,7 @@ func runServe() {
 		"listeners", len(cfg.Listeners),
 		"exec", execPath)
 
-	srv := smtp.NewSubprocessServer(cfg, execPath, configPath, logger)
+	srv := smtp.NewSubprocessServer(cfg, execPath, configPath, parentMetrics, logger)
 	if err := srv.Run(ctx); err != nil && err != context.Canceled {
 		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
 		os.Exit(1)

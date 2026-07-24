@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/infodancer/maildancer/internal/smtpd/config"
+	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 )
 
 // SubprocessServer listens on configured TCP ports and spawns a protocol-handler
@@ -30,6 +31,7 @@ type SubprocessServer struct {
 	execPath   string
 	configPath string
 	logger     *slog.Logger
+	metrics    *metrics.ParentMetrics // nil disables per-connection metric aggregation
 	wg         sync.WaitGroup
 }
 
@@ -37,12 +39,15 @@ type SubprocessServer struct {
 // effective configuration (listeners, handler credentials, TLS overrides).
 // execPath is the path to the smtpd binary (use os.Executable()).
 // configPath is passed to each subprocess as the --config flag value.
-func NewSubprocessServer(cfg config.Config, execPath, configPath string, logger *slog.Logger) *SubprocessServer {
+// parentMetrics is the aggregation surface for per-connection metrics; pass nil
+// when metrics are disabled.
+func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentMetrics *metrics.ParentMetrics, logger *slog.Logger) *SubprocessServer {
 	return &SubprocessServer{
 		cfg:        cfg,
 		execPath:   execPath,
 		configPath: configPath,
 		logger:     logger,
+		metrics:    parentMetrics,
 	}
 }
 
@@ -127,14 +132,41 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 	cmd.SysProcAttr = handlerSysProcAttr(s.cfg)
 	cmd.Stderr = os.Stderr
 
+	// When metrics are enabled, hand the child the write end of a pipe as fd 4.
+	// The child ships its accumulated metric families here just before exiting;
+	// the parent reads them from metricsR and folds them into the aggregate.
+	// The channel is one-way by construction (child holds only the write end),
+	// so it can never carry data back into the possibly-lower-privileged child.
+	var metricsR *os.File
+	if s.metrics != nil {
+		r, w, err := os.Pipe()
+		if err != nil {
+			s.logger.Error("failed to create metrics pipe", slog.String("error", err.Error()))
+			// Fall through without metrics rather than dropping the connection.
+		} else {
+			metricsR = r
+			cmd.ExtraFiles = append(cmd.ExtraFiles, w) // becomes fd 4 in the child
+			defer func() { _ = w.Close() }()           // parent's copy; closed after Start
+		}
+	}
+
 	if err := cmd.Start(); err != nil {
 		s.logger.Error("failed to start protocol-handler",
 			slog.String("client_ip", clientIP),
 			slog.String("error", err.Error()))
 		_ = connFile.Close()
+		if metricsR != nil {
+			_ = metricsR.Close()
+		}
 		return
 	}
 	_ = connFile.Close() // child has the fd; parent closes its dup
+
+	// Record the connection now that the handler is running; the reaper below
+	// releases it after Wait so the active gauge cannot leak on a child crash.
+	if s.metrics != nil {
+		s.metrics.ConnectionOpened()
+	}
 
 	pid := cmd.Process.Pid
 	s.logger.Debug("spawned protocol-handler",
@@ -144,12 +176,29 @@ func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig)
 
 	// Reap the subprocess asynchronously to avoid zombies.
 	go func() {
+		// Drain the child's metrics report before reaping. The parent has
+		// already closed its own copy of the write end (deferred above), so
+		// this reads to EOF when the child exits and closes fd 4.
+		if metricsR != nil {
+			if err := s.metrics.Ingest(metricsR); err != nil {
+				s.logger.Debug("failed to ingest handler metrics",
+					slog.Int("pid", pid),
+					slog.String("error", err.Error()))
+				s.metrics.HandlerFailure("metrics_decode")
+			}
+			_ = metricsR.Close()
+		}
+
 		if err := cmd.Wait(); err != nil {
 			s.logger.Debug("protocol-handler exited with error",
 				slog.Int("pid", pid),
 				slog.String("error", err.Error()))
 		} else {
 			s.logger.Debug("protocol-handler exited", slog.Int("pid", pid))
+		}
+
+		if s.metrics != nil {
+			s.metrics.ConnectionClosed()
 		}
 	}()
 }

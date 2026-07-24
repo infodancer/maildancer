@@ -427,7 +427,7 @@ func TestCommandRegistry(t *testing.T) {
 	commandRegistry = make(map[string]Command)
 
 	// Register test commands -- nil smClient is fine for registry tests
-	RegisterAuthCommands(nil)
+	RegisterAuthCommands(nil, 0, nil)
 
 	tests := []struct {
 		name      string

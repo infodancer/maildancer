@@ -180,6 +180,10 @@ func mergeConfig(dst, src Config) Config {
 		dst.Timeouts.Idle = src.Timeouts.Idle
 	}
 
+	if src.Timeouts.SessionRecoveryDeadline != "" {
+		dst.Timeouts.SessionRecoveryDeadline = src.Timeouts.SessionRecoveryDeadline
+	}
+
 	if src.Limits.MaxConnections > 0 {
 		dst.Limits.MaxConnections = src.Limits.MaxConnections
 	}

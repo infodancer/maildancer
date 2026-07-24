@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/infodancer/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
@@ -16,8 +17,8 @@ import (
 
 // Handler creates a POP3 protocol handler with the given configuration.
 // Authentication and mailbox operations are delegated to the session-manager.
-func Handler(hostname string, smClient *SessionManagerClient, tlsConfig *tls.Config, collector metrics.Collector) server.ConnectionHandler {
-	RegisterAuthCommands(smClient)
+func Handler(hostname string, smClient *SessionManagerClient, tlsConfig *tls.Config, collector metrics.Collector, recoveryDeadline time.Duration) server.ConnectionHandler {
+	RegisterAuthCommands(smClient, recoveryDeadline, collector)
 	RegisterTransactionCommands()
 
 	return func(ctx context.Context, conn *server.Connection) {
@@ -233,24 +234,8 @@ func handleConnection(ctx context.Context, conn *server.Connection, hostname str
 			}
 
 		case "QUIT":
-			// If we were in TRANSACTION state (now UPDATE), expunge deleted messages.
-			// Use sess.Store() which may be domain-specific rather than the global msgStore.
-			store := sess.Store()
-			if sess.State() == StateUpdate && store != nil {
-				uids := sess.GetDeletedUIDs()
-				for _, uid := range uids {
-					if err := store.Delete(ctx, sess.Mailbox(), uid); err != nil {
-						logger.Error("failed to delete message", "uid", uid, "error", err.Error())
-					}
-				}
-				if len(uids) > 0 {
-					if err := store.Expunge(ctx, sess.Mailbox()); err != nil {
-						logger.Error("failed to expunge mailbox", "error", err.Error())
-					} else {
-						logger.Info("expunged messages", "count", len(uids))
-					}
-				}
-			}
+			// Deletions were committed by quitCommand.Execute before the
+			// response was written (RFC 1939 UPDATE state ordering).
 			logger.Info("QUIT command received, closing connection")
 			return
 		}

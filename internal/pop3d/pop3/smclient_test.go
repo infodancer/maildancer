@@ -10,9 +10,9 @@ import (
 	pb "github.com/infodancer/maildancer/internal/mail-session/proto/mailsession/v1"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
+	"github.com/infodancer/maildancer/internal/smclient"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
@@ -311,7 +311,7 @@ func TestSessionManagerClient_DeleteAndExpunge(t *testing.T) {
 	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
-	if err := client.DeleteMessage(ctx, "tok", 1); err != nil {
+	if err := client.Delete(ctx, "tok", 1); err != nil {
 		t.Fatalf("DeleteMessage: %v", err)
 	}
 	if deletedUID != 1 {
@@ -405,6 +405,17 @@ func TestNewSessionManagerClient_mTLSMissingCert(t *testing.T) {
 }
 
 // Test the store adapter.
+// newTestPop3Store logs in through a recovering session and wraps it in the
+// store adapter, as the PASS/AUTH paths do in production.
+func newTestPop3Store(t *testing.T, client *SessionManagerClient) *sessionManagerStore {
+	t.Helper()
+	sess := smclient.NewSession(client, smclient.SessionConfig{}, nil)
+	if _, err := sess.Login(context.Background(), "user@example.com", "secret"); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	return newSessionManagerStore(sess)
+}
+
 func TestSessionManagerStore_ListAndStat(t *testing.T) {
 	sessionSvc := &mockSessionService{}
 	mailboxSvc := &mockMailboxService{}
@@ -419,7 +430,7 @@ func TestSessionManagerStore_ListAndStat(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	store := newSessionManagerStore(client, "test-token")
+	store := newTestPop3Store(t, client)
 	ctx := context.Background()
 
 	// Test List
@@ -458,19 +469,12 @@ func TestSessionManagerStore_Close_CallsLogout(t *testing.T) {
 	socketPath, cleanup := startTestServer(t, sessionSvc, mailboxSvc)
 	defer cleanup()
 
-	// Use a direct gRPC connection since we need to bypass NewSessionManagerClient's lifecycle.
-	conn, err := grpc.NewClient("unix:"+socketPath, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	client, err := NewSessionManagerClient(config.SessionManagerConfig{Socket: socketPath}, nil)
 	if err != nil {
-		t.Fatalf("dial: %v", err)
+		t.Fatalf("NewSessionManagerClient: %v", err)
 	}
 
-	client := &SessionManagerClient{
-		conn:    conn,
-		session: smpb.NewSessionServiceClient(conn),
-		mailbox: pb.NewMailboxServiceClient(conn),
-	}
-
-	store := newSessionManagerStore(client, "logout-test-token")
+	store := newTestPop3Store(t, client)
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -478,8 +482,10 @@ func TestSessionManagerStore_Close_CallsLogout(t *testing.T) {
 	if !logoutCalled {
 		t.Error("Logout was not called")
 	}
-	if logoutToken != "logout-test-token" {
-		t.Errorf("logout token = %q, want %q", logoutToken, "logout-test-token")
+	// The token now comes from Login through the recovering session, so
+	// Logout must release exactly the token the mock issued.
+	if logoutToken != "test-token-123" {
+		t.Errorf("logout token = %q, want %q", logoutToken, "test-token-123")
 	}
 
 	_ = client.Close()

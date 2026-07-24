@@ -39,6 +39,7 @@ func (n *noopCollector) MessageFetched(_ string, _ int64) {}
 func (n *noopCollector) MessageStored(_ string)           {}
 func (n *noopCollector) MessageExpunged(_ string)         {}
 func (n *noopCollector) FolderSelected(_ string)          {}
+func (n *noopCollector) SessionRecovery(_ string)         {}
 
 func TestHasFlag(t *testing.T) {
 	flags := []string{"\\Seen", "\\Flagged"}

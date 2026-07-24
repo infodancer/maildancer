@@ -3,6 +3,8 @@ package backend
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 	"github.com/infodancer/maildancer/internal/imapd/notify"
+	"github.com/infodancer/maildancer/internal/smclient"
 	"github.com/infodancer/maildancer/msgstore"
 	storeerrors "github.com/infodancer/maildancer/msgstore/errors"
 )
@@ -34,6 +37,7 @@ type Session struct {
 	store       msgstore.MessageStore
 	folderStore msgstore.FolderStore
 	smClient    *SessionManagerClient
+	smSession   *smclient.Session // recovering session; nil before Login
 
 	username   string
 	mailbox    string // user's mailbox identifier from auth
@@ -53,12 +57,13 @@ type Session struct {
 	keepaliveInterval time.Duration
 
 	// Selected state
-	selectedMailbox string
-	messages        []msgstore.MessageInfo
-	uidIndex        map[imap.UID]int // UID → message index, built on Select
-	tracker         *imapserver.MailboxTracker
-	sessionTracker  *imapserver.SessionTracker
-	readOnly        bool
+	selectedMailbox     string
+	selectedUIDValidity uint32 // captured at Select for the recovery continuity check
+	messages            []msgstore.MessageInfo
+	uidIndex            map[imap.UID]int // UID → message index, built on Select
+	tracker             *imapserver.MailboxTracker
+	sessionTracker      *imapserver.SessionTracker
+	readOnly            bool
 }
 
 // NewSession creates a new IMAP session for the given connection.
@@ -80,10 +85,19 @@ func NewSession(conn *imapserver.Conn, cfg *config.Config, smClient *SessionMana
 	}
 }
 
-// Login authenticates the user via the session-manager service.
+// Login authenticates the user via the session-manager service. The
+// credential is retained inside the recovering session (this per-connection
+// handler process only, zeroed on close) so the session can transparently
+// re-login if session-manager restarts (#179, session-recovery-design.md).
 func (s *Session) Login(username, password string) error {
 	ctx := context.Background()
-	token, mailbox, err := s.smClient.Login(ctx, username, password)
+	smSess := smclient.NewSession(s.smClient, smclient.SessionConfig{
+		RecoveryDeadline: s.cfg.Timeouts.RecoveryDeadline(),
+	}, s.logger)
+	smSess.SetRecoveredHook(s.recoveredHook)
+	smSess.SetRecoveryMetric(s.collector.SessionRecovery)
+
+	mailbox, err := smSess.Login(ctx, username, password)
 	if err != nil {
 		s.logger.Info("login failed", "username", username, "error", err)
 		s.collector.AuthAttempt(extractDomain(username), false)
@@ -96,8 +110,9 @@ func (s *Session) Login(username, password string) error {
 	s.username = username
 	s.userDomain = extractDomain(username)
 	s.mailbox = mailbox
+	s.smSession = smSess
 
-	smStore := newSessionManagerStore(s.smClient, token)
+	smStore := newSessionManagerStore(smSess)
 	s.store = smStore
 	s.folderStore = smStore
 
@@ -112,6 +127,37 @@ func (s *Session) Login(username, password string) error {
 	s.collector.AuthAttempt(s.userDomain, true)
 	s.logger.Info("login success", "username", username, "via", "session-manager")
 	return nil
+}
+
+// recoveredHook is the post-recovery continuity check
+// (session-recovery-design.md): after a transparent re-login, the selected
+// folder's UIDVALIDITY must be unchanged or the session cannot resume
+// without violating IMAP semantics. It runs against the raw client (no
+// recursion into the recovery engine). During IDLE the main session
+// goroutine is parked, so reading the selected state here matches the
+// existing keepalive discipline.
+func (s *Session) recoveredHook(ctx context.Context, c *smclient.Client, token string) error {
+	folder := s.selectedMailbox
+	if folder == "" {
+		return nil
+	}
+	uv, err := c.UIDValidity(ctx, token, folder)
+	if err != nil {
+		return err
+	}
+	if uv != s.selectedUIDValidity {
+		return fmt.Errorf("uidvalidity changed across recovery: %d -> %d", s.selectedUIDValidity, uv)
+	}
+	return nil
+}
+
+// isFatalSessionErr reports errors after which the session cannot continue:
+// recovery was refused (credential rejected, continuity check failed) or
+// exhausted (deadline). The connection should be dropped so the client
+// reconnects and re-authenticates.
+func isFatalSessionErr(err error) bool {
+	return errors.Is(err, smclient.ErrCredentialRejected) ||
+		errors.Is(err, smclient.ErrRecoveryDeadline)
 }
 
 // ensureDefaultFolders creates all default IMAP folders if they don't exist.
@@ -178,6 +224,14 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 			}
 			newMsgs, err := rs.Rescan()
 			if err != nil {
+				// The recovering store already retried transient
+				// failures; what comes back is either fatal for the
+				// session (drop so the client reconnects cleanly
+				// instead of hanging) or folder-level noise.
+				if isFatalSessionErr(err) {
+					s.logger.Warn("session lost during idle", "error", err)
+					return err
+				}
 				s.logger.Warn("rescan after notification failed", "error", err)
 				continue
 			}
@@ -195,12 +249,17 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 
 // runIdleKeepalive periodically issues a cheap RPC against the upstream store
 // while an IDLE is active, preventing mail-session's idle interceptor from
-// reaping the session. Exits when done is closed (Idle returning) or when the
-// RPC fails irrecoverably -- a failure is logged but the loop continues, since
-// recovery is the next rescan/operation's responsibility, not the heartbeat's.
+// reaping the session. The RPC goes through the recovering session, so it
+// doubles as the recovery probe during a session-manager restart (#179):
+// transient failures are retried on subsequent ticks, and each tick's
+// recovery attempt is bounded by keepaliveRPCTimeout. The loop tears the
+// connection down when recovery is refused (fatal) or when failures persist
+// past the recovery deadline -- a silent zombie IDLE was the original #126
+// symptom.
 func (s *Session) runIdleKeepalive(done <-chan struct{}) {
 	ticker := time.NewTicker(s.keepaliveInterval)
 	defer ticker.Stop()
+	var failingSince time.Time
 	for {
 		select {
 		case <-done:
@@ -209,8 +268,18 @@ func (s *Session) runIdleKeepalive(done <-chan struct{}) {
 			ctx, cancel := context.WithTimeout(context.Background(), keepaliveRPCTimeout)
 			_, err := s.folderStore.UIDValidity(ctx, s.mailbox, s.selectedMailbox)
 			cancel()
-			if err != nil {
-				s.logger.Warn("idle keepalive failed", "error", err)
+			if err == nil {
+				failingSince = time.Time{}
+				continue
+			}
+			s.logger.Warn("idle keepalive failed", "error", err)
+			if failingSince.IsZero() {
+				failingSince = time.Now()
+			}
+			if isFatalSessionErr(err) || time.Since(failingSince) > s.cfg.Timeouts.RecoveryDeadline() {
+				s.logger.Warn("session unrecoverable during idle; closing connection")
+				_ = s.conn.NetConn().Close()
+				return
 			}
 		}
 	}

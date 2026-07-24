@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/emersion/go-sasl"
+	"github.com/infodancer/maildancer/internal/pop3d/metrics"
+	"github.com/infodancer/maildancer/internal/smclient"
+	"github.com/infodancer/maildancer/msgstore"
 )
 
 // capaCommand implements the CAPA command (RFC 2449).
@@ -96,7 +100,9 @@ func (u *userCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 // passCommand implements the PASS command (RFC 1939).
 type passCommand struct {
-	smClient *SessionManagerClient
+	smClient         *SessionManagerClient
+	recoveryDeadline time.Duration
+	collector        metrics.Collector
 }
 
 func (p *passCommand) Name() string {
@@ -127,7 +133,7 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 	password := args[0]
 
-	token, mailbox, err := p.smClient.Login(ctx, username, password)
+	mailbox, store, err := loginRecoveringSession(ctx, p.smClient, p.recoveryDeadline, p.collector, username, password)
 	if err != nil {
 		conn.Logger().Info("authentication failed",
 			"username", username,
@@ -138,7 +144,6 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 	sess.SetAuthenticated(AuthenticatedUser{Username: username, Mailbox: mailbox})
 
-	store := newSessionManagerStore(p.smClient, token)
 	if err := sess.InitializeMailbox(ctx, store, ""); err != nil {
 		conn.Logger().Error("failed to initialize mailbox",
 			"username", username,
@@ -176,8 +181,18 @@ func (q *quitCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 		message = "Goodbye"
 
 	case StateTransaction:
-		// Enter UPDATE state to commit changes (future: commit deletions)
+		// Enter UPDATE state and commit deletions BEFORE answering: RFC
+		// 1939's UPDATE state completes before the response, and a failed
+		// commit must surface as -ERR so the client keeps its DELE state
+		// and can retry after reconnecting (session-recovery-design.md;
+		// previously the +OK was sent first and commit errors were
+		// silently dropped).
 		sess.EnterUpdate()
+		if store := sess.Store(); store != nil {
+			if err := commitDeletions(ctx, sess, conn, store); err != nil {
+				return Response{OK: false, Message: "[SYS/TEMP] some deleted messages not removed"}, nil
+			}
+		}
 		message = "Logging out"
 
 	default:
@@ -189,7 +204,9 @@ func (q *quitCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 // authCommand implements the AUTH command (RFC 5034).
 type authCommand struct {
-	smClient *SessionManagerClient
+	smClient         *SessionManagerClient
+	recoveryDeadline time.Duration
+	collector        metrics.Collector
 }
 
 func (a *authCommand) Name() string {
@@ -265,7 +282,7 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 // saslAuthenticate handles SASL PLAIN via session-manager.
 func (a *authCommand) saslAuthenticate(ctx context.Context, sess *Session, conn ConnectionLogger, mechanism, username, password string) error {
-	token, mailbox, err := a.smClient.Login(ctx, username, password)
+	mailbox, store, err := loginRecoveringSession(ctx, a.smClient, a.recoveryDeadline, a.collector, username, password)
 	if err != nil {
 		conn.Logger().Info("SASL authentication failed",
 			"mechanism", mechanism,
@@ -278,7 +295,6 @@ func (a *authCommand) saslAuthenticate(ctx context.Context, sess *Session, conn 
 	sess.SetAuthenticated(AuthenticatedUser{Username: username, Mailbox: mailbox})
 	sess.SetUsername(username)
 
-	store := newSessionManagerStore(a.smClient, token)
 	if err := sess.InitializeMailbox(ctx, store, ""); err != nil {
 		conn.Logger().Error("failed to initialize mailbox",
 			"mechanism", mechanism,
@@ -340,13 +356,60 @@ func (a *authCommand) ProcessSASLResponse(ctx context.Context, sess *Session, co
 	return a.processSASLStep(ctx, sess, conn, response)
 }
 
+// loginRecoveringSession authenticates through a recovering smclient.Session
+// that retains the presented credential for the lifetime of this one
+// connection (zeroed on close), enabling transparent recovery across a
+// session-manager restart (#179, session-recovery-design.md).
+func loginRecoveringSession(ctx context.Context, client *SessionManagerClient, deadline time.Duration, collector metrics.Collector, username, password string) (string, *sessionManagerStore, error) {
+	smSess := smclient.NewSession(client, smclient.SessionConfig{RecoveryDeadline: deadline}, nil)
+	if collector != nil {
+		smSess.SetRecoveryMetric(collector.SessionRecovery)
+	}
+	mailbox, err := smSess.Login(ctx, username, password)
+	if err != nil {
+		return "", nil, err
+	}
+	return mailbox, newSessionManagerStore(smSess), nil
+}
+
 // RegisterAuthCommands registers all authentication-related commands.
 // Authentication is delegated to the session-manager via smClient.
-func RegisterAuthCommands(smClient *SessionManagerClient) {
+func RegisterAuthCommands(smClient *SessionManagerClient, recoveryDeadline time.Duration, collector metrics.Collector) {
 	RegisterCommand(&capaCommand{})
 	RegisterCommand(&stlsCommand{})
 	RegisterCommand(&userCommand{})
-	RegisterCommand(&passCommand{smClient: smClient})
-	RegisterCommand(&authCommand{smClient: smClient})
+	RegisterCommand(&passCommand{smClient: smClient, recoveryDeadline: recoveryDeadline, collector: collector})
+	RegisterCommand(&authCommand{smClient: smClient, recoveryDeadline: recoveryDeadline, collector: collector})
 	RegisterCommand(&quitCommand{})
+}
+
+// commitDeletions applies the session's pending DELE marks: one Delete RPC
+// per UID, then a single Expunge. RPCs go through the recovering session, so
+// a session-manager restart mid-commit is retried transparently where safe
+// (the writes themselves are at-most-once); any remaining failure is
+// returned so QUIT answers -ERR.
+func commitDeletions(ctx context.Context, sess *Session, conn ConnectionLogger, store msgstore.MessageStore) error {
+	uids := sess.GetDeletedUIDs()
+	if len(uids) == 0 {
+		return nil
+	}
+	var firstErr error
+	for _, uid := range uids {
+		if err := store.Delete(ctx, sess.Mailbox(), uid); err != nil {
+			conn.Logger().Error("failed to delete message", "uid", uid, "error", err.Error())
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	if err := store.Expunge(ctx, sess.Mailbox()); err != nil {
+		conn.Logger().Error("failed to expunge mailbox", "error", err.Error())
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr == nil {
+		conn.Logger().Info("expunged messages", "count", len(uids))
+	}
+	return firstErr
 }

@@ -25,6 +25,7 @@ type PrometheusCollector struct {
 
 	// Mailbox metrics
 	foldersSelectedTotal *prometheus.CounterVec
+	sessionRecoveries    *prometheus.CounterVec
 }
 
 // NewPrometheusCollector creates a new PrometheusCollector with all metrics registered.
@@ -75,6 +76,11 @@ func NewPrometheusCollector(reg prometheus.Registerer) *PrometheusCollector {
 			Name: "imapd_folders_selected_total",
 			Help: "Total number of folder SELECT/EXAMINE operations.",
 		}, []string{"user_domain"}),
+
+		sessionRecoveries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "imapd_session_recoveries_total",
+			Help: "Total number of session-recovery attempts across session-manager restarts, by outcome.",
+		}, []string{"result"}),
 	}
 
 	// Register all metrics
@@ -89,6 +95,7 @@ func NewPrometheusCollector(reg prometheus.Registerer) *PrometheusCollector {
 		c.messagesExpungedTotal,
 		c.messagesSizeBytes,
 		c.foldersSelectedTotal,
+		c.sessionRecoveries,
 	)
 
 	return c
@@ -143,4 +150,10 @@ func (c *PrometheusCollector) MessageExpunged(userDomain string) {
 // FolderSelected increments the folder selected counter.
 func (c *PrometheusCollector) FolderSelected(userDomain string) {
 	c.foldersSelectedTotal.WithLabelValues(userDomain).Inc()
+}
+
+// SessionRecovery counts a session-recovery outcome across a session-manager
+// restart (#179).
+func (c *PrometheusCollector) SessionRecovery(result string) {
+	c.sessionRecoveries.WithLabelValues(result).Inc()
 }

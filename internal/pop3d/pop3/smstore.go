@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/infodancer/maildancer/internal/smclient"
 	"github.com/infodancer/maildancer/msgstore"
 )
 
@@ -17,17 +18,16 @@ var (
 // All operations are proxied through the session-manager's MailboxService using
 // the session token obtained during Login. Closing the store calls Logout.
 type sessionManagerStore struct {
-	client *SessionManagerClient
-	token  string
+	sess *smclient.Session
 }
 
 // newSessionManagerStore creates a store backed by the given client and session token.
-func newSessionManagerStore(client *SessionManagerClient, token string) *sessionManagerStore {
-	return &sessionManagerStore{client: client, token: token}
+func newSessionManagerStore(sess *smclient.Session) *sessionManagerStore {
+	return &sessionManagerStore{sess: sess}
 }
 
 func (s *sessionManagerStore) List(ctx context.Context, mailbox string) ([]msgstore.MessageInfo, error) {
-	msgs, err := s.client.ListMessages(ctx, s.token, "")
+	msgs, err := s.sess.ListMessages(ctx, "")
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func (s *sessionManagerStore) List(ctx context.Context, mailbox string) ([]msgst
 }
 
 func (s *sessionManagerStore) Stat(ctx context.Context, mailbox string) (int, int64, error) {
-	count, totalBytes, err := s.client.StatMailbox(ctx, s.token, "")
+	count, totalBytes, err := s.sess.StatMailbox(ctx, "")
 	if err != nil {
 		return 0, 0, err
 	}
@@ -50,18 +50,18 @@ func (s *sessionManagerStore) Stat(ctx context.Context, mailbox string) (int, in
 }
 
 func (s *sessionManagerStore) Retrieve(ctx context.Context, mailbox string, uid uint32) (io.ReadCloser, error) {
-	return s.client.FetchMessage(ctx, s.token, "", uid)
+	return s.sess.FetchMessage(ctx, "", uid)
 }
 
 func (s *sessionManagerStore) Delete(ctx context.Context, mailbox string, uid uint32) error {
-	return s.client.DeleteMessage(ctx, s.token, uid)
+	return s.sess.Delete(ctx, uid)
 }
 
 func (s *sessionManagerStore) Expunge(ctx context.Context, mailbox string) error {
-	return s.client.ExpungeMailbox(ctx, s.token, "")
+	return s.sess.ExpungeMailbox(ctx, "")
 }
 
 // Close releases the session by calling Logout on the session-manager.
 func (s *sessionManagerStore) Close() error {
-	return s.client.Logout(context.Background(), s.token)
+	return s.sess.Logout(context.Background())
 }

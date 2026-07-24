@@ -246,7 +246,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	smCfg := config.SessionManagerConfig{Socket: smSocket}
 
-	handler := pop3.Handler("mail.test.local", mustSMClient(t, smCfg), serverTLS, &metrics.NoopCollector{})
+	handler := pop3.Handler("mail.test.local", mustSMClient(t, smCfg), serverTLS, &metrics.NoopCollector{}, 0)
 
 	// Bind on a random localhost port.
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", serverTLS)

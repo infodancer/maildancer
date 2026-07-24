@@ -27,3 +27,6 @@ func (n *NoopCollector) MessageDeleted(userDomain string) {}
 
 // MessageListed is a no-op.
 func (n *NoopCollector) MessageListed(userDomain string) {}
+
+// SessionRecovery is a no-op.
+func (n *NoopCollector) SessionRecovery(result string) {}

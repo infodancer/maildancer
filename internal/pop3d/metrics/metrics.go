@@ -22,6 +22,10 @@ type Collector interface {
 	MessageRetrieved(userDomain string, sizeBytes int64)
 	MessageDeleted(userDomain string)
 	MessageListed(userDomain string)
+
+	// Session recovery outcomes across session-manager restarts (#179):
+	// result is "ok", "auth_failed", or "deadline".
+	SessionRecovery(result string)
 }
 
 // Server defines the interface for a metrics HTTP server.

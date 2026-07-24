@@ -80,3 +80,15 @@ func (c *notifyConn) Close() error {
 	c.closeOnce.Do(func() { close(c.done) })
 	return c.Conn.Close()
 }
+
+// UnwrapOneConn returns the underlying net.Conn when conn is the session-end
+// wrapper a OneConnListener applies in Accept; otherwise it returns conn
+// unchanged. Protocol code needs this when it type-asserts the connection
+// handed out by a protocol library (e.g. to find a *tls.Conn) -- the wrapper
+// would otherwise hide the concrete type.
+func UnwrapOneConn(conn net.Conn) net.Conn {
+	if nc, ok := conn.(*notifyConn); ok {
+		return nc.Conn
+	}
+	return conn
+}

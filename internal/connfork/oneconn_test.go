@@ -91,3 +91,17 @@ func TestOneConnListener_CloseUnblocks(t *testing.T) {
 	// Close is idempotent.
 	_ = ln.Close()
 }
+
+// TestOneConnListener_AddrMatchesConn checks that Addr returns the local address.
+func TestOneConnListener_AddrMatchesConn(t *testing.T) {
+	t.Parallel()
+
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() { _ = c1.Close() })
+	t.Cleanup(func() { _ = c2.Close() })
+
+	ln := NewOneConnListener(c1)
+	if ln.Addr() == nil {
+		t.Fatal("Addr() returned nil")
+	}
+}

@@ -12,6 +12,7 @@ import (
 
 	gosmtp "github.com/emersion/go-smtp"
 	"github.com/infodancer/logging"
+	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/liblog"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 )
@@ -241,6 +242,6 @@ func (s *Server) RunSingleConn(conn net.Conn, mode config.ListenerMode, tlsConfi
 		conn = tls.Server(conn, tlsConfig)
 	}
 
-	ln := newOneConnListener(conn)
+	ln := connfork.NewOneConnListener(conn)
 	return entry.server.Serve(ln)
 }

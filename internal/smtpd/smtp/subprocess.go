@@ -2,21 +2,21 @@ package smtp
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"log/slog"
-	"net"
 	"os"
-	"os/exec"
-	"sync"
 	"syscall"
 
+	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 )
 
 // SubprocessServer listens on configured TCP ports and spawns a protocol-handler
-// subprocess per accepted connection. Each subprocess receives the raw TCP socket
-// as fd 3 and handles exactly one SMTP session before exiting.
+// subprocess per accepted connection, via the shared connfork dispatcher the
+// smtpd implementation was originally generalized into (#189). Each subprocess
+// receives the raw TCP socket as fd 3, the metrics-report pipe as fd 4 when
+// metrics are enabled, and handles exactly one SMTP session before exiting.
 //
 // The subprocess is invoked as:
 //
@@ -27,12 +27,7 @@ import (
 //	SMTPD_CLIENT_IP     - remote IP address of the connecting client
 //	SMTPD_LISTENER_MODE - listener mode (smtp/submission/smtps/alt)
 type SubprocessServer struct {
-	cfg        config.Config
-	execPath   string
-	configPath string
-	logger     *slog.Logger
-	metrics    *metrics.ParentMetrics // nil disables per-connection metric aggregation
-	wg         sync.WaitGroup
+	srv *connfork.Server
 }
 
 // NewSubprocessServer creates a SubprocessServer from the listener's
@@ -40,167 +35,46 @@ type SubprocessServer struct {
 // execPath is the path to the smtpd binary (use os.Executable()).
 // configPath is passed to each subprocess as the --config flag value.
 // parentMetrics is the aggregation surface for per-connection metrics; pass nil
-// when metrics are disabled.
+// when metrics are disabled (no report pipe is created).
 func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentMetrics *metrics.ParentMetrics, logger *slog.Logger) *SubprocessServer {
-	return &SubprocessServer{
-		cfg:        cfg,
-		execPath:   execPath,
-		configPath: configPath,
-		logger:     logger,
-		metrics:    parentMetrics,
+	listeners := make([]connfork.Listener, 0, len(cfg.Listeners))
+	for _, lc := range cfg.Listeners {
+		listeners = append(listeners, connfork.Listener{Address: lc.Address, Mode: string(lc.Mode)})
 	}
+
+	var onStart, onEnd func()
+	var reportSink func(io.Reader) error
+	if parentMetrics != nil {
+		pm := parentMetrics
+		onStart = pm.ConnectionOpened
+		onEnd = pm.ConnectionClosed
+		reportSink = func(r io.Reader) error {
+			if err := pm.Ingest(r); err != nil {
+				pm.HandlerFailure("metrics_decode")
+				return err
+			}
+			return nil
+		}
+	}
+
+	return &SubprocessServer{srv: connfork.NewServer(connfork.Config{
+		Listeners: listeners,
+		ExecPath:  execPath,
+		Args:      []string{"protocol-handler", "--config", configPath},
+		Env: func(clientIP, mode string) []string {
+			return handlerEnv(cfg, clientIP, config.ListenerMode(mode))
+		},
+		SysProcAttr: handlerSysProcAttr(cfg),
+		OnConnStart: onStart,
+		OnConnEnd:   onEnd,
+		ReportSink:  reportSink,
+		Logger:      logger,
+	})}
 }
 
 // Run starts accept loops on all configured ports and blocks until ctx is cancelled.
 func (s *SubprocessServer) Run(ctx context.Context) error {
-	lns := make([]net.Listener, 0, len(s.cfg.Listeners))
-	for _, lc := range s.cfg.Listeners {
-		ln, err := net.Listen("tcp", lc.Address)
-		if err != nil {
-			for _, l := range lns {
-				_ = l.Close()
-			}
-			return fmt.Errorf("listen %s: %w", lc.Address, err)
-		}
-		lns = append(lns, ln)
-		s.logger.Info("listening (subprocess mode)",
-			slog.String("address", lc.Address),
-			slog.String("mode", string(lc.Mode)))
-	}
-
-	for i, ln := range lns {
-		s.wg.Add(1)
-		go func(ln net.Listener, lc config.ListenerConfig) {
-			defer s.wg.Done()
-			s.acceptLoop(ctx, ln, lc)
-		}(ln, s.cfg.Listeners[i])
-	}
-
-	<-ctx.Done()
-	s.logger.Info("shutting down subprocess server")
-	for _, ln := range lns {
-		_ = ln.Close()
-	}
-	s.wg.Wait()
-	return ctx.Err()
-}
-
-func (s *SubprocessServer) acceptLoop(ctx context.Context, ln net.Listener, lc config.ListenerConfig) {
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				s.logger.Error("accept error",
-					slog.String("address", lc.Address),
-					slog.String("error", err.Error()))
-				return
-			}
-		}
-		go s.spawnHandler(conn, lc)
-	}
-}
-
-// spawnHandler passes conn to a protocol-handler subprocess and reaps it asynchronously.
-func (s *SubprocessServer) spawnHandler(conn net.Conn, lc config.ListenerConfig) {
-	clientIP := extractIPFromConn(conn)
-
-	tcpConn, ok := conn.(*net.TCPConn)
-	if !ok {
-		s.logger.Error("cannot pass non-TCP connection to subprocess",
-			slog.String("type", fmt.Sprintf("%T", conn)))
-		_ = conn.Close()
-		return
-	}
-
-	// File() dups the fd so the subprocess can inherit it independently.
-	connFile, err := tcpConn.File()
-	if err != nil {
-		s.logger.Error("failed to dup connection fd", slog.String("error", err.Error()))
-		_ = conn.Close()
-		return
-	}
-
-	// Parent relinquishes its copy of the socket; subprocess owns it.
-	_ = conn.Close()
-
-	cmd := exec.Command(s.execPath, "protocol-handler", "--config", s.configPath)
-	cmd.ExtraFiles = []*os.File{connFile} // becomes fd 3 in the child
-	cmd.Env = handlerEnv(s.cfg, clientIP, lc.Mode)
-	cmd.SysProcAttr = handlerSysProcAttr(s.cfg)
-	cmd.Stderr = os.Stderr
-
-	// When metrics are enabled, hand the child the write end of a pipe as fd 4.
-	// The child ships its accumulated metric families here just before exiting;
-	// the parent reads them from metricsR and folds them into the aggregate.
-	// The channel is one-way by construction (child holds only the write end),
-	// so it can never carry data back into the possibly-lower-privileged child.
-	var metricsR *os.File
-	if s.metrics != nil {
-		r, w, err := os.Pipe()
-		if err != nil {
-			s.logger.Error("failed to create metrics pipe", slog.String("error", err.Error()))
-			// Fall through without metrics rather than dropping the connection.
-		} else {
-			metricsR = r
-			cmd.ExtraFiles = append(cmd.ExtraFiles, w) // becomes fd 4 in the child
-			defer func() { _ = w.Close() }()           // parent's copy; closed after Start
-		}
-	}
-
-	if err := cmd.Start(); err != nil {
-		s.logger.Error("failed to start protocol-handler",
-			slog.String("client_ip", clientIP),
-			slog.String("error", err.Error()))
-		_ = connFile.Close()
-		if metricsR != nil {
-			_ = metricsR.Close()
-		}
-		return
-	}
-	_ = connFile.Close() // child has the fd; parent closes its dup
-
-	// Record the connection now that the handler is running; the reaper below
-	// releases it after Wait so the active gauge cannot leak on a child crash.
-	if s.metrics != nil {
-		s.metrics.ConnectionOpened()
-	}
-
-	pid := cmd.Process.Pid
-	s.logger.Debug("spawned protocol-handler",
-		slog.Int("pid", pid),
-		slog.String("client_ip", clientIP),
-		slog.String("mode", string(lc.Mode)))
-
-	// Reap the subprocess asynchronously to avoid zombies.
-	go func() {
-		// Drain the child's metrics report before reaping. The parent has
-		// already closed its own copy of the write end (deferred above), so
-		// this reads to EOF when the child exits and closes fd 4.
-		if metricsR != nil {
-			if err := s.metrics.Ingest(metricsR); err != nil {
-				s.logger.Debug("failed to ingest handler metrics",
-					slog.Int("pid", pid),
-					slog.String("error", err.Error()))
-				s.metrics.HandlerFailure("metrics_decode")
-			}
-			_ = metricsR.Close()
-		}
-
-		if err := cmd.Wait(); err != nil {
-			s.logger.Debug("protocol-handler exited with error",
-				slog.Int("pid", pid),
-				slog.String("error", err.Error()))
-		} else {
-			s.logger.Debug("protocol-handler exited", slog.Int("pid", pid))
-		}
-
-		if s.metrics != nil {
-			s.metrics.ConnectionClosed()
-		}
-	}()
+	return s.srv.Run(ctx)
 }
 
 // handlerSysProcAttr builds the SysProcAttr for protocol-handler subprocesses.

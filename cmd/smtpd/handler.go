@@ -4,25 +4,14 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 
 	"github.com/infodancer/logging"
+	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/smtp"
 )
-
-// connFD is the file descriptor number used to pass the TCP socket from the
-// listener parent to the protocol-handler subprocess. It is the first entry in
-// cmd.ExtraFiles, which the OS maps to fd 3 (stdin=0, stdout=1, stderr=2).
-const connFD = 3
-
-// metricsFD is the file descriptor for the metrics-report pipe to the parent,
-// the second cmd.ExtraFiles entry (fd 4). Present only when metrics are enabled;
-// the handler records into a private collector and writes the accumulated
-// families here just before exiting so the parent can aggregate them.
-const metricsFD = 4
 
 func runProtocolHandler() {
 	flags := config.ParseFlags()
@@ -85,13 +74,12 @@ func runProtocolHandler() {
 	if cfg.Metrics.Enabled {
 		c, reg := metrics.NewHandlerCollector()
 		collector = c
-		if reportFile := os.NewFile(uintptr(metricsFD), "smtp-metrics"); reportFile != nil {
-			flushMetrics = func() {
-				if err := metrics.WriteReport(reportFile, reg); err != nil {
-					logger.Debug("failed to write metrics report", slog.String("error", err.Error()))
-				}
-				_ = reportFile.Close()
+		reportFile := connfork.ChildReportPipe()
+		flushMetrics = func() {
+			if err := metrics.WriteReport(reportFile, reg); err != nil {
+				logger.Debug("failed to write metrics report", slog.String("error", err.Error()))
 			}
+			_ = reportFile.Close()
 		}
 	}
 
@@ -116,16 +104,9 @@ func runProtocolHandler() {
 	}()
 
 	// Reconstruct the TCP connection from the fd passed by the parent.
-	// ExtraFiles[0] maps to fd 3 in the child process.
-	connFile := os.NewFile(uintptr(connFD), "smtp-conn")
-	if connFile == nil {
-		fmt.Fprintf(os.Stderr, "protocol-handler: fd %d not available\n", connFD)
-		os.Exit(1)
-	}
-	netConn, err := net.FileConn(connFile)
-	_ = connFile.Close() // done with the os.File wrapper; netConn holds its own dup
+	netConn, err := connfork.ChildConn()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "protocol-handler: error reconstructing connection: %v\n", err)
+		fmt.Fprintf(os.Stderr, "protocol-handler: %v\n", err)
 		os.Exit(1)
 	}
 

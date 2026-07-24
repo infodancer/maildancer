@@ -1,6 +1,7 @@
 package smtp
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net"
@@ -16,14 +17,14 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// TestSubprocessMetricsEndToEnd drives the real parent path -- spawnHandler
-// forking a child, passing the connection as fd 3 and the metrics pipe as fd 4,
-// then the reaper draining the child's report and aggregating it -- and asserts
-// the child's series actually reach the parent's registry (the surface
-// promhttp serves). This is the end-to-end coverage whose absence let smtpd
-// ship with metrics hardwired to a no-op sink (#170/#173): if fd 4 were not
-// wired, the reaper not draining, or the collector not aggregated, no smtpd_*
-// series would appear here.
+// TestSubprocessMetricsEndToEnd drives the real parent path -- the dispatcher
+// forking a child per connection, passing the connection as fd 3 and the
+// metrics pipe as fd 4, then the reaper draining the child's report and
+// aggregating it -- and asserts the child's series actually reach the parent's
+// registry (the surface promhttp serves). This is the end-to-end coverage
+// whose absence let smtpd ship with metrics hardwired to a no-op sink
+// (#170/#173): if fd 4 were not wired, the reaper not draining, or the
+// collector not aggregated, no smtpd_* series would appear here.
 //
 // The child is a stand-in (testdata/metricshelper) rather than the real
 // protocol-handler, because a real SMTP session needs a running session-manager
@@ -36,14 +37,24 @@ func TestSubprocessMetricsEndToEnd(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	pm := metrics.NewParentMetrics(reg)
 
+	// Free-port dance; SubprocessServer does not expose its bound addresses.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("free port: %v", err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+
 	cfg := config.Default()
+	cfg.Listeners = []config.ListenerConfig{{Address: addr, Mode: config.ModeSmtp}}
 	srv := NewSubprocessServer(cfg, helper, "unused-config-path", pm, slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	// A real TCP connection, because spawnHandler requires a *net.TCPConn to dup
-	// its fd for the child.
-	serverConn := realTCPConn(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = srv.Run(ctx) }()
 
-	srv.spawnHandler(serverConn, config.ListenerConfig{Address: "127.0.0.1:0", Mode: config.ModeSmtp})
+	conn := dialConnRetry(t, addr)
+	defer conn.Close()
 
 	// The reaper runs asynchronously. Poll until it has fully completed, which
 	// the active gauge returning to zero proves (it is decremented after Wait).
@@ -94,42 +105,6 @@ func buildMetricsHelper(t *testing.T) string {
 		t.Fatalf("build metrics helper: %v", err)
 	}
 	return out
-}
-
-// realTCPConn returns a live server-side *net.TCPConn from a loopback dial.
-func realTCPConn(t *testing.T) *net.TCPConn {
-	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-
-	dialed := make(chan net.Conn, 1)
-	go func() {
-		c, derr := net.Dial("tcp", ln.Addr().String())
-		if derr != nil {
-			dialed <- nil
-			return
-		}
-		dialed <- c
-	}()
-
-	accepted, err := ln.Accept()
-	if err != nil {
-		t.Fatalf("accept: %v", err)
-	}
-	clientConn := <-dialed
-	if clientConn == nil {
-		t.Fatal("dial failed")
-	}
-	t.Cleanup(func() { _ = clientConn.Close() })
-
-	tcp, ok := accepted.(*net.TCPConn)
-	if !ok {
-		t.Fatalf("accepted conn is %T, want *net.TCPConn", accepted)
-	}
-	return tcp
 }
 
 func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {

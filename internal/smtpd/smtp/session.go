@@ -15,6 +15,7 @@ import (
 
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
+	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 	"google.golang.org/grpc/codes"
@@ -970,25 +971,19 @@ func sessionIsLocalhost(ip string) bool {
 
 // sessionConnIsTLS checks whether the SMTP connection is using TLS.
 // It first tries go-smtp's built-in TLS detection, then falls back to
-// checking if the underlying net.Conn (possibly wrapped in notifyConn)
-// is a *tls.Conn. This fallback is needed because oneConnListener wraps
-// connections in notifyConn for session-end detection, which hides the
-// *tls.Conn from go-smtp's direct type assertion.
+// checking whether the underlying net.Conn is a *tls.Conn. The fallback is
+// needed because connfork's one-connection listener wraps connections for
+// session-end detection, which hides the *tls.Conn from go-smtp's direct
+// type assertion.
 func sessionConnIsTLS(c *smtp.Conn) bool {
 	if _, ok := c.TLSConnectionState(); ok {
 		return true
 	}
-	// Check if the underlying connection is TLS (wrapped by notifyConn).
-	conn := c.Conn()
-	if nc, ok := conn.(*notifyConn); ok {
-		if _, tlsOK := nc.Conn.(*tls.Conn); tlsOK {
-			return true
-		}
-	}
-	return false
+	_, tlsOK := connfork.UnwrapOneConn(c.Conn()).(*tls.Conn)
+	return tlsOK
 }
 
-// sessionConnTLSState returns the TLS connection state, handling the notifyConn
+// sessionConnTLSState returns the TLS connection state, handling the listener
 // wrapper the same way sessionConnIsTLS does. ok is false for a plaintext
 // connection.
 func sessionConnTLSState(c *smtp.Conn) (tls.ConnectionState, bool) {
@@ -998,10 +993,8 @@ func sessionConnTLSState(c *smtp.Conn) (tls.ConnectionState, bool) {
 	if st, ok := c.TLSConnectionState(); ok {
 		return st, true
 	}
-	if nc, ok := c.Conn().(*notifyConn); ok {
-		if tc, tlsOK := nc.Conn.(*tls.Conn); tlsOK {
-			return tc.ConnectionState(), true
-		}
+	if tc, tlsOK := connfork.UnwrapOneConn(c.Conn()).(*tls.Conn); tlsOK {
+		return tc.ConnectionState(), true
 	}
 	return tls.ConnectionState{}, false
 }

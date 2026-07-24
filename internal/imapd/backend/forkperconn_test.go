@@ -61,7 +61,7 @@ func TestStack_ForksProcessPerConnection(t *testing.T) {
 	}
 
 	conn := dialRetry(t, addr)
-	defer conn.Close() //nolint:errcheck // test teardown
+	defer conn.Close()
 
 	// The greeting proves a live session is underway with some process.
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))

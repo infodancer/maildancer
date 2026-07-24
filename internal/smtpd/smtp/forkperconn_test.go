@@ -56,9 +56,9 @@ func TestSubprocessServer_ForksHandlerPerConnection(t *testing.T) {
 	}
 
 	conn1 := dialConnRetry(t, addr)
-	defer conn1.Close() //nolint:errcheck // test teardown
+	defer conn1.Close()
 	conn2 := dialConnRetry(t, addr)
-	defer conn2.Close() //nolint:errcheck // test teardown
+	defer conn2.Close()
 
 	kids, err := proctest.WaitForNewChildren(baseline, 2, 5*time.Second)
 	if err != nil {

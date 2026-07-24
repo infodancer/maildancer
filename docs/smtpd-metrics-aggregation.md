@@ -178,11 +178,24 @@ both the in-process and aggregated paths.
 | Child records over fd 4, flushes report at session end | `cmd/smtpd/handler.go` |
 | Series definitions (shared by child and, transitively, parent) | `internal/smtpd/metrics/prometheus.go` |
 | Tests: round-trip, summation, skip, garbage, accounting, pipe EOF | `internal/smtpd/metrics/aggregate_test.go` |
+| End-to-end: real fork/exec + fd-4 inheritance + reaper drain + aggregation | `internal/smtpd/smtp/subprocess_metrics_test.go` (child stand-in: `testdata/metricshelper`) |
 
-## Not done
+## Testing
 
-No subprocess-spawning integration test: exercising the real fd-4 handoff through
-a forked child needs a running session-manager, matching the existing stub in
-`internal/smtpd/smtp/integration_test.go`. The unit tests cover every seam of the
-aggregation logic and the real `os.Pipe` EOF-drain path; the actual fork/exec
-handoff is not yet covered end to end.
+`TestSubprocessMetricsEndToEnd` drives the real parent path: `spawnHandler`
+forks a child, passes the connection as fd 3 and the metrics pipe as fd 4, and
+the reaper drains the child's report and aggregates it. It asserts the child's
+series actually land in the parent's registry (the surface promhttp serves),
+that the parent-owned connection accounting is correct after reap, and that the
+gather does not error on a duplicate connection family (proving the skip is
+load-bearing). This is the coverage whose absence let smtpd ship with metrics
+hardwired to a no-op sink (#170/#173); a mutation that disables aggregation
+fails it.
+
+The child there is a stand-in (`testdata/metricshelper`), not the real
+`protocol-handler`, because a real SMTP session needs a running session-manager
+(see `internal/smtpd/smtp/integration_test.go`). The stand-in exercises the real
+child-side metrics functions (`NewHandlerCollector`, `WriteReport`) over the real
+inherited fd, so the fork/exec + pipe + aggregation contract is covered exactly;
+only the SMTP session wrapped around those calls in `cmd/smtpd/handler.go` is not
+exercised end to end, and it is a straight-line flush after the session returns.

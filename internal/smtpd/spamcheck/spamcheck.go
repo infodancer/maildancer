@@ -61,6 +61,13 @@ type CheckResult struct {
 	// Headers contains headers to add to the message (e.g., X-Spam-*).
 	Headers map[string]string
 
+	// AuthResults is an RFC 8601 Authentication-Results field value -- everything
+	// that would follow "Authentication-Results: ", already folded with tab
+	// continuation lines and without a trailing CRLF. It is empty when the
+	// checker produced no authentication verdicts, which callers must treat as
+	// "do not stamp a header" rather than "authentication failed".
+	AuthResults string
+
 	// RejectMessage is the message to send when rejecting (optional).
 	RejectMessage string
 

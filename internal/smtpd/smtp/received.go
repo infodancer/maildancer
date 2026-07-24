@@ -8,10 +8,10 @@ import (
 )
 
 // withHeaders returns a reader that yields the given header bytes followed by
-// the buffered message body, so a trace header is prepended without rewriting
-// the buffer.
-func withHeaders(headers string, tmp tempBuffer) io.Reader {
-	return io.MultiReader(strings.NewReader(headers), tmp.reader())
+// the message body, so a trace header is prepended without rewriting the
+// buffer.
+func withHeaders(headers string, body io.Reader) io.Reader {
+	return io.MultiReader(strings.NewReader(headers), body)
 }
 
 // receivedDateFormat is the RFC 5322 date-time used in trace headers.

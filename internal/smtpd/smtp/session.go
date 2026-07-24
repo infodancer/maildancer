@@ -654,6 +654,15 @@ func (s *Session) Data(r io.Reader) error {
 			forRcpt = s.remoteRecipients[0]
 		}
 	}
+	// RFC 8601: report the authentication verdicts rspamd already produced for
+	// this message. Empty when spam checking is off or rspamd reported no
+	// SPF/DKIM/DMARC symbols, in which case no header is stamped at all --
+	// "we did not check" must not read as "nothing passed".
+	var authResults string
+	if checkResult != nil {
+		authResults = buildAuthResultsHeader(checkResult.AuthResults)
+	}
+
 	tlsState, isTLS := sessionConnTLSState(s.conn)
 	received := buildReceivedHeader(ReceivedInfo{
 		Helo:           s.helo,
@@ -673,7 +682,7 @@ func (s *Session) Data(r io.Reader) error {
 		// rules are resolved by the mail-session delivery path, which signals a
 		// configured forward by returning a *RedirectError.
 		deliveredFolder, deliverErr := s.backend.smDelivery.Deliver(ctx,
-			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, withHeaders(received, tmp))
+			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, s.messageBody(received+authResults, tmp))
 
 		var redirectErr *RedirectError
 		redirected := errors.As(deliverErr, &redirectErr)
@@ -681,7 +690,7 @@ func (s *Session) Data(r io.Reader) error {
 			// A configured forward. Re-route each target as a fresh recipient
 			// (local Deliver with Forwarded=true, or remote Enqueue). This is
 			// the only delivery path that can reach external forward targets.
-			deliverErr = s.followRedirect(ctx, redirectErr, tmp, msgid, received)
+			deliverErr = s.followRedirect(ctx, redirectErr, tmp, msgid, received, authResults)
 		}
 
 		if deliverErr != nil {
@@ -758,7 +767,11 @@ func (s *Session) Data(r io.Reader) error {
 		}
 
 		ctx := context.Background()
-		_, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, msgid, withHeaders(received, tmp))
+		// No Authentication-Results here: this message is being relayed outward,
+		// not delivered into our store. Our authserv-id means nothing to the
+		// receiving ADMD, which runs its own checks, and stamping it would
+		// disclose our filtering verdicts to third parties.
+		_, err := s.backend.smDelivery.Enqueue(ctx, s.from, s.remoteRecipients, msgid, s.messageBody(received, tmp))
 		if err != nil {
 			s.logger.Warn("enqueue failed",
 				slog.String("msgid", msgid),
@@ -806,7 +819,7 @@ func (s *Session) Data(r io.Reader) error {
 // temp-failed -- smtpd follows at most one redirect.
 //
 // Returns nil on success, or an error that the caller maps to a 451.
-func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer, msgid, received string) error {
+func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer, msgid, received, authResults string) error {
 	if len(redirect.Addresses) == 0 {
 		s.logger.Error("forward resolved to no targets",
 			slog.String("from", s.from),
@@ -829,7 +842,9 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 
 		if !vr.DomainIsLocal {
 			// External forward target: enqueue for outbound delivery.
-			_, err = s.backend.smDelivery.Enqueue(ctx, s.from, []string{target}, msgid, withHeaders(fwdHeaders, tmp))
+			// As with a plain outbound relay, an externally forwarded copy
+			// carries no Authentication-Results of ours.
+			_, err = s.backend.smDelivery.Enqueue(ctx, s.from, []string{target}, msgid, s.messageBody(fwdHeaders, tmp))
 			if err != nil {
 				s.logger.Warn("forward enqueue failed",
 					slog.String("target", target),
@@ -848,7 +863,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 		// here is a configuration error.
 		now := time.Now()
 		_, err = s.backend.smDelivery.Deliver(ctx,
-			s.from, target, s.clientIP, s.helo, now, true, msgid, withHeaders(fwdHeaders, tmp))
+			s.from, target, s.clientIP, s.helo, now, true, msgid, s.messageBody(fwdHeaders+authResults, tmp))
 
 		var nested *RedirectError
 		if errors.As(err, &nested) {

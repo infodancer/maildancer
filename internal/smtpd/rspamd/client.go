@@ -157,16 +157,19 @@ func (c *Checker) Check(ctx context.Context, message io.Reader, opts spamcheck.C
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 
-	return c.convertResult(&rspamdResult), nil
+	return c.convertResult(&rspamdResult, opts), nil
 }
 
-// convertResult converts an rspamd result to a generic CheckResult.
-func (c *Checker) convertResult(r *RspamdResult) *spamcheck.CheckResult {
+// convertResult converts an rspamd result to a generic CheckResult. It takes the
+// check options because the Authentication-Results header needs the authserv-id
+// (our hostname) and the envelope sender that SPF was evaluated against.
+func (c *Checker) convertResult(r *RspamdResult, opts spamcheck.CheckOptions) *spamcheck.CheckResult {
 	result := &spamcheck.CheckResult{
 		CheckerName: "rspamd",
 		Score:       r.Score,
 		IsSpam:      r.IsSpam,
 		Headers:     c.buildHeaders(r),
+		AuthResults: buildAuthResults(r, opts),
 		Details: map[string]interface{}{
 			"required_score": r.RequiredScore,
 			"rspamd_action":  r.Action,
@@ -217,10 +220,13 @@ func (c *Checker) buildHeaders(r *RspamdResult) map[string]string {
 	// If milter headers are present, add them
 	if r.Milter != nil {
 		for name, hv := range r.Milter.AddHeaders {
-			// Skip headers we already set
-			if !strings.HasPrefix(strings.ToLower(name), "x-spam-") {
-				headers[name] = hv.Value
+			// Skip headers we already set, and Authentication-Results, which is
+			// carried by CheckResult.AuthResults so exactly one component owns
+			// stamping it.
+			if strings.HasPrefix(strings.ToLower(name), "x-spam-") || strings.EqualFold(name, authResultsHeader) {
+				continue
 			}
+			headers[name] = hv.Value
 		}
 	}
 

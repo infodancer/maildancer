@@ -10,6 +10,7 @@ import (
 
 	"github.com/infodancer/maildancer/auth/domain"
 	"github.com/infodancer/maildancer/auth/identity"
+	"github.com/infodancer/maildancer/internal/idrange"
 )
 
 // Info holds the resolved credentials for spawning a mail-session process.
@@ -55,6 +56,18 @@ func Lookup(domainsPath, domainsDataPath, localpart, domainName string) (*Info, 
 	uid, err := identity.UserUID(domainsPath, domainName, localpart)
 	if err != nil {
 		return nil, fmt.Errorf("resolve uid for %q@%q: %w", localpart, domainName, err)
+	}
+
+	// The maps are the trust boundary for spawn credentials: mail-session is
+	// started with these ids via SysProcAttr.Credential. Refuse anything
+	// outside the allocatable range -- 0 would spawn as root, a low id as a
+	// service account, 65532-65535 as the well-known nonroot/nobody ids --
+	// rather than trusting a corrupted or hand-edited map entry.
+	if !idrange.Allocatable(uid) {
+		return nil, fmt.Errorf("refusing uid %d for %q@%q: outside the allocatable id range", uid, localpart, domainName)
+	}
+	if !idrange.Allocatable(gid) {
+		return nil, fmt.Errorf("refusing gid %d for domain %q: outside the allocatable id range", gid, domainName)
 	}
 
 	// Resolve mail-session basePath (configuration, not identity).

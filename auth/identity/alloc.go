@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/infodancer/maildancer/internal/idrange"
 )
 
 // Manager is the single allocation/write path for identity maps. userctl and
@@ -66,6 +68,9 @@ func (m *Manager) AllocateDomainGID(domain string) (uint32, error) {
 // value matches; ErrGIDExists when a different gid is already recorded -- the
 // allocate-once guard, since changing a live gid orphans the group's files.
 func (m *Manager) SetDomainGID(domain string, gid uint32) error {
+	if !idrange.Allocatable(gid) {
+		return fmt.Errorf("set gid %d for domain %q: %w", gid, domain, ErrNotAllocatable)
+	}
 	unlock, err := lockFile(gidMapPath(m.Config) + ".lock")
 	if err != nil {
 		return err
@@ -138,6 +143,9 @@ func (m *Manager) AllocateUserUID(domain, localpart string) (uint32, error) {
 // SetUserUID records a specific uid for localpart (migration adoption).
 // Idempotent on match; ErrUIDExists on a conflicting recorded value.
 func (m *Manager) SetUserUID(domain, localpart string, uid uint32) error {
+	if !idrange.Allocatable(uid) {
+		return fmt.Errorf("set uid %d for %q@%q: %w", uid, localpart, domain, ErrNotAllocatable)
+	}
 	unlock, err := lockFile(uidMapPath(m.Config, domain) + ".lock")
 	if err != nil {
 		return err

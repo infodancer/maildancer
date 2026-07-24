@@ -7,14 +7,17 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/infodancer/maildancer/internal/idrange"
 )
 
 // counterFile is the shared uid/gid allocation counter in the data tree.
 const counterFile = ".uid-counter"
 
 // firstID is the first id handed out; values below it are reserved for
-// system/well-known ids.
-const firstID = uint32(10000)
+// system/well-known ids. The boundary lives in internal/idrange so the
+// daemons (which may not import auth) validate against the same constant.
+const firstID = idrange.AllocatorFloor
 
 // allocateID atomically allocates the next id from {dataPath}/.uid-counter under
 // an exclusive flock and bumps the counter. uid and gid share this counter, so
@@ -51,6 +54,11 @@ func allocateID(dataPath string) (uint32, error) {
 			return 0, fmt.Errorf("parse id counter %q: %w", raw, err)
 		}
 		next = uint32(v)
+	}
+	// Skip the excluded well-known band (distroless nonroot/nogroup, nobody,
+	// 16-bit -1) -- those ids must never be handed to a user or domain.
+	if next >= idrange.ExcludedBandLow && next <= idrange.ExcludedBandHigh {
+		next = idrange.ExcludedBandHigh + 1
 	}
 
 	if err := f.Truncate(0); err != nil {

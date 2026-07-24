@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/infodancer/maildancer/internal/idrange"
 )
 
 // upstreamIdleSlop is the safety margin reserved below upstream_session_idle
@@ -199,6 +201,9 @@ func (c *Config) Validate() error {
 
 	if c.HandlerUID == 0 && (c.HandlerGID != 0 || len(c.HandlerGroups) > 0) {
 		return errors.New("handler_gid/handler_groups require handler_uid")
+	}
+	if err := idrange.CheckHandlerIDs(c.HandlerUID, c.HandlerGID, c.HandlerGroups); err != nil {
+		return err
 	}
 
 	if c.Timeouts.Connection != "" {

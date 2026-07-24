@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/infodancer/maildancer/internal/idrange"
 )
 
 // ListenerMode defines the operational mode for a listener.
@@ -170,6 +172,9 @@ func (c *Config) Validate() error {
 
 	if c.HandlerUID == 0 && (c.HandlerGID != 0 || len(c.HandlerGroups) > 0) {
 		return errors.New("handler_gid/handler_groups require handler_uid")
+	}
+	if err := idrange.CheckHandlerIDs(c.HandlerUID, c.HandlerGID, c.HandlerGroups); err != nil {
+		return err
 	}
 
 	if c.Timeouts.Connection != "" {

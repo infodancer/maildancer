@@ -756,3 +756,36 @@ min_version = "1.3"
 		t.Errorf("tls.min_version = %q, want the [imapd.tls] value", cfg.TLS.MinVersion)
 	}
 }
+
+// TestValidateHandlerCredentialsRejectAllocatedRange: handler ids must be
+// reserved service ids -- a value in the allocated user/domain range (10000+)
+// would run the internet-facing handler as a real mail principal (issue #197).
+func TestValidateHandlerCredentialsRejectAllocatedRange(t *testing.T) {
+	cfg := Default()
+	cfg.HandlerUID = 10007
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for handler_uid in the allocated range, got nil")
+	}
+
+	cfg = Default()
+	cfg.HandlerUID = 903
+	cfg.HandlerGID = 10014
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for handler_gid in the allocated range, got nil")
+	}
+
+	cfg = Default()
+	cfg.HandlerUID = 903
+	cfg.HandlerGroups = []uint32{900, 10020}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for handler_groups entry in the allocated range, got nil")
+	}
+
+	// nobody (65534) sits in the excluded band the allocator skips, so it
+	// stays a legitimate service id.
+	cfg = Default()
+	cfg.HandlerUID = 65534
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected handler_uid 65534 (nobody) to validate, got %v", err)
+	}
+}

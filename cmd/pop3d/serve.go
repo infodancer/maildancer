@@ -48,18 +48,19 @@ func runServe() {
 		os.Exit(1)
 	}
 
-	// Connection counters live here in the dispatcher (spawn/reap);
-	// session-level metrics are the handlers' business.
-	var collector metrics.Collector = &metrics.NoopCollector{}
+	// The dispatcher owns the connection counters (spawn/reap) and
+	// aggregates every session-level series the handlers report back over
+	// the fd-4 pipe at exit (#188).
+	var parentMetrics *metrics.ParentMetrics
 	if cfg.Metrics.Enabled {
-		collector = metrics.NewPrometheusCollector(prometheus.DefaultRegisterer)
+		parentMetrics = metrics.NewParentMetrics(prometheus.DefaultRegisterer)
 	}
 
 	dispatcher, err := pop3.NewDispatcher(pop3.DispatcherConfig{
 		Config:     cfg,
 		ExecPath:   execPath,
 		ConfigPath: configPath,
-		Collector:  collector,
+		Metrics:    parentMetrics,
 		Logger:     logger,
 	})
 	if err != nil {

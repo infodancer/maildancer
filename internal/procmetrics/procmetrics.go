@@ -1,4 +1,21 @@
-package metrics
+// Package procmetrics carries per-session metrics from protocol-handler
+// subprocesses back to their parent dispatcher, for daemons using the
+// fork-per-connection process model (mail-security-model.md, #179).
+//
+// The child records into a private Prometheus registry for the lifetime of
+// its single session and, just before exiting, ships the accumulated metric
+// families to the parent over an inherited pipe (WriteReport). The parent
+// drains each child's report as it reaps the subprocess and folds it into a
+// running aggregate (ParentMetrics.Ingest) exposed on its own /metrics
+// endpoint. Connection lifecycle series are the one exception: the parent
+// maintains those directly from spawn/reap, because a live gauge cannot be
+// summed from ephemeral children.
+//
+// Extracted from smtpd's implementation (#173) and parameterized by metric
+// namespace so smtpd, imapd, and pop3d share one transport (#188). Each
+// daemon keeps its own family definitions; this package never needs to know
+// them because the report format is self-describing.
+package procmetrics
 
 import (
 	"io"
@@ -11,20 +28,38 @@ import (
 	"github.com/prometheus/common/expfmt"
 )
 
-// parentOwnedFamilies are metric families the parent process maintains directly
-// from the subprocess lifecycle (spawn/reap) rather than aggregating from child
-// reports. A live gauge cannot be summed from ephemeral children -- each child's
-// open/close nets to zero, or leaks on crash -- and counting spawns also counts
-// connections whose child died before it could report. The aggregator drops
-// these families if a child includes them (it will: the child reuses the full
-// PrometheusCollector, whose backend records connection events).
-var parentOwnedFamilies = map[string]struct{}{
-	"smtpd_connections_total":  {},
-	"smtpd_connections_active": {},
+// maxReportBytes bounds how much a protocol-handler subprocess may send to the
+// parent in a single metrics report. A report is a handful of pre-aggregated
+// counter families plus small histograms, so it comfortably fits well under
+// this cap; the cap exists purely so a misbehaving (or compromised) lower-
+// privileged child cannot drive unbounded allocation in the privileged parent.
+const maxReportBytes = 1 << 16 // 64 KiB
+
+// reportFormat is the wire format for parent<->child metric reports: the
+// standard Prometheus protobuf exposition format with length-delimited frames.
+// Using expfmt keeps the encoding identical to what Prometheus itself speaks
+// and spares us a bespoke framing scheme.
+var reportFormat = expfmt.NewFormat(expfmt.TypeProtoDelim)
+
+// WriteReport gathers g and writes its metric families to w as length-delimited
+// protobuf. It is called once, just before the protocol-handler subprocess
+// exits, with w being the write end of the inherited pipe to the parent.
+func WriteReport(w io.Writer, g prometheus.Gatherer) error {
+	mfs, err := g.Gather()
+	if err != nil {
+		return err
+	}
+	enc := expfmt.NewEncoder(w, reportFormat)
+	for _, mf := range mfs {
+		if err := enc.Encode(mf); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // seriesKeySep separates label values in an aggregation key. Label values here
-// are domains, SMTP verbs, and result strings, none of which contain a NUL
+// are domains, protocol verbs, and result strings, none of which contain a NUL
 // byte, so this yields a collision-free key.
 const seriesKeySep = "\x00"
 
@@ -34,6 +69,16 @@ const seriesKeySep = "\x00"
 // cumulative counts. It is an unchecked collector (Describe sends nothing)
 // because the set of families and label combinations is discovered at runtime.
 type aggregator struct {
+	// parentOwned are families the parent maintains directly from the
+	// subprocess lifecycle rather than aggregating from child reports. A
+	// live gauge cannot be summed from ephemeral children -- each child's
+	// open/close nets to zero, or leaks on crash -- and counting spawns
+	// also counts connections whose child died before it could report. The
+	// aggregator drops these families if a child includes them (it will:
+	// the child reuses the daemon's full collector, whose backend records
+	// connection events).
+	parentOwned map[string]struct{}
+
 	mu       sync.Mutex
 	families map[string]*familyAgg
 }
@@ -57,8 +102,11 @@ type series struct {
 	buckets     map[float64]uint64 // upper bound -> cumulative count
 }
 
-func newAggregator() *aggregator {
-	return &aggregator{families: make(map[string]*familyAgg)}
+func newAggregator(parentOwned map[string]struct{}) *aggregator {
+	return &aggregator{
+		parentOwned: parentOwned,
+		families:    make(map[string]*familyAgg),
+	}
 }
 
 // ingest decodes a child's length-delimited protobuf report from r and folds it
@@ -91,7 +139,7 @@ func (a *aggregator) ingest(r io.Reader) error {
 // mergeFamily folds one reported family into the aggregate. Caller holds a.mu.
 func (a *aggregator) mergeFamily(mf *dto.MetricFamily) {
 	name := mf.GetName()
-	if _, skip := parentOwnedFamilies[name]; skip {
+	if _, skip := a.parentOwned[name]; skip {
 		return
 	}
 	switch mf.GetType() {
@@ -170,10 +218,10 @@ func (a *aggregator) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-// ParentMetrics is the smtpd parent process's metrics surface. It owns the
+// ParentMetrics is a dispatcher process's metrics surface. It owns the
 // connection lifecycle series directly (from spawn/reap) and aggregates
 // everything else from protocol-handler subprocess reports. Construct it once
-// and register it on the process's Prometheus registry.
+// per process and register it on the process's Prometheus registry.
 type ParentMetrics struct {
 	connectionsTotal  prometheus.Counter
 	connectionsActive prometheus.Gauge
@@ -181,22 +229,29 @@ type ParentMetrics struct {
 	agg               *aggregator
 }
 
-// NewParentMetrics builds the parent metrics surface and registers it on reg.
-func NewParentMetrics(reg prometheus.Registerer) *ParentMetrics {
+// NewParentMetrics builds the parent metrics surface for the given metric
+// namespace (the daemon name: "smtpd", "imapd", "pop3d") and registers it on
+// reg. The parent-owned families are <namespace>_connections_total and
+// <namespace>_connections_active; report ingestion failures are counted in
+// <namespace>_handler_failures_total.
+func NewParentMetrics(reg prometheus.Registerer, namespace string) *ParentMetrics {
 	p := &ParentMetrics{
 		connectionsTotal: prometheus.NewCounter(prometheus.CounterOpts{
-			Name: "smtpd_connections_total",
-			Help: "Total number of SMTP connections opened.",
+			Name: namespace + "_connections_total",
+			Help: "Total number of connections opened.",
 		}),
 		connectionsActive: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "smtpd_connections_active",
-			Help: "Number of currently active SMTP connections.",
+			Name: namespace + "_connections_active",
+			Help: "Number of currently active connections.",
 		}),
 		handlerFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
-			Name: "smtpd_handler_failures_total",
+			Name: namespace + "_handler_failures_total",
 			Help: "Total number of protocol-handler subprocess metrics reports that could not be read or decoded.",
 		}, []string{"reason"}),
-		agg: newAggregator(),
+		agg: newAggregator(map[string]struct{}{
+			namespace + "_connections_total":  {},
+			namespace + "_connections_active": {},
+		}),
 	}
 	reg.MustRegister(p.connectionsTotal, p.connectionsActive, p.handlerFailures, p.agg)
 	return p

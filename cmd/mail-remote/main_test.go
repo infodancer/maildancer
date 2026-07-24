@@ -72,6 +72,51 @@ func TestWriteResultsAndCleanup_EncodeFailureLeavesFiles(t *testing.T) {
 	}
 }
 
+func TestReadPasswordFD(t *testing.T) {
+	tests := []struct {
+		name    string
+		written string
+		want    string
+	}{
+		{"trailing newline stripped", "hunter2\n", "hunter2"},
+		{"no trailing newline", "hunter2", "hunter2"},
+		{"crlf stripped", "hunter2\r\n", "hunter2"},
+		{"only final newline stripped", "line1\nline2\n", "line1\nline2"},
+		{"empty", "", ""},
+		{"password with spaces preserved", "  spaced pw  \n", "  spaced pw  "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatalf("pipe: %v", err)
+			}
+			go func() {
+				_, _ = w.Write([]byte(tt.written))
+				_ = w.Close()
+			}()
+
+			got, err := readPasswordFD(int(r.Fd()))
+			_ = r.Close()
+			if err != nil {
+				t.Fatalf("readPasswordFD: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("readPasswordFD(%q) = %q, want %q", tt.written, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadPasswordFD_InvalidFD(t *testing.T) {
+	// A very high fd number that is not open should yield an error rather than
+	// silently returning an empty password.
+	if _, err := readPasswordFD(9999); err == nil {
+		t.Error("readPasswordFD(9999) = nil error, want error for unopened fd")
+	}
+}
+
 func createTempFile(t *testing.T, dir, name string) string {
 	t.Helper()
 	p := dir + "/" + name

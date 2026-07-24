@@ -13,14 +13,21 @@
 //	stderr: structured logging (slog)
 //
 // When stdin is a terminal (manual invocation), no config is read from stdin.
-// Use --smarthost and --smarthost-user flags instead, with MAIL_REMOTE_PASSWORD
-// env var for the password.
+// Use --smarthost and --smarthost-user flags instead, and supply the password
+// via --password-fd (preferred) or the MAIL_REMOTE_PASSWORD env var (legacy).
+//
+// Password sources, in precedence order: the stdin config (queue-manager path),
+// then --password-fd, then MAIL_REMOTE_PASSWORD. Prefer --password-fd: only the
+// fd number appears in argv, so the secret never reaches ps or
+// /proc/<pid>/cmdline, and unlike the env var it never reaches
+// /proc/<pid>/environ.
 //
 // Flags (manual overrides -- take precedence over stdin config):
 //
 //	--config path         Path to shared TOML config file (reads [mail-remote] section).
 //	--smarthost host:port Relay via SMTP smarthost (overrides stdin config).
 //	--smarthost-user user SMTP AUTH username (overrides stdin config).
+//	--password-fd N       Read the smarthost password from open fd N (e.g. 3<secret).
 //	--hostname fqdn       EHLO hostname for direct MX delivery (defaults to os.Hostname()).
 //	--final               Signal that this is the final delivery attempt (try all transports).
 //
@@ -43,6 +50,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/infodancer/maildancer/internal/mail-remote/config"
@@ -124,10 +132,36 @@ func readStdinConfig() *outboundConfig {
 	return &cfg
 }
 
+// readPasswordFD reads the smarthost password from an already-open file
+// descriptor. The password bytes travel through the inherited fd; only the fd
+// *number* appears in argv, so unlike a --password flag the secret never
+// reaches ps/proc/<pid>/cmdline, and unlike an env var it never reaches
+// proc/<pid>/environ. This is the GPG --passphrase-fd / SSH askpass pattern.
+//
+// A single trailing newline (optionally CRLF) is stripped, matching the
+// convention for fd-passed secrets; any other bytes -- including interior
+// newlines and surrounding spaces -- are preserved verbatim.
+func readPasswordFD(fd int) (string, error) {
+	f := os.NewFile(uintptr(fd), "password-fd")
+	if f == nil {
+		return "", fmt.Errorf("invalid password fd %d", fd)
+	}
+	defer func() { _ = f.Close() }()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return "", fmt.Errorf("read password fd %d: %w", fd, err)
+	}
+	s := strings.TrimSuffix(string(data), "\n")
+	s = strings.TrimSuffix(s, "\r")
+	return s, nil
+}
+
 func run() int {
 	configPath := flag.String("config", "", "path to shared TOML config file")
 	smarthostAddr := flag.String("smarthost", "", "SMTP smarthost address (host:port)")
 	smarthostUser := flag.String("smarthost-user", "", "SMTP AUTH username for smarthost")
+	passwordFD := flag.Int("password-fd", -1, "read smarthost password from this open file descriptor (preferred over MAIL_REMOTE_PASSWORD)")
 	hostname := flag.String("hostname", "", "EHLO hostname for direct MX delivery")
 	final := flag.Bool("final", false, "final delivery attempt (try all transports)")
 	flag.Parse()
@@ -181,7 +215,18 @@ func run() int {
 		cfg.Hostname = *hostname
 	}
 
-	// Env var password as fallback for manual invocation.
+	// Manual-invocation password sources, used only when queue-manager did not
+	// supply one via the stdin config. --password-fd is preferred; the
+	// MAIL_REMOTE_PASSWORD env var is kept as a legacy fallback but exposes the
+	// secret via /proc/<pid>/environ.
+	if password == "" && *passwordFD >= 0 {
+		pw, err := readPasswordFD(*passwordFD)
+		if err != nil {
+			slog.Error("failed to read password from fd", "fd", *passwordFD, "error", err)
+			return exUsage
+		}
+		password = pw
+	}
 	if password == "" {
 		password = os.Getenv("MAIL_REMOTE_PASSWORD")
 	}

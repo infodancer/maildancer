@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -23,8 +24,13 @@ import (
 
 // ConnFD is the file descriptor number at which the handler subprocess
 // inherits the accepted client connection (the first ExtraFiles entry).
-// Fd 4 is reserved for a future handler-metrics pipe; do not repurpose it.
 const ConnFD = 3
+
+// ReportFD is the file descriptor number at which the handler subprocess
+// inherits the write end of the metrics-report pipe (the second ExtraFiles
+// entry). Present only when the dispatcher was configured with a ReportSink;
+// the child ships its accumulated metrics here just before exiting.
+const ReportFD = 4
 
 // Listener is one accept address. Mode is opaque to connfork; it is handed
 // back to the Env callback so each daemon defines its own mode vocabulary.
@@ -54,6 +60,15 @@ type Config struct {
 	// OnConnStart for the same connection (crash-safe gauge pairing).
 	OnConnStart func()
 	OnConnEnd   func()
+	// ReportSink, when non-nil, gives each handler the write end of a pipe
+	// as ReportFD; the reaper drains the child's report into the sink
+	// (reading to EOF, which the child's exit guarantees) before Wait and
+	// before OnConnEnd. The pipe is one-way by construction -- the child
+	// holds only the write end -- so it can never carry data back into the
+	// possibly-lower-privileged child. The sink must tolerate an empty
+	// stream (a child that crashed before reporting); its error is logged,
+	// not fatal.
+	ReportSink func(io.Reader) error
 	// MaxConns caps concurrently live handlers. When at the cap the
 	// dispatcher stops accepting, so excess connections queue in the
 	// kernel backlog rather than being accepted and dropped. 0 = unlimited.
@@ -206,11 +221,30 @@ func (s *Server) spawnHandler(conn net.Conn, lc Listener) {
 	cmd.SysProcAttr = s.cfg.SysProcAttr
 	cmd.Stderr = os.Stderr
 
+	// When a report sink is configured, hand the child the write end of a
+	// pipe as ReportFD. The child ships its accumulated metrics here just
+	// before exiting; the reaper below drains the read end into the sink.
+	var reportR *os.File
+	if s.cfg.ReportSink != nil {
+		r, w, perr := os.Pipe()
+		if perr != nil {
+			s.cfg.Logger.Error("failed to create report pipe", slog.String("error", perr.Error()))
+			// Fall through without the pipe rather than dropping the connection.
+		} else {
+			reportR = r
+			cmd.ExtraFiles = append(cmd.ExtraFiles, w) // becomes ReportFD in the child
+			defer func() { _ = w.Close() }()           // parent's copy; closed after Start
+		}
+	}
+
 	if err := cmd.Start(); err != nil {
 		s.cfg.Logger.Error("failed to start handler",
 			slog.String("client_ip", clientIP),
 			slog.String("error", err.Error()))
 		_ = connFile.Close()
+		if reportR != nil {
+			_ = reportR.Close()
+		}
 		return
 	}
 	started = true
@@ -228,6 +262,18 @@ func (s *Server) spawnHandler(conn net.Conn, lc Listener) {
 
 	// Reap the subprocess asynchronously to avoid zombies.
 	go func() {
+		// Drain the child's report before reaping. The parent has already
+		// closed its own copy of the write end (deferred above), so this
+		// reads to EOF when the child exits and closes ReportFD.
+		if reportR != nil {
+			if err := s.cfg.ReportSink(reportR); err != nil {
+				s.cfg.Logger.Debug("failed to ingest handler report",
+					slog.Int("pid", pid),
+					slog.String("error", err.Error()))
+			}
+			_ = reportR.Close()
+		}
+
 		if err := cmd.Wait(); err != nil {
 			s.cfg.Logger.Debug("handler exited with error",
 				slog.Int("pid", pid),
@@ -269,4 +315,14 @@ func ChildConn() (net.Conn, error) {
 		return nil, fmt.Errorf("recover connection from fd %d: %w", ConnFD, err)
 	}
 	return conn, nil
+}
+
+// ChildReportPipe returns the write end of the metrics-report pipe a handler
+// subprocess inherited at ReportFD. Call it only when the dispatcher is known
+// to have configured a ReportSink (in practice: when metrics are enabled in
+// the shared config both processes read) -- the fd number cannot be probed for
+// validity, so writes to an unconfigured fd surface as write errors, which the
+// caller should log and otherwise ignore.
+func ChildReportPipe() *os.File {
+	return os.NewFile(uintptr(ReportFD), "report-pipe")
 }

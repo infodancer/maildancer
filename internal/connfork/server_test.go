@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -97,6 +98,62 @@ func TestServer_MaxConnsLimitsLiveHandlers(t *testing.T) {
 	_ = conn1.Close()
 	waitCount(t, &starts, 2, "OnConnStart after slot freed")
 	waitCount(t, &ends, 1, "OnConnEnd")
+}
+
+// TestServer_ReportPipeDrainedBeforeConnEnd asserts the report-pipe contract:
+// with a ReportSink configured, the child's fd-4 payload reaches the sink, and
+// the sink completes before OnConnEnd fires for that connection (the parent
+// must not release the connection slot or decrement gauges while the report is
+// still in flight).
+func TestServer_ReportPipeDrainedBeforeConnEnd(t *testing.T) {
+	helper := buildConnHolder(t)
+	addr := freePort(t)
+
+	var mu sync.Mutex
+	var reports []string
+	var sinkDone atomic.Int32
+	var endBeforeSink atomic.Int32
+	var ends atomic.Int32
+
+	srv := NewServer(Config{
+		Listeners: []Listener{{Address: addr, Mode: "test"}},
+		ExecPath:  helper,
+		ReportSink: func(r io.Reader) error {
+			b, err := io.ReadAll(r)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			reports = append(reports, string(b))
+			mu.Unlock()
+			sinkDone.Add(1)
+			return nil
+		},
+		OnConnEnd: func() {
+			if sinkDone.Load() < ends.Load()+1 {
+				endBeforeSink.Add(1)
+			}
+			ends.Add(1)
+		},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = srv.Run(ctx) }()
+
+	conn := dialRetry(t, addr)
+	_ = conn.Close()
+	waitCount(t, &ends, 1, "OnConnEnd")
+
+	if got := endBeforeSink.Load(); got != 0 {
+		t.Errorf("OnConnEnd fired before the report sink completed (%d times)", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(reports) != 1 || reports[0] != "connholder-report-payload" {
+		t.Errorf("sink received %q, want one report %q", reports, "connholder-report-payload")
+	}
 }
 
 // buildConnHolder compiles the stand-in handler and returns its path.

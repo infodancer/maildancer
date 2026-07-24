@@ -81,11 +81,6 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	return s, nil
 }
 
-// Run starts the server and blocks until the context is cancelled.
-func (s *Stack) Run(ctx context.Context) error {
-	return s.server.Run(ctx)
-}
-
 // Close shuts down all closeable components in reverse registration order.
 func (s *Stack) Close() error {
 	var errs []error

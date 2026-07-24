@@ -48,21 +48,22 @@ func TestStack_POP3FullStack(t *testing.T) {
 	go func() { _ = smSrv.Serve(smLn) }()
 	t.Cleanup(func() { smSrv.GracefulStop() })
 
-	// Pick a free port.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	// The test owns the TCP listener; each accepted connection is served
+	// through Stack.RunSingleConn -- the exact code path the forked
+	// protocol-handler subprocess runs (#179). Fork/exec itself is covered
+	// by forkperconn_test.go.
+	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("get free port: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
-	addr := ln.Addr().String()
-	ln.Close()
+	defer tcpLn.Close()
+	addr := tcpLn.Addr().String()
 
-	// Build config.
+	// Build config. No listeners: the Stack serves individual connections.
 	cfg := config.Default()
 	cfg.Hostname = "test.local"
 	cfg.SessionManager = config.SessionManagerConfig{Socket: smSocket}
-	cfg.Listeners = []config.ListenerConfig{
-		{Address: addr, Mode: config.ModePop3},
-	}
+	cfg.Listeners = nil
 	cfg.Timeouts = config.TimeoutsConfig{
 		Connection: "10s",
 		Command:    "10s",
@@ -78,25 +79,15 @@ func TestStack_POP3FullStack(t *testing.T) {
 		}
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
 	go func() {
-		if err := stack.Run(ctx); err != nil {
-			t.Logf("stack.Run: %v", err)
+		for {
+			c, aerr := tcpLn.Accept()
+			if aerr != nil {
+				return
+			}
+			go func() { _ = stack.RunSingleConn(c, config.ModePop3) }()
 		}
 	}()
-
-	// Wait for server to bind.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err == nil {
-			_ = c.Close()
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 
 	// Connect.
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)

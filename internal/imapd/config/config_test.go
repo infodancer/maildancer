@@ -311,6 +311,50 @@ func TestValidateMaxConnectionsMustBePositive(t *testing.T) {
 	}
 }
 
+// TestValidateHandlerCredentials verifies that handler_gid/handler_groups
+// cannot be set without handler_uid, and that a full credential set passes.
+func TestValidateHandlerCredentials(t *testing.T) {
+	cfg := Default()
+	cfg.HandlerGID = 903
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for handler_gid without handler_uid, got nil")
+	}
+
+	cfg = Default()
+	cfg.HandlerGroups = []uint32{904}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for handler_groups without handler_uid, got nil")
+	}
+
+	cfg = Default()
+	cfg.HandlerUID = 902
+	cfg.HandlerGID = 903
+	cfg.HandlerGroups = []uint32{904}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected full handler credential set to validate, got %v", err)
+	}
+}
+
+// TestLoadHandlerCredentials verifies the [imapd] handler_* keys are merged.
+func TestLoadHandlerCredentials(t *testing.T) {
+	path := writeTempTOML(t, `
+[imapd]
+handler_uid = 902
+handler_gid = 903
+handler_groups = [904, 905]
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HandlerUID != 902 || cfg.HandlerGID != 903 {
+		t.Errorf("handler uid/gid not merged: %+v", cfg)
+	}
+	if len(cfg.HandlerGroups) != 2 || cfg.HandlerGroups[0] != 904 || cfg.HandlerGroups[1] != 905 {
+		t.Errorf("handler_groups not merged: %v", cfg.HandlerGroups)
+	}
+}
+
 // TestValidateInvalidTimeoutStrings verifies that unparseable timeout values fail validation.
 func TestValidateInvalidTimeoutStrings(t *testing.T) {
 	tests := []struct {

@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/infodancer/logging"
+	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 	"github.com/infodancer/maildancer/internal/imapd/notify"
@@ -27,10 +27,12 @@ type StackConfig struct {
 	Logger    *slog.Logger      // nil → slog.Default()
 }
 
-// Stack owns all components of a running imapd instance and manages their lifecycle.
+// Stack owns the components of one imapd protocol-handler process and
+// manages their lifecycle. In the fork-per-connection model (#179) a Stack
+// serves a single connection via ServeConn; the listening side is Dispatcher.
 type Stack struct {
 	srv       *imapserver.Server
-	listeners []net.Listener
+	tlsConfig *tls.Config
 	closers   []io.Closer
 	logger    *slog.Logger
 }
@@ -47,7 +49,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 		collector = &metrics.NoopCollector{}
 	}
 
-	s := &Stack{logger: logger}
+	s := &Stack{logger: logger, tlsConfig: cfg.TLSConfig}
 
 	// Session-manager is required.
 	if !cfg.Config.SessionManager.IsEnabled() {
@@ -105,45 +107,32 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 	srv := imapserver.New(opts)
 	s.srv = srv
-
-	// Create listeners for each configured address.
-	for _, lc := range cfg.Config.Listeners {
-		var ln net.Listener
-		var err error
-		switch lc.Mode {
-		case config.ModeImaps:
-			if cfg.TLSConfig == nil {
-				s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
-				return nil, errors.New("listener " + lc.Address + " requires TLS but no TLS config provided")
-			}
-			ln, err = tls.Listen("tcp", lc.Address, cfg.TLSConfig)
-		default: // ModeImap
-			ln, err = net.Listen("tcp", lc.Address)
-		}
-		if err != nil {
-			s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
-			return nil, err
-		}
-		s.listeners = append(s.listeners, ln)
-		s.closers = append(s.closers, ln)
-		logger.Info("listening", "address", lc.Address, "mode", string(lc.Mode))
-	}
+	// Registered last so Close shuts the IMAP server down before the
+	// clients it depends on.
+	s.closers = append(s.closers, srv)
 
 	return s, nil
 }
 
-// Run starts serving on all listeners and blocks until ctx is cancelled.
-func (s *Stack) Run(ctx context.Context) error {
-	for _, ln := range s.listeners {
-		ln := ln
-		go func() {
-			if err := s.srv.Serve(ln); err != nil {
-				s.logger.Error("server error", "error", err)
-			}
-		}()
+// ServeConn serves exactly one IMAP session on conn and returns when the
+// session ends. It is the protocol-handler entry point in the
+// fork-per-connection model (#179): the dispatcher accepts the connection,
+// the handler subprocess serves it. ModeImaps wraps conn for implicit TLS
+// using the stack's TLS config; ModeImap relies on go-imap's STARTTLS via
+// Options.TLSConfig. go-imap only exposes Serve(net.Listener), so the single
+// connection is fed through a one-shot listener; the net.ErrClosed that ends
+// that listener after the session is filtered as success.
+func (s *Stack) ServeConn(conn net.Conn, mode config.ListenerMode) error {
+	if mode == config.ModeImaps {
+		if s.tlsConfig == nil {
+			_ = conn.Close()
+			return errors.New("imaps connection requires a TLS configuration")
+		}
+		conn = tls.Server(conn, s.tlsConfig)
 	}
-	<-ctx.Done()
-	_ = s.srv.Close()
+	if err := s.srv.Serve(connfork.NewOneConnListener(conn)); err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
 	return nil
 }
 

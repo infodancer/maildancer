@@ -78,17 +78,20 @@ func TestStack_ExpungeResponsesNotDuplicated(t *testing.T) {
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { srv.Stop() })
 
+	// The test owns the TCP listener; each accepted connection is served
+	// through Stack.ServeConn -- the exact code path the forked
+	// protocol-handler subprocess runs (#179).
 	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("get free port: %v", err)
+		t.Fatalf("listen: %v", err)
 	}
+	defer tcpLn.Close()
 	addr := tcpLn.Addr().String()
-	tcpLn.Close()
 
 	cfg := config.Default()
 	cfg.Hostname = "test.local"
 	cfg.SessionManager = config.SessionManagerConfig{Socket: sock}
-	cfg.Listeners = []config.ListenerConfig{{Address: addr, Mode: config.ModeImap}}
+	cfg.Listeners = nil
 
 	stack, err := backend.NewStack(backend.StackConfig{Config: cfg})
 	if err != nil {
@@ -96,14 +99,15 @@ func TestStack_ExpungeResponsesNotDuplicated(t *testing.T) {
 	}
 	defer stack.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	go func() {
-		if err := stack.Run(ctx); err != nil {
-			t.Logf("stack.Run: %v", err)
+		for {
+			c, aerr := tcpLn.Accept()
+			if aerr != nil {
+				return
+			}
+			go func() { _ = stack.ServeConn(c, config.ModeImap) }()
 		}
 	}()
-	time.Sleep(100 * time.Millisecond)
 
 	// connectSelect dials, logs in, and SELECTs INBOX, returning a sendCmd bound
 	// to the connection. Each call is a fresh connection (fresh mailbox tracker).

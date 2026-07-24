@@ -169,6 +169,18 @@ func mergeConfig(dst, src Config) Config {
 		dst.LogLevel = src.LogLevel
 	}
 
+	if src.HandlerUID != 0 {
+		dst.HandlerUID = src.HandlerUID
+	}
+
+	if src.HandlerGID != 0 {
+		dst.HandlerGID = src.HandlerGID
+	}
+
+	if len(src.HandlerGroups) > 0 {
+		dst.HandlerGroups = src.HandlerGroups
+	}
+
 	if src.TLS.CertFile != "" {
 		dst.TLS.CertFile = src.TLS.CertFile
 	}

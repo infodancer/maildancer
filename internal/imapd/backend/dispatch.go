@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"syscall"
 
 	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/imapd/config"
@@ -94,12 +95,32 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 		ExecPath:    cfg.ExecPath,
 		Args:        handlerArgs(cfg.ConfigPath, tlsCert, tlsKey),
 		Env:         handlerEnv,
+		SysProcAttr: handlerSysProcAttr(cfg.Config),
 		OnConnStart: onStart,
 		OnConnEnd:   onEnd,
 		MaxConns:    cfg.Config.Limits.MaxConnections,
 		Logger:      logger,
 	})
 	return &Dispatcher{srv: srv}, nil
+}
+
+// handlerSysProcAttr builds the SysProcAttr for handler subprocesses. When
+// handler_uid is configured the handler is spawned directly under those
+// credentials (the dispatcher holds the privilege; the child never calls
+// setuid/setgid itself). A zero handler_uid returns nil: no drop, handlers
+// inherit the dispatcher's credentials.
+func handlerSysProcAttr(cfg config.Config) *syscall.SysProcAttr {
+	if cfg.HandlerUID == 0 {
+		return nil
+	}
+	return &syscall.SysProcAttr{
+		Credential: &syscall.Credential{
+			Uid:    cfg.HandlerUID,
+			Gid:    cfg.HandlerGID,
+			Groups: cfg.HandlerGroups,
+		},
+		Setpgid: true,
+	}
 }
 
 // Run accepts connections on all configured listeners until ctx is cancelled.

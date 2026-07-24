@@ -20,7 +20,7 @@ s6 supervises these long-running services (see `rootfs/etc/s6-overlay/s6-rc.d/`)
 | imapd | `/imapd -config …` | ports 143 / 993 |
 | queue-manager | `/queue-manager --config … --queue … --binary /mail-remote` | outbound; spawns `/mail-remote` |
 | webadmin | `/webadmin -config …` | port 8080 |
-| tlsrefresh | `/tlsstage … -refresh 1h` | keeps `/run/tls/smtpd` current after certbot renewals |
+| tlsrefresh-{smtpd,pop3d,imapd} | `/tlsstage … -refresh 1h` | keep `/run/tls/<daemon>` current after certbot renewals |
 
 `userctl` and `auth-oidc` are also installed at `/` for `docker exec` use
 (user/key provisioning, the leaf IdP) but are not started as services.

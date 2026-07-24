@@ -1,0 +1,8 @@
+#!/command/with-contenv sh
+# Re-stage imapd's TLS material into /run/tls/imapd when the source files
+# change (certbot drops renewed certs into the read-only /etc/letsencrypt
+# mount). imapd's run script does the initial stage itself before exec, so
+# imapd never starts without its certs; this service only keeps the staged
+# copies current. Handlers load the cert fresh per connection, so a restage
+# is picked up immediately without restarting imapd.
+exec /tlsstage -config /etc/infodancer/config.toml -section imapd -out /run/tls/imapd -refresh 1h

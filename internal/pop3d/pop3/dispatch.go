@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"syscall"
@@ -30,11 +31,12 @@ type DispatcherConfig struct {
 	// path since handlers inherit the dispatcher's working directory only
 	// incidentally.
 	ConfigPath string
-	// Collector receives ConnectionOpened/ConnectionClosed as handlers are
-	// spawned and reaped. nil disables. Session-level metrics are recorded
-	// (interim: dropped) in the handlers themselves.
-	Collector metrics.Collector
-	Logger    *slog.Logger // nil -> slog.Default()
+	// Metrics is the dispatcher's metrics surface: it receives
+	// ConnectionOpened/ConnectionClosed as handlers are spawned and reaped,
+	// and aggregates the per-session series each handler reports over the
+	// fd-4 pipe at exit (#188). nil disables metrics entirely (no pipe).
+	Metrics *metrics.ParentMetrics
+	Logger  *slog.Logger // nil -> slog.Default()
 }
 
 // Dispatcher accepts client connections and spawns one protocol-handler
@@ -85,9 +87,18 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 	}
 
 	var onStart, onEnd func()
-	if cfg.Collector != nil {
-		onStart = cfg.Collector.ConnectionOpened
-		onEnd = cfg.Collector.ConnectionClosed
+	var reportSink func(io.Reader) error
+	if cfg.Metrics != nil {
+		pm := cfg.Metrics
+		onStart = pm.ConnectionOpened
+		onEnd = pm.ConnectionClosed
+		reportSink = func(r io.Reader) error {
+			if err := pm.Ingest(r); err != nil {
+				pm.HandlerFailure("metrics_decode")
+				return err
+			}
+			return nil
+		}
 	}
 
 	srv := connfork.NewServer(connfork.Config{
@@ -98,6 +109,7 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 		SysProcAttr: handlerSysProcAttr(cfg.Config),
 		OnConnStart: onStart,
 		OnConnEnd:   onEnd,
+		ReportSink:  reportSink,
 		MaxConns:    cfg.Config.Limits.MaxConnections,
 		Logger:      logger,
 	})

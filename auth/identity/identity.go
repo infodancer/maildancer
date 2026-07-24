@@ -44,6 +44,12 @@ var (
 	// ErrUIDExists is returned when allocating a uid for a user that already
 	// has a different one -- reassigning a live uid orphans the user's mail.
 	ErrUIDExists = errors.New("identity: user uid already allocated")
+	// ErrNotAllocatable is returned when a caller tries to record an id
+	// outside the allocatable range (below the allocator floor, or in the
+	// excluded 65532-65535 band) in the identity maps. Service and system
+	// ids must never appear there: spawning code grants the mapped id the
+	// user's filesystem rights.
+	ErrNotAllocatable = errors.New("identity: id outside the allocatable range")
 )
 
 // gidMapPath returns {config}/gid.toml.

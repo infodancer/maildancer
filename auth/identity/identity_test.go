@@ -219,3 +219,40 @@ func TestMapsAreSeparateFiles(t *testing.T) {
 		t.Errorf("uid.toml not under domain dir: %v", err)
 	}
 }
+
+// TestAllocate_SkipsExcludedBand: the shared counter must never hand out the
+// well-known 65532-65535 band (distroless nonroot/nogroup, nobody, 16-bit -1).
+func TestAllocate_SkipsExcludedBand(t *testing.T) {
+	m := newManager(t)
+	if err := os.WriteFile(filepath.Join(m.Data, ".uid-counter"), []byte("65532\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	gid, err := m.AllocateDomainGID("example.com")
+	if err != nil {
+		t.Fatalf("AllocateDomainGID: %v", err)
+	}
+	if gid != 65536 {
+		t.Errorf("allocated gid = %d, want 65536 (band 65532-65535 skipped)", gid)
+	}
+}
+
+// TestSetDomainGID_RejectsUnallocatable: the manual Set path must not let a
+// reserved or excluded id into the identity maps.
+func TestSetDomainGID_RejectsUnallocatable(t *testing.T) {
+	m := newManager(t)
+	for _, gid := range []uint32{0, 900, 9999, 65532, 65535} {
+		if err := m.SetDomainGID("example.com", gid); !errors.Is(err, ErrNotAllocatable) {
+			t.Errorf("SetDomainGID(%d) = %v, want ErrNotAllocatable", gid, err)
+		}
+	}
+}
+
+// TestSetUserUID_RejectsUnallocatable mirrors the gid guard for user uids.
+func TestSetUserUID_RejectsUnallocatable(t *testing.T) {
+	m := newManager(t)
+	for _, uid := range []uint32{0, 903, 9999, 65534} {
+		if err := m.SetUserUID("example.com", "alice", uid); !errors.Is(err, ErrNotAllocatable) {
+			t.Errorf("SetUserUID(%d) = %v, want ErrNotAllocatable", uid, err)
+		}
+	}
+}

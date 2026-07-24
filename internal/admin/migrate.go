@@ -11,6 +11,7 @@ import (
 
 	"github.com/infodancer/maildancer/auth/identity"
 	"github.com/infodancer/maildancer/auth/passwd"
+	"github.com/infodancer/maildancer/internal/idrange"
 )
 
 // MigrateResult summarizes a MigrateUIDs run.
@@ -183,9 +184,11 @@ func (p Paths) migrateUserUIDs(domain string) (migrated int, details, errs []str
 func (p Paths) adoptDomainGID(domain string) (gid uint32, source string) {
 	dataDir := filepath.Join(p.Data, domain)
 
-	// 1. Actual group ownership of the data directory.
+	// 1. Actual group ownership of the data directory. Only an allocatable
+	// gid is a real domain allocation to adopt -- root/service ownership or
+	// the legacy distroless-nonroot 65532 is not.
 	if info, err := os.Stat(dataDir); err == nil {
-		if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Gid >= firstReservedGID {
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && idrange.Allocatable(st.Gid) {
 			return st.Gid, "data dir group"
 		}
 	}
@@ -200,14 +203,10 @@ func (p Paths) adoptDomainGID(domain string) (gid uint32, source string) {
 	return 0, ""
 }
 
-// firstReservedGID is the lowest gid the allocator hands out; a data dir owned
-// by a lower gid (e.g. root) is not a real domain allocation to adopt.
-const firstReservedGID = uint32(10000)
-
 // Service accounts baked into the all-in-one Docker image. The unprivileged
 // daemons run under these fixed ids so that image rebuilds never reshuffle
-// ownership of anything they touch. They must stay below firstReservedGID
-// (the 10000 allocator floor) so they can never collide with an allocated
+// ownership of anything they touch. They must stay below
+// idrange.AllocatorFloor so they can never collide with an allocated
 // per-domain gid or per-user uid.
 const (
 	// MailsvcGID is the shared service group for the unprivileged daemons.

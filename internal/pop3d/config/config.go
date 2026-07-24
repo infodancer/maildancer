@@ -98,6 +98,11 @@ type TimeoutsConfig struct {
 	Connection string `toml:"connection"`
 	Command    string `toml:"command"`
 	Idle       string `toml:"idle"`
+	// SessionRecoveryDeadline bounds how long a protocol handler keeps
+	// trying to transparently recover its session after a session-manager
+	// restart before dropping the connection (#179,
+	// session-recovery-design.md). Default 2m.
+	SessionRecoveryDeadline string `toml:"session_recovery_deadline"`
 }
 
 // LimitsConfig defines resource limits for the server.
@@ -124,9 +129,10 @@ func Default() Config {
 			MinVersion: "1.2",
 		},
 		Timeouts: TimeoutsConfig{
-			Connection: "10m",
-			Command:    "1m",
-			Idle:       "30m",
+			Connection:              "10m",
+			Command:                 "1m",
+			Idle:                    "30m",
+			SessionRecoveryDeadline: "2m",
 		},
 		Limits: LimitsConfig{
 			MaxConnections: 100,
@@ -181,6 +187,12 @@ func (c *Config) Validate() error {
 	if c.Timeouts.Idle != "" {
 		if _, err := time.ParseDuration(c.Timeouts.Idle); err != nil {
 			return fmt.Errorf("invalid idle timeout: %w", err)
+		}
+	}
+
+	if c.Timeouts.SessionRecoveryDeadline != "" {
+		if _, err := time.ParseDuration(c.Timeouts.SessionRecoveryDeadline); err != nil {
+			return fmt.Errorf("invalid session recovery deadline: %w", err)
 		}
 	}
 
@@ -246,6 +258,19 @@ func (c *TimeoutsConfig) IdleTimeout() time.Duration {
 	d, err := time.ParseDuration(c.Idle)
 	if err != nil {
 		return 30 * time.Minute
+	}
+	return d
+}
+
+// RecoveryDeadline returns the session-recovery deadline as a time.Duration.
+// Returns 2 minutes if not configured or invalid.
+func (c *TimeoutsConfig) RecoveryDeadline() time.Duration {
+	if c.SessionRecoveryDeadline == "" {
+		return 2 * time.Minute
+	}
+	d, err := time.ParseDuration(c.SessionRecoveryDeadline)
+	if err != nil {
+		return 2 * time.Minute
 	}
 	return d
 }

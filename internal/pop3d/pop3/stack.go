@@ -74,7 +74,7 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 
 	// Set POP3 protocol handler.
-	handler := Handler(cfg.Config.Hostname, smClient, cfg.TLSConfig, collector)
+	handler := Handler(cfg.Config.Hostname, smClient, cfg.TLSConfig, collector, cfg.Config.Timeouts.RecoveryDeadline())
 	srv.SetHandler(handler)
 
 	s.server = srv

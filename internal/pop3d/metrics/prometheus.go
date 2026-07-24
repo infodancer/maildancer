@@ -22,6 +22,7 @@ type PrometheusCollector struct {
 	messagesDeletedTotal   *prometheus.CounterVec
 	messagesListedTotal    *prometheus.CounterVec
 	messagesSizeBytes      prometheus.Histogram
+	sessionRecoveries      *prometheus.CounterVec
 }
 
 // NewPrometheusCollector creates a new PrometheusCollector with all metrics registered.
@@ -62,6 +63,10 @@ func NewPrometheusCollector(reg prometheus.Registerer) *PrometheusCollector {
 			Name: "pop3d_messages_listed_total",
 			Help: "Total number of message list operations.",
 		}, []string{"user_domain"}),
+		sessionRecoveries: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "pop3d_session_recoveries_total",
+			Help: "Total number of session-recovery attempts across session-manager restarts, by outcome.",
+		}, []string{"result"}),
 		messagesSizeBytes: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "pop3d_messages_size_bytes",
 			Help:    "Size of retrieved messages in bytes.",
@@ -79,6 +84,7 @@ func NewPrometheusCollector(reg prometheus.Registerer) *PrometheusCollector {
 		c.messagesRetrievedTotal,
 		c.messagesDeletedTotal,
 		c.messagesListedTotal,
+		c.sessionRecoveries,
 		c.messagesSizeBytes,
 	)
 
@@ -129,4 +135,10 @@ func (c *PrometheusCollector) MessageDeleted(userDomain string) {
 // MessageListed increments the message listed counter.
 func (c *PrometheusCollector) MessageListed(userDomain string) {
 	c.messagesListedTotal.WithLabelValues(userDomain).Inc()
+}
+
+// SessionRecovery counts a session-recovery outcome across a session-manager
+// restart (#179).
+func (c *PrometheusCollector) SessionRecovery(result string) {
+	c.sessionRecoveries.WithLabelValues(result).Inc()
 }

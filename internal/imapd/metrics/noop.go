@@ -30,3 +30,6 @@ func (n *NoopCollector) MessageExpunged(userDomain string) {}
 
 // FolderSelected is a no-op.
 func (n *NoopCollector) FolderSelected(userDomain string) {}
+
+// SessionRecovery is a no-op.
+func (n *NoopCollector) SessionRecovery(result string) {}

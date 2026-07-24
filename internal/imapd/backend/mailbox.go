@@ -111,13 +111,18 @@ func (s *Session) Select(mailbox string, options *imap.SelectOptions) (*imap.Sel
 
 	s.collector.FolderSelected(s.userDomain)
 
+	// Captured for the recovery continuity check (#179): after a
+	// transparent re-login, resumption is only legal if this value is
+	// unchanged.
+	s.selectedUIDValidity = s.getUIDValidity(ctx, mailbox)
+
 	return &imap.SelectData{
 		Flags:             []imap.Flag{imap.FlagSeen, imap.FlagAnswered, imap.FlagFlagged, imap.FlagDeleted, imap.FlagDraft},
 		PermanentFlags:    []imap.Flag{imap.FlagSeen, imap.FlagAnswered, imap.FlagFlagged, imap.FlagDeleted, imap.FlagDraft},
 		NumMessages:       uint32(len(msgs)),
 		NumRecent:         0,
 		FirstUnseenSeqNum: firstUnseen,
-		UIDValidity:       s.getUIDValidity(ctx, mailbox),
+		UIDValidity:       s.selectedUIDValidity,
 		UIDNext:           s.getUIDNext(ctx, mailbox),
 	}, nil
 }

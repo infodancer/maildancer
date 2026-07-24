@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/infodancer/maildancer/internal/imapd/config"
+	"github.com/infodancer/maildancer/internal/smclient"
 )
 
 // --- Mock services ---
@@ -433,12 +434,22 @@ func TestSessionManagerConfig_mTLSMissingCert(t *testing.T) {
 
 // --- Store adapter tests ---
 
+// newTestSMStore logs in through a recovering session and wraps it in the
+// store adapter, as Session.Login does in production.
+func newTestSMStore(t *testing.T, client *SessionManagerClient) *sessionManagerStore {
+	t.Helper()
+	sess := smclient.NewSession(client, smclient.SessionConfig{}, nil)
+	if _, err := sess.Login(context.Background(), "user@example.com", "secret"); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	return newSessionManagerStore(sess)
+}
+
 func TestSMStore_ListAndStat(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
-	store := newSessionManagerStore(client, token)
+	store := newTestSMStore(t, client)
 
 	msgs, err := store.List(ctx, "user@example.com")
 	if err != nil {
@@ -461,8 +472,7 @@ func TestSMStore_FolderOperations(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
-	store := newSessionManagerStore(client, token)
+	store := newTestSMStore(t, client)
 
 	folders, err := store.ListFolders(ctx, "user@example.com")
 	if err != nil {
@@ -489,8 +499,7 @@ func TestSMStore_MoveMessage(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
-	store := newSessionManagerStore(client, token)
+	store := newTestSMStore(t, client)
 
 	newUID, err := store.MoveMessage(ctx, "", "INBOX", 1, "Junk")
 	if err != nil {
@@ -505,8 +514,7 @@ func TestSMStore_Rescan(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
-	store := newSessionManagerStore(client, token)
+	store := newTestSMStore(t, client)
 
 	// ListInFolder sets selectedFolder
 	_, err := store.ListInFolder(ctx, "", "Sent")
@@ -525,10 +533,7 @@ func TestSMStore_Rescan(t *testing.T) {
 
 func TestSMStore_Close_CallsLogout(t *testing.T) {
 	client, sessMock, _, _ := startTestServer(t)
-	ctx := context.Background()
-
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
-	store := newSessionManagerStore(client, token)
+	store := newTestSMStore(t, client)
 
 	if err := store.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -542,8 +547,7 @@ func TestSMStore_UIDValidity(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
-	store := newSessionManagerStore(client, token)
+	store := newTestSMStore(t, client)
 
 	val, err := store.UIDValidity(ctx, "", "INBOX")
 	if err != nil {

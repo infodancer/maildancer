@@ -23,16 +23,30 @@ type oneConnListener struct {
 	stopped  chan struct{} // listener-close signal (owned by this listener)
 	stopOnce sync.Once
 	addr     net.Addr
+	wrap     func(net.Conn) net.Conn // applied outside the notify shim; nil = none
 }
 
 // NewOneConnListener wraps an already-accepted connection in a net.Listener
 // that yields it exactly once.
 func NewOneConnListener(conn net.Conn) net.Listener {
+	return NewOneConnListenerWrapped(conn, nil)
+}
+
+// NewOneConnListenerWrapped is NewOneConnListener with a layer applied
+// OUTSIDE the session-end notify shim: Accept yields wrap(shim(conn)).
+// Protocol libraries that type-assert the accepted connection to a concrete
+// type -- go-imap checks for *tls.Conn to decide whether the session is
+// secure -- need that layer outermost; wrapping TLS around conn before
+// NewOneConnListener would hide it behind the shim (issue #199). The close
+// chain is preserved: closing the outer layer closes the shim, which signals
+// session end.
+func NewOneConnListenerWrapped(conn net.Conn, wrap func(net.Conn) net.Conn) net.Listener {
 	return &oneConnListener{
 		conn:     conn,
 		connDone: make(chan struct{}),
 		stopped:  make(chan struct{}),
 		addr:     conn.LocalAddr(),
+		wrap:     wrap,
 	}
 }
 
@@ -46,7 +60,11 @@ func (l *oneConnListener) Accept() (net.Conn, error) {
 	l.mu.Unlock()
 
 	if c != nil {
-		return &notifyConn{Conn: c, done: l.connDone}, nil
+		var out net.Conn = &notifyConn{Conn: c, done: l.connDone}
+		if l.wrap != nil {
+			out = l.wrap(out)
+		}
+		return out, nil
 	}
 
 	select {

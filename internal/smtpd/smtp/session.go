@@ -487,7 +487,9 @@ func (s *Session) Data(r io.Reader) error {
 			User:       s.authUser,
 		})
 
-		senderDomain := sessionExtractSenderDomain(s.from)
+		// Bounded for metrics: real hosted domain only when authenticated,
+		// else "other" (see senderDomainLabel / issue #174).
+		senderDomain := s.senderDomainLabel()
 
 		if checkErr != nil {
 			s.logger.Debug("spam check failed",
@@ -903,6 +905,21 @@ func sessionExtractRecipientDomain(recipients []string) string {
 		return email[idx+1:]
 	}
 	return "unknown"
+}
+
+// senderDomainLabel returns the value to use for the sender_domain metric
+// label. The envelope sender is only a bounded value -- one of our hosted
+// domains -- when the session authenticated; the sender-verification path
+// constrains an authenticated user to send as their own address. For
+// unauthenticated inbound mail the envelope sender is arbitrary,
+// attacker-controlled input, so it collapses to "other" to bound Prometheus
+// label cardinality (a hostile peer could otherwise mint a new series per
+// message with a forged domain). See GitHub issue #174.
+func (s *Session) senderDomainLabel() string {
+	if s.authUser == "" {
+		return "other"
+	}
+	return sessionExtractSenderDomain(s.from)
 }
 
 // sessionExtractSenderDomain extracts the domain from a sender email address.

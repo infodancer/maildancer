@@ -73,6 +73,31 @@ func TestSessionHelperFunctions(t *testing.T) {
 		}
 	})
 
+	t.Run("senderDomainLabel", func(t *testing.T) {
+		// The envelope sender domain is only a bounded (hosted) value when the
+		// session authenticated; otherwise it is arbitrary attacker-controlled
+		// input and must collapse to "other" to bound Prometheus cardinality.
+		tests := []struct {
+			name     string
+			authUser string
+			from     string
+			expected string
+		}{
+			{"authenticated hosted sender", "user@example.com", "user@example.com", "example.com"},
+			{"authenticated, subdomain sender", "u@mail.example.org", "u@mail.example.org", "mail.example.org"},
+			{"unauthenticated inbound buckets to other", "", "spammer@random-1a2b3c.example", "other"},
+			{"unauthenticated, empty sender buckets to other", "", "", "other"},
+		}
+
+		for _, tt := range tests {
+			s := &Session{authUser: tt.authUser, from: tt.from}
+			if got := s.senderDomainLabel(); got != tt.expected {
+				t.Errorf("%s: senderDomainLabel(authUser=%q, from=%q) = %q, want %q",
+					tt.name, tt.authUser, tt.from, got, tt.expected)
+			}
+		}
+	})
+
 	t.Run("sessionIsLocalhost", func(t *testing.T) {
 		tests := []struct {
 			ip       string

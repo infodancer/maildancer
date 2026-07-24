@@ -67,6 +67,7 @@ func (m *MultiChecker) Check(ctx context.Context, message io.Reader, opts CheckO
 
 	var results []*CheckResult
 	var errors []error
+	var authResults string
 	aggregatedHeaders := make(map[string]string)
 
 	for _, checker := range m.checkers {
@@ -76,6 +77,14 @@ func (m *MultiChecker) Check(ctx context.Context, message io.Reader, opts CheckO
 			continue
 		}
 		results = append(results, result)
+
+		// Authentication-Results is a statement about the message, not a score,
+		// so it is not aggregated: the first checker that produced verdicts wins
+		// and the rest are ignored. Concatenating several would stamp one header
+		// asserting several ADMDs' findings under our single authserv-id.
+		if authResults == "" {
+			authResults = result.AuthResults
+		}
 
 		// Collect headers from all checkers
 		if m.config.AddHeaders && result.Headers != nil {
@@ -93,6 +102,7 @@ func (m *MultiChecker) Check(ctx context.Context, message io.Reader, opts CheckO
 	// Aggregate results based on mode
 	finalResult := m.aggregateResults(results)
 	finalResult.Headers = aggregatedHeaders
+	finalResult.AuthResults = authResults
 
 	return finalResult, nil
 }

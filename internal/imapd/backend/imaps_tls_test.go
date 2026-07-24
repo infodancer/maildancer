@@ -53,7 +53,7 @@ func selfSignedTLS(t *testing.T) *tls.Config {
 // conn, the post-handshake capability set still carries LOGINDISABLED and no
 // client can authenticate on port 993.
 func TestServeConn_ImapsAllowsLoginInsideTLS(t *testing.T) {
-	sm := &recoverySM{tokens: make(map[string]bool), uidValidity: 42}
+	sm := newRecoverySM()
 	sock := filepath.Join(t.TempDir(), "sm.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {

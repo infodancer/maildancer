@@ -510,27 +510,6 @@ func TestSMStore_MoveMessage(t *testing.T) {
 	}
 }
 
-func TestSMStore_Rescan(t *testing.T) {
-	client, _, _, _ := startTestServer(t)
-	ctx := context.Background()
-
-	store := newTestSMStore(t, client)
-
-	// ListInFolder sets selectedFolder
-	_, err := store.ListInFolder(ctx, "", "Sent")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	msgs, err := store.Rescan()
-	if err != nil {
-		t.Fatalf("Rescan: %v", err)
-	}
-	if len(msgs) != 1 {
-		t.Errorf("Rescan got %d messages, want 1", len(msgs))
-	}
-}
-
 func TestSMStore_Close_CallsLogout(t *testing.T) {
 	client, sessMock, _, _ := startTestServer(t)
 	store := newTestSMStore(t, client)

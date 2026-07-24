@@ -34,6 +34,21 @@ type recoverySM struct {
 	tokens      map[string]bool
 	logins      int
 	uidValidity uint32
+	msgs        []*pb.MessageInfo
+	// rescanBase models the real mail-session's per-process rescan cache:
+	// a fresh process (one per Login) scans the maildir at open, so its
+	// baseline includes everything present at login time -- including mail
+	// delivered while the previous process was gone (#201).
+	rescanBase map[string]map[uint32]bool
+}
+
+func newRecoverySM() *recoverySM {
+	return &recoverySM{
+		tokens:      make(map[string]bool),
+		uidValidity: 42,
+		msgs:        []*pb.MessageInfo{{Uid: 1, Size: 100}},
+		rescanBase:  make(map[string]map[uint32]bool),
+	}
 }
 
 func (m *recoverySM) Login(_ context.Context, req *smpb.LoginRequest) (*smpb.LoginResponse, error) {
@@ -45,7 +60,41 @@ func (m *recoverySM) Login(_ context.Context, req *smpb.LoginRequest) (*smpb.Log
 	m.logins++
 	token := fmt.Sprintf("tok-%d", m.logins)
 	m.tokens[token] = true
+	base := make(map[uint32]bool, len(m.msgs))
+	for _, msg := range m.msgs {
+		base[msg.Uid] = true
+	}
+	m.rescanBase[token] = base
 	return &smpb.LoginResponse{SessionToken: token, Mailbox: "alice@test.local"}, nil
+}
+
+// addMessage delivers a message into the mock mailbox. Baselines of already
+// logged-in sessions are unchanged, mirroring a real delivery.
+func (m *recoverySM) addMessage(uid uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.msgs = append(m.msgs, &pb.MessageInfo{Uid: uid, Size: 100})
+}
+
+// Rescan mirrors mail-session's Select-then-diff semantics: only messages
+// absent from the current process's (token's) baseline are returned.
+func (m *recoverySM) Rescan(ctx context.Context, _ *pb.RescanRequest) (*pb.RescanResponse, error) {
+	if err := m.checkToken(ctx); err != nil {
+		return nil, err
+	}
+	md, _ := metadata.FromIncomingContext(ctx)
+	token := md.Get("session-token")[0]
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	base := m.rescanBase[token]
+	var newMsgs []*pb.MessageInfo
+	for _, msg := range m.msgs {
+		if !base[msg.Uid] {
+			newMsgs = append(newMsgs, msg)
+			base[msg.Uid] = true
+		}
+	}
+	return &pb.RescanResponse{NewMessages: newMsgs}, nil
 }
 
 func (m *recoverySM) Logout(_ context.Context, _ *smpb.LogoutRequest) (*smpb.LogoutResponse, error) {
@@ -85,14 +134,22 @@ func (m *recoverySM) List(ctx context.Context, _ *pb.ListRequest) (*pb.ListRespo
 	if err := m.checkToken(ctx); err != nil {
 		return nil, err
 	}
-	return &pb.ListResponse{Messages: []*pb.MessageInfo{{Uid: 1, Size: 100}}}, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return &pb.ListResponse{Messages: append([]*pb.MessageInfo(nil), m.msgs...)}, nil
 }
 
 func (m *recoverySM) Stat(ctx context.Context, _ *pb.StatRequest) (*pb.StatResponse, error) {
 	if err := m.checkToken(ctx); err != nil {
 		return nil, err
 	}
-	return &pb.StatResponse{Count: 1, TotalBytes: 100}, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var total int64
+	for _, msg := range m.msgs {
+		total += msg.Size
+	}
+	return &pb.StatResponse{Count: int32(len(m.msgs)), TotalBytes: total}, nil
 }
 
 func (m *recoverySM) UIDValidity(ctx context.Context, _ *pb.UIDValidityRequest) (*pb.UIDValidityResponse, error) {
@@ -125,7 +182,7 @@ func (m *recoverySM) CreateFolder(ctx context.Context, _ *pb.CreateFolderRequest
 func startRecoveryEnv(t *testing.T) (*recoverySM, func(tag, cmd string) []string) {
 	t.Helper()
 
-	sm := &recoverySM{tokens: make(map[string]bool), uidValidity: 42}
+	sm := newRecoverySM()
 	sock := filepath.Join(t.TempDir(), "sm.sock")
 	ln, err := net.Listen("unix", sock)
 	if err != nil {

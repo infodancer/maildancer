@@ -15,18 +15,16 @@ var (
 	_ msgstore.FolderStore     = (*sessionManagerStore)(nil)
 	_ msgstore.ContentSearcher = (*sessionManagerStore)(nil)
 	_ mover                    = (*sessionManagerStore)(nil)
-	_ rescanner                = (*sessionManagerStore)(nil)
 	_ io.Closer                = (*sessionManagerStore)(nil)
 )
 
 // sessionManagerStore adapts a recovering smclient.Session into
-// msgstore.MessageStore, msgstore.FolderStore, mover, and rescanner
+// msgstore.MessageStore, msgstore.FolderStore, and mover
 // interfaces. All operations are proxied through the session-manager; the
 // Session transparently recovers across session-manager restarts (#179).
 // Closing the store calls Logout.
 type sessionManagerStore struct {
-	sess           *smclient.Session
-	selectedFolder string // tracks folder for Rescan; set by ListInFolder
+	sess *smclient.Session
 }
 
 // newSessionManagerStore creates a store backed by the given recovering session.
@@ -75,7 +73,6 @@ func (s *sessionManagerStore) DeleteFolder(ctx context.Context, _ string, folder
 }
 
 func (s *sessionManagerStore) ListInFolder(ctx context.Context, _ string, folder string) ([]msgstore.MessageInfo, error) {
-	s.selectedFolder = folder
 	msgs, err := s.sess.ListMessages(ctx, folder)
 	if err != nil {
 		return nil, err
@@ -163,28 +160,6 @@ func (s *sessionManagerStore) UIDNext(ctx context.Context, _ string, folder stri
 
 func (s *sessionManagerStore) MoveMessage(ctx context.Context, _ string, srcFolder string, uid uint32, destFolder string) (uint32, error) {
 	return s.sess.MoveMessage(ctx, srcFolder, uid, destFolder)
-}
-
-// --- rescanner ---
-
-func (s *sessionManagerStore) Rescan() ([]msgstore.MessageInfo, error) {
-	folder := s.selectedFolder
-	if folder == "" {
-		folder = "INBOX"
-	}
-	msgs, err := s.sess.RescanFolder(context.Background(), folder)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]msgstore.MessageInfo, len(msgs))
-	for i, m := range msgs {
-		result[i] = msgstore.MessageInfo{
-			UID:   m.Uid,
-			Size:  m.Size,
-			Flags: m.Flags,
-		}
-	}
-	return result, nil
 }
 
 // --- io.Closer ---

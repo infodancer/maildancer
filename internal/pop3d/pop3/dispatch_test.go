@@ -105,3 +105,25 @@ func TestRunSingleConn_Pop3sRequiresTLS(t *testing.T) {
 		t.Fatal("want error serving pop3s without TLS config, got nil")
 	}
 }
+
+func TestHandlerSysProcAttr(t *testing.T) {
+	cfg := config.Default()
+	if got := handlerSysProcAttr(cfg); got != nil {
+		t.Errorf("zero handler_uid must not drop credentials, got %+v", got)
+	}
+
+	cfg.HandlerUID = 902
+	cfg.HandlerGID = 903
+	cfg.HandlerGroups = []uint32{904}
+	attr := handlerSysProcAttr(cfg)
+	if attr == nil || attr.Credential == nil {
+		t.Fatalf("handler_uid set: want credential drop, got %+v", attr)
+	}
+	if attr.Credential.Uid != 902 || attr.Credential.Gid != 903 ||
+		len(attr.Credential.Groups) != 1 || attr.Credential.Groups[0] != 904 {
+		t.Errorf("wrong credentials: %+v", attr.Credential)
+	}
+	if !attr.Setpgid {
+		t.Error("dropped handlers must get their own process group")
+	}
+}

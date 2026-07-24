@@ -60,8 +60,18 @@ type ServerConfig struct {
 
 // Config holds the POP3-specific server configuration.
 type Config struct {
-	Hostname       string               `toml:"hostname"`
-	LogLevel       string               `toml:"log_level"`
+	Hostname string `toml:"hostname"`
+	LogLevel string `toml:"log_level"`
+	// HandlerUID/HandlerGID/HandlerGroups are the credentials the
+	// dispatcher drops each protocol-handler subprocess to; only the
+	// per-connection handlers run under these ids. A zero HandlerUID (the
+	// default) disables the drop: handlers inherit the dispatcher's
+	// credentials, which keeps dev and rootless setups working. Mirrors
+	// smtpd's handler credential model (#149).
+	HandlerUID    uint32   `toml:"handler_uid"`
+	HandlerGID    uint32   `toml:"handler_gid"`
+	HandlerGroups []uint32 `toml:"handler_groups"`
+
 	Listeners      []ListenerConfig     `toml:"listeners"`
 	TLS            TLSConfig            `toml:"tls"`
 	Timeouts       TimeoutsConfig       `toml:"timeouts"`
@@ -150,6 +160,10 @@ func (c *Config) Validate() error {
 
 	if c.Limits.MaxConnections <= 0 {
 		return errors.New("max_connections must be positive")
+	}
+
+	if c.HandlerUID == 0 && (c.HandlerGID != 0 || len(c.HandlerGroups) > 0) {
+		return errors.New("handler_gid/handler_groups require handler_uid")
 	}
 
 	if c.Timeouts.Connection != "" {

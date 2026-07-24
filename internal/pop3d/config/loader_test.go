@@ -440,3 +440,23 @@ key_file = "/etc/ssl/pop3d-key.pem"
 		t.Errorf("tls = %q/%q, want the [pop3d.tls] values", cfg.TLS.CertFile, cfg.TLS.KeyFile)
 	}
 }
+
+// TestLoadHandlerCredentials verifies the [pop3d] handler_* keys are merged.
+func TestLoadHandlerCredentials(t *testing.T) {
+	path := createTempConfig(t, `
+[pop3d]
+handler_uid = 902
+handler_gid = 903
+handler_groups = [904, 905]
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.HandlerUID != 902 || cfg.HandlerGID != 903 {
+		t.Errorf("handler uid/gid not merged: %+v", cfg)
+	}
+	if len(cfg.HandlerGroups) != 2 || cfg.HandlerGroups[0] != 904 || cfg.HandlerGroups[1] != 905 {
+		t.Errorf("handler_groups not merged: %v", cfg.HandlerGroups)
+	}
+}

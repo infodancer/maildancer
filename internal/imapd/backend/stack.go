@@ -123,14 +123,23 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 // connection is fed through a one-shot listener; the net.ErrClosed that ends
 // that listener after the session is filtered as success.
 func (s *Stack) ServeConn(conn net.Conn, mode config.ListenerMode) error {
+	// The TLS layer must be applied OUTSIDE the one-conn listener's notify
+	// shim: go-imap decides the session is secure by asserting the accepted
+	// connection to a concrete *tls.Conn, and a shim around the TLS conn
+	// hides it, leaving 993 with LOGINDISABLED inside the handshake (#199).
+	var ln net.Listener
 	if mode == config.ModeImaps {
 		if s.tlsConfig == nil {
 			_ = conn.Close()
 			return errors.New("imaps connection requires a TLS configuration")
 		}
-		conn = tls.Server(conn, s.tlsConfig)
+		ln = connfork.NewOneConnListenerWrapped(conn, func(c net.Conn) net.Conn {
+			return tls.Server(c, s.tlsConfig)
+		})
+	} else {
+		ln = connfork.NewOneConnListener(conn)
 	}
-	if err := s.srv.Serve(connfork.NewOneConnListener(conn)); err != nil && !errors.Is(err, net.ErrClosed) {
+	if err := s.srv.Serve(ln); err != nil && !errors.Is(err, net.ErrClosed) {
 		return err
 	}
 	return nil

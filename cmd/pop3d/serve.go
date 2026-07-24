@@ -12,6 +12,7 @@ import (
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/metrics"
 	"github.com/infodancer/maildancer/internal/pop3d/pop3"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func runServe() {
@@ -55,8 +56,11 @@ func runServe() {
 		}
 	}
 
-	// Metrics HTTP server.
+	// Metrics HTTP server and collector.
+	var collector metrics.Collector = &metrics.NoopCollector{}
 	if cfg.Metrics.Enabled {
+		collector = metrics.NewPrometheusCollector(prometheus.DefaultRegisterer)
+
 		metricsServer := metrics.NewPrometheusServer(cfg.Metrics.Address, cfg.Metrics.Path)
 		go func() {
 			if err := metricsServer.Start(ctx); err != nil && err != context.Canceled {
@@ -72,6 +76,7 @@ func runServe() {
 	stack, err := pop3.NewStack(pop3.StackConfig{
 		Config:    cfg,
 		TLSConfig: tlsConfig,
+		Collector: collector,
 		Logger:    logger,
 	})
 	if err != nil {

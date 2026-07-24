@@ -581,8 +581,11 @@ func (s *Session) Data(r io.Reader) error {
 			// checkResult is used below for the delivery envelope.
 		}
 	} else {
-		// No spam check - read the entire message into tmp
-		if _, err := io.Copy(tmp, counter); err != nil {
+		// No spam check - drain the reader so the TeeReader above fills tmp.
+		// The destination must be io.Discard, not tmp: counter reads through
+		// tee, which has already written every byte to tmp, so copying into tmp
+		// here would store the message a second time.
+		if _, err := io.Copy(io.Discard, counter); err != nil {
 			s.logger.Debug("failed to read message data", slog.String("error", err.Error()))
 			return &smtp.SMTPError{
 				Code:         451,

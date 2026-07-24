@@ -3,22 +3,9 @@ package metrics
 import (
 	"io"
 
+	"github.com/infodancer/maildancer/internal/procmetrics"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/expfmt"
 )
-
-// maxReportBytes bounds how much a protocol-handler subprocess may send to the
-// parent in a single metrics report. The report is a handful of pre-aggregated
-// counter families plus two small histograms, so it comfortably fits well under
-// this cap; the cap exists purely so a misbehaving (or compromised) lower-
-// privileged child cannot drive unbounded allocation in the privileged parent.
-const maxReportBytes = 1 << 16 // 64 KiB
-
-// reportFormat is the wire format for parent<->child metric reports: the
-// standard Prometheus protobuf exposition format with length-delimited frames.
-// Using expfmt keeps the encoding identical to what Prometheus itself speaks and
-// spares us a bespoke framing scheme.
-var reportFormat = expfmt.NewFormat(expfmt.TypeProtoDelim)
 
 // NewHandlerCollector builds a PrometheusCollector backed by a private registry
 // rather than the global default. A protocol-handler subprocess records into it
@@ -34,19 +21,20 @@ func NewHandlerCollector() (*PrometheusCollector, *prometheus.Registry) {
 	return NewPrometheusCollector(reg), reg
 }
 
-// WriteReport gathers g and writes its metric families to w as length-delimited
-// protobuf. It is called once, just before the protocol-handler subprocess
-// exits, with w being the write end of the inherited pipe to the parent.
+// WriteReport ships a child registry's accumulated series to the parent over
+// the inherited pipe. The transport lives in procmetrics, shared by all
+// fork-per-connection daemons (#188).
 func WriteReport(w io.Writer, g prometheus.Gatherer) error {
-	mfs, err := g.Gather()
-	if err != nil {
-		return err
-	}
-	enc := expfmt.NewEncoder(w, reportFormat)
-	for _, mf := range mfs {
-		if err := enc.Encode(mf); err != nil {
-			return err
-		}
-	}
-	return nil
+	return procmetrics.WriteReport(w, g)
+}
+
+// ParentMetrics is the smtpd parent process's metrics surface: parent-owned
+// connection lifecycle series plus the aggregate of all protocol-handler
+// subprocess reports. The implementation lives in procmetrics.
+type ParentMetrics = procmetrics.ParentMetrics
+
+// NewParentMetrics builds the parent metrics surface in the smtpd namespace
+// and registers it on reg.
+func NewParentMetrics(reg prometheus.Registerer) *ParentMetrics {
+	return procmetrics.NewParentMetrics(reg, "smtpd")
 }

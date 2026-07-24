@@ -25,11 +25,6 @@ import (
 // that a hung upstream doesn't keep the goroutine alive past IDLE teardown.
 const keepaliveRPCTimeout = 10 * time.Second
 
-// rescanner is satisfied by stores that support incremental rescan (IDLE).
-type rescanner interface {
-	Rescan() ([]msgstore.MessageInfo, error)
-}
-
 // Session implements imapserver.Session backed by the msgstore interface.
 type Session struct {
 	conn        *imapserver.Conn
@@ -204,8 +199,6 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 		return s.sessionTracker.Idle(w, stop)
 	}
 
-	rs, _ := s.store.(rescanner)
-
 	for {
 		select {
 		case <-stop:
@@ -219,10 +212,7 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 			if !strings.EqualFold(msg.Payload, s.selectedMailbox) {
 				continue
 			}
-			if rs == nil {
-				continue
-			}
-			newMsgs, err := rs.Rescan()
+			newMsgs, err := s.newMessagesSinceLastReport(context.Background())
 			if err != nil {
 				// The recovering store already retried transient
 				// failures; what comes back is either fatal for the
@@ -245,6 +235,32 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 			}
 		}
 	}
+}
+
+// newMessagesSinceLastReport lists the selected folder and returns messages
+// this connection has not yet reported to the client. The diff is computed
+// locally against s.messages rather than via the upstream Rescan RPC: that
+// RPC diffs against the mail-session process's own cache, and session
+// recovery (#179) replaces the process -- the fresh one's baseline absorbs
+// mail delivered during the outage, silently dropping it from the diff
+// (#201). This connection's message list is the one stable record of what
+// the client has been told.
+func (s *Session) newMessagesSinceLastReport(ctx context.Context) ([]msgstore.MessageInfo, error) {
+	all, err := s.listMessages(ctx, s.selectedMailbox)
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[uint32]struct{}, len(s.messages))
+	for _, m := range s.messages {
+		known[m.UID] = struct{}{}
+	}
+	newMsgs := make([]msgstore.MessageInfo, 0)
+	for _, m := range all {
+		if _, ok := known[m.UID]; !ok {
+			newMsgs = append(newMsgs, m)
+		}
+	}
+	return newMsgs, nil
 }
 
 // runIdleKeepalive periodically issues a cheap RPC against the upstream store

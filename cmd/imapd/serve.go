@@ -2,11 +2,10 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/infodancer/logging"
@@ -16,9 +15,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// runServe is the listener process: it accepts client connections and (once
-// the dispatcher lands, #179) hands each one to a protocol-handler
-// subprocess.
+// runServe is the listener process: it accepts client connections and hands
+// each one to a protocol-handler subprocess (mail-security-model.md, #179).
+// It never speaks IMAP and never loads TLS keys; handlers do both.
 func runServe() {
 	flags := config.ParseFlags()
 
@@ -33,44 +32,40 @@ func runServe() {
 		os.Exit(1)
 	}
 
-	// Create logger
 	logger := logging.NewLogger(cfg.LogLevel)
 
-	// Load TLS configuration if certificates are specified
-	var tlsConfig *tls.Config
-	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error loading TLS certificate: %v\n", err)
-			os.Exit(1)
-		}
-		tlsConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   cfg.TLS.MinTLSVersion(),
-		}
-		logger.Info("TLS configured",
-			slog.String("cert", cfg.TLS.CertFile),
-			slog.String("min_version", cfg.TLS.MinVersion))
+	// Handlers re-read the config themselves; hand them a path that
+	// survives any working-directory difference.
+	configPath, err := filepath.Abs(flags.ConfigPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving config path: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Set up metrics collector
+	execPath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving executable path: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Connection counters live here in the dispatcher (spawn/reap);
+	// session-level metrics are the handlers' business.
 	var collector metrics.Collector = &metrics.NoopCollector{}
 	if cfg.Metrics.Enabled {
 		collector = metrics.NewPrometheusCollector(prometheus.DefaultRegisterer)
 	}
 
-	// Build and wire the stack
-	stack, err := backend.NewStack(backend.StackConfig{
-		Config:    cfg,
-		TLSConfig: tlsConfig,
-		Collector: collector,
-		Logger:    logger,
+	dispatcher, err := backend.NewDispatcher(backend.DispatcherConfig{
+		Config:     cfg,
+		ExecPath:   execPath,
+		ConfigPath: configPath,
+		Collector:  collector,
+		Logger:     logger,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error building stack: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error building dispatcher: %v\n", err)
 		os.Exit(1)
 	}
-	defer stack.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
 
 	// Set up signal handling for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -96,10 +91,10 @@ func runServe() {
 		logger.Info("metrics server started", "address", cfg.Metrics.Address, "path", cfg.Metrics.Path)
 	}
 
-	logger.Info("starting imapd", "hostname", cfg.Hostname, "listeners", len(cfg.Listeners))
+	logger.Info("starting imapd dispatcher", "hostname", cfg.Hostname, "listeners", len(cfg.Listeners))
 
-	if err := stack.Run(ctx); err != nil {
-		logger.Error("stack error", "error", err)
+	if err := dispatcher.Run(ctx); err != nil && err != context.Canceled {
+		logger.Error("dispatcher error", "error", err)
 	}
 	logger.Info("IMAP server stopped")
 }

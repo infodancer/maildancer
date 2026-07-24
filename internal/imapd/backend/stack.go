@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -28,11 +27,12 @@ type StackConfig struct {
 	Logger    *slog.Logger      // nil → slog.Default()
 }
 
-// Stack owns all components of a running imapd instance and manages their lifecycle.
+// Stack owns the components of one imapd protocol-handler process and
+// manages their lifecycle. In the fork-per-connection model (#179) a Stack
+// serves a single connection via ServeConn; the listening side is Dispatcher.
 type Stack struct {
 	srv       *imapserver.Server
 	tlsConfig *tls.Config
-	listeners []net.Listener
 	closers   []io.Closer
 	logger    *slog.Logger
 }
@@ -107,29 +107,9 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	}
 	srv := imapserver.New(opts)
 	s.srv = srv
-
-	// Create listeners for each configured address.
-	for _, lc := range cfg.Config.Listeners {
-		var ln net.Listener
-		var err error
-		switch lc.Mode {
-		case config.ModeImaps:
-			if cfg.TLSConfig == nil {
-				s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
-				return nil, errors.New("listener " + lc.Address + " requires TLS but no TLS config provided")
-			}
-			ln, err = tls.Listen("tcp", lc.Address, cfg.TLSConfig)
-		default: // ModeImap
-			ln, err = net.Listen("tcp", lc.Address)
-		}
-		if err != nil {
-			s.Close() //nolint:errcheck // cleanup path; nothing actionable if Close fails here
-			return nil, err
-		}
-		s.listeners = append(s.listeners, ln)
-		s.closers = append(s.closers, ln)
-		logger.Info("listening", "address", lc.Address, "mode", string(lc.Mode))
-	}
+	// Registered last so Close shuts the IMAP server down before the
+	// clients it depends on.
+	s.closers = append(s.closers, srv)
 
 	return s, nil
 }
@@ -153,21 +133,6 @@ func (s *Stack) ServeConn(conn net.Conn, mode config.ListenerMode) error {
 	if err := s.srv.Serve(connfork.NewOneConnListener(conn)); err != nil && !errors.Is(err, net.ErrClosed) {
 		return err
 	}
-	return nil
-}
-
-// Run starts serving on all listeners and blocks until ctx is cancelled.
-func (s *Stack) Run(ctx context.Context) error {
-	for _, ln := range s.listeners {
-		ln := ln
-		go func() {
-			if err := s.srv.Serve(ln); err != nil {
-				s.logger.Error("server error", "error", err)
-			}
-		}()
-	}
-	<-ctx.Done()
-	_ = s.srv.Close()
 	return nil
 }
 

@@ -13,12 +13,6 @@ import (
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 )
 
-// Environment variables set by the dispatcher for each connection.
-const (
-	envClientIP     = "IMAPD_CLIENT_IP"
-	envListenerMode = "IMAPD_LISTENER_MODE"
-)
-
 // runProtocolHandler is the child half of the fork-per-connection model
 // (mail-security-model.md, #179): it inherits one accepted client connection
 // as fd 3 from the dispatcher, re-reads the configuration named by --config
@@ -39,7 +33,7 @@ func runProtocolHandler() {
 
 	logger := logging.NewLogger(cfg.LogLevel)
 
-	mode := config.ListenerMode(os.Getenv(envListenerMode))
+	mode := config.ListenerMode(os.Getenv(backend.EnvListenerMode))
 	if mode == "" {
 		mode = config.ModeImap
 	}
@@ -47,7 +41,7 @@ func runProtocolHandler() {
 		logger.Error("unknown listener mode", slog.String("mode", string(mode)))
 		os.Exit(1)
 	}
-	clientIP := os.Getenv(envClientIP)
+	clientIP := os.Getenv(backend.EnvClientIP)
 
 	var tlsConfig *tls.Config
 	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {

@@ -24,6 +24,7 @@ func newTestSession(t *testing.T, store *mockStore) *Session {
 		userDomain:  "example.com",
 		collector:   &noopCollector{},
 		logger:      slog.Default(),
+		closed:      make(chan struct{}),
 	}
 }
 
@@ -537,7 +538,7 @@ func TestRunIdleKeepalive_FiresAndStops(t *testing.T) {
 		s.keepaliveInterval = 20 * time.Millisecond
 
 		done := make(chan struct{})
-		go s.runIdleKeepalive(done)
+		go s.runIdleKeepalive(done, s.folderStore, s.selectedMailbox)
 
 		// Advance the fake clock just past four ticks (20, 40, 60, 80 ms).
 		time.Sleep(95 * time.Millisecond)
@@ -569,7 +570,7 @@ func TestRunIdleKeepalive_NoCallsAfterDone(t *testing.T) {
 		s.keepaliveInterval = 10 * time.Millisecond
 
 		done := make(chan struct{})
-		go s.runIdleKeepalive(done)
+		go s.runIdleKeepalive(done, s.folderStore, s.selectedMailbox)
 
 		time.Sleep(35 * time.Millisecond) // ticks at 10, 20, 30 ms
 		synctest.Wait()

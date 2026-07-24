@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	imap "github.com/emersion/go-imap/v2"
@@ -51,6 +52,17 @@ type Session struct {
 	// the upstream mail-session subprocess from reaping. Zero disables.
 	keepaliveInterval time.Duration
 
+	// mu guards the selected state and subscription against concurrent
+	// teardown (#202): on abrupt client disconnect, go-imap's handleIdle
+	// returns without waiting for the Idle handler, so Session.Close runs
+	// while the Idle goroutine (and its keepalive) is still live. Command
+	// paths are serialized by go-imap and never overlap the Idle goroutine,
+	// so only Idle-side readers and Close/unselect take the lock. closed is
+	// signalled by Close before it touches shared state so Idle can bail.
+	mu        sync.Mutex
+	closeOnce sync.Once
+	closed    chan struct{}
+
 	// Selected state
 	selectedMailbox     string
 	selectedUIDValidity uint32 // captured at Select for the recovery continuity check
@@ -77,6 +89,7 @@ func NewSession(conn *imapserver.Conn, cfg *config.Config, smClient *SessionMana
 		collector:         collector,
 		logger:            logging.WithConnection(logger, conn.NetConn().RemoteAddr().String()),
 		keepaliveInterval: cfg.Timeouts.SessionKeepaliveInterval(),
+		closed:            make(chan struct{}),
 	}
 }
 
@@ -128,11 +141,13 @@ func (s *Session) Login(username, password string) error {
 // (session-recovery-design.md): after a transparent re-login, the selected
 // folder's UIDVALIDITY must be unchanged or the session cannot resume
 // without violating IMAP semantics. It runs against the raw client (no
-// recursion into the recovery engine). During IDLE the main session
-// goroutine is parked, so reading the selected state here matches the
-// existing keepalive discipline.
+// recursion into the recovery engine). It can run on the Idle or keepalive
+// goroutine, so the selected state is read under the session lock.
 func (s *Session) recoveredHook(ctx context.Context, c *smclient.Client, token string) error {
+	s.mu.Lock()
 	folder := s.selectedMailbox
+	wantUV := s.selectedUIDValidity
+	s.mu.Unlock()
 	if folder == "" {
 		return nil
 	}
@@ -140,8 +155,8 @@ func (s *Session) recoveredHook(ctx context.Context, c *smclient.Client, token s
 	if err != nil {
 		return err
 	}
-	if uv != s.selectedUIDValidity {
-		return fmt.Errorf("uidvalidity changed across recovery: %d -> %d", s.selectedUIDValidity, uv)
+	if uv != wantUV {
+		return fmt.Errorf("uidvalidity changed across recovery: %d -> %d", wantUV, uv)
 	}
 	return nil
 }
@@ -184,35 +199,54 @@ func (s *Session) Poll(w *imapserver.UpdateWriter, allowExpunge bool) error {
 // invoking a no-op RPC against session-manager so the upstream mail-session
 // subprocess doesn't reap itself during long IDLE periods (see issue #52).
 func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
-	if s.sessionTracker == nil {
+	// Snapshot the shared state once: none of it changes during an IDLE
+	// except by Close tearing the session down underneath us (#202), and
+	// the snapshots keep this goroutine off the fields Close writes.
+	s.mu.Lock()
+	tracker := s.tracker
+	sessionTracker := s.sessionTracker
+	sub := s.subscription
+	selected := s.selectedMailbox
+	folderStore := s.folderStore
+	s.mu.Unlock()
+	if sessionTracker == nil {
 		return nil
 	}
 
 	done := make(chan struct{})
 	defer close(done)
-	if s.keepaliveInterval > 0 && s.selectedMailbox != "" && s.folderStore != nil {
-		go s.runIdleKeepalive(done)
+	if s.keepaliveInterval > 0 && selected != "" && folderStore != nil {
+		go s.runIdleKeepalive(done, folderStore, selected)
 	}
 
 	// If no Redis subscription, fall back to the standard tracker-only idle.
-	if s.subscription == nil {
-		return s.sessionTracker.Idle(w, stop)
+	if sub == nil {
+		return sessionTracker.Idle(w, stop)
 	}
 
 	for {
 		select {
+		case <-s.closed:
+			return nil
 		case <-stop:
-			return s.sessionTracker.Poll(w, true)
-		case msg, ok := <-s.subscription.C:
+			return sessionTracker.Poll(w, true)
+		case msg, ok := <-sub.C:
 			if !ok {
-				// Channel closed, fall back to blocking idle.
-				return s.sessionTracker.Idle(w, stop)
+				// Channel closed. If the session is being torn down,
+				// get out of Close's way; otherwise fall back to the
+				// blocking tracker-only idle.
+				select {
+				case <-s.closed:
+					return nil
+				default:
+				}
+				return sessionTracker.Idle(w, stop)
 			}
 			// Only trigger rescan if the notified folder matches the selected mailbox.
-			if !strings.EqualFold(msg.Payload, s.selectedMailbox) {
+			if !strings.EqualFold(msg.Payload, selected) {
 				continue
 			}
-			newMsgs, err := s.newMessagesSinceLastReport(context.Background())
+			newMsgs, err := s.newMessagesSinceLastReport(context.Background(), selected)
 			if err != nil {
 				// The recovering store already retried transient
 				// failures; what comes back is either fatal for the
@@ -226,10 +260,18 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 				continue
 			}
 			if len(newMsgs) > 0 {
+				s.mu.Lock()
+				if s.sessionTracker != sessionTracker {
+					// Torn down (or reselected) while we were listing.
+					s.mu.Unlock()
+					return nil
+				}
 				s.messages = append(s.messages, newMsgs...)
 				s.buildUIDIndex()
-				s.tracker.QueueNumMessages(uint32(len(s.messages)))
-				if err := s.sessionTracker.Poll(w, false); err != nil {
+				count := uint32(len(s.messages))
+				s.mu.Unlock()
+				tracker.QueueNumMessages(count)
+				if err := sessionTracker.Poll(w, false); err != nil {
 					return err
 				}
 			}
@@ -245,14 +287,19 @@ func (s *Session) Idle(w *imapserver.UpdateWriter, stop <-chan struct{}) error {
 // mail delivered during the outage, silently dropping it from the diff
 // (#201). This connection's message list is the one stable record of what
 // the client has been told.
-func (s *Session) newMessagesSinceLastReport(ctx context.Context) ([]msgstore.MessageInfo, error) {
-	all, err := s.listMessages(ctx, s.selectedMailbox)
-	if err != nil {
-		return nil, err
-	}
+//
+// Runs on the Idle goroutine: the known set is captured under the session
+// lock, and the listing RPC happens without it.
+func (s *Session) newMessagesSinceLastReport(ctx context.Context, folder string) ([]msgstore.MessageInfo, error) {
+	s.mu.Lock()
 	known := make(map[uint32]struct{}, len(s.messages))
 	for _, m := range s.messages {
 		known[m.UID] = struct{}{}
+	}
+	s.mu.Unlock()
+	all, err := s.listMessages(ctx, folder)
+	if err != nil {
+		return nil, err
 	}
 	newMsgs := make([]msgstore.MessageInfo, 0)
 	for _, m := range all {
@@ -272,7 +319,9 @@ func (s *Session) newMessagesSinceLastReport(ctx context.Context) ([]msgstore.Me
 // connection down when recovery is refused (fatal) or when failures persist
 // past the recovery deadline -- a silent zombie IDLE was the original #126
 // symptom.
-func (s *Session) runIdleKeepalive(done <-chan struct{}) {
+// The store and folder are passed in as snapshots taken at IDLE start so
+// this goroutine never reads fields a concurrent Close writes (#202).
+func (s *Session) runIdleKeepalive(done <-chan struct{}, folderStore msgstore.FolderStore, folder string) {
 	ticker := time.NewTicker(s.keepaliveInterval)
 	defer ticker.Stop()
 	var failingSince time.Time
@@ -282,7 +331,7 @@ func (s *Session) runIdleKeepalive(done <-chan struct{}) {
 			return
 		case <-ticker.C:
 			ctx, cancel := context.WithTimeout(context.Background(), keepaliveRPCTimeout)
-			_, err := s.folderStore.UIDValidity(ctx, s.mailbox, s.selectedMailbox)
+			_, err := folderStore.UIDValidity(ctx, s.mailbox, folder)
 			cancel()
 			if err == nil {
 				failingSince = time.Time{}
@@ -307,14 +356,22 @@ func (s *Session) Unselect() error {
 	return nil
 }
 
-// Close ends the session and releases resources.
+// Close ends the session and releases resources. On abrupt client
+// disconnect go-imap calls this while the Idle goroutine may still be
+// running (#202): the closed signal fires first so Idle can bail, and all
+// shared-state teardown happens under the session lock.
 func (s *Session) Close() error {
-	s.unselect()
-	if s.subscription != nil {
-		_ = s.subscription.Close()
-		s.subscription = nil
+	s.closeOnce.Do(func() { close(s.closed) })
+	s.mu.Lock()
+	s.unselectLocked()
+	sub := s.subscription
+	s.subscription = nil
+	store := s.store
+	s.mu.Unlock()
+	if sub != nil {
+		_ = sub.Close()
 	}
-	if closer, ok := s.store.(io.Closer); ok {
+	if closer, ok := store.(io.Closer); ok {
 		if err := closer.Close(); err != nil {
 			s.logger.Warn("store close error", "error", err)
 		}
@@ -336,6 +393,12 @@ func (s *Session) Unsubscribe(_ string) error {
 // --- Internal helpers ---
 
 func (s *Session) unselect() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unselectLocked()
+}
+
+func (s *Session) unselectLocked() {
 	if s.sessionTracker != nil {
 		s.sessionTracker.Close()
 		s.sessionTracker = nil

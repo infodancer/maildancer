@@ -11,6 +11,7 @@ import (
 	"github.com/infodancer/maildancer/internal/imapd/backend"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
+	"github.com/infodancer/maildancer/internal/procmetrics"
 )
 
 // runProtocolHandler is the child half of the fork-per-connection model
@@ -56,14 +57,28 @@ func runProtocolHandler() {
 		}
 	}
 
-	// Interim state (#179): no per-handler metrics reporting yet, so
-	// session-level series are dropped in the handler. The dispatcher
-	// maintains the connection counters; the fd-4 report pipe is a
-	// follow-up.
+	// Metrics collector. When enabled, record into a private registry and
+	// flush the accumulated families to the dispatcher over the fd-4 report
+	// pipe at exit (#188); the dispatcher owns the /metrics endpoint and
+	// aggregates across all handler subprocesses.
+	var collector metrics.Collector = &metrics.NoopCollector{}
+	var flushMetrics func()
+	if cfg.Metrics.Enabled {
+		c, reg := metrics.NewHandlerCollector()
+		collector = c
+		reportFile := connfork.ChildReportPipe()
+		flushMetrics = func() {
+			if err := procmetrics.WriteReport(reportFile, reg); err != nil {
+				logger.Debug("failed to write metrics report", slog.String("error", err.Error()))
+			}
+			_ = reportFile.Close()
+		}
+	}
+
 	stack, err := backend.NewStack(backend.StackConfig{
 		Config:    cfg,
 		TLSConfig: tlsConfig,
-		Collector: &metrics.NoopCollector{},
+		Collector: collector,
 		Logger:    logger,
 	})
 	if err != nil {
@@ -86,5 +101,10 @@ func runProtocolHandler() {
 		// Session-level failures are the client's business, not the
 		// operator's; the session itself already logged specifics.
 		logger.Debug("session ended with error", slog.String("error", err.Error()))
+	}
+
+	// Ship the session's metrics to the dispatcher before exiting.
+	if flushMetrics != nil {
+		flushMetrics()
 	}
 }

@@ -18,6 +18,12 @@ import (
 // cmd.ExtraFiles, which the OS maps to fd 3 (stdin=0, stdout=1, stderr=2).
 const connFD = 3
 
+// metricsFD is the file descriptor for the metrics-report pipe to the parent,
+// the second cmd.ExtraFiles entry (fd 4). Present only when metrics are enabled;
+// the handler records into a private collector and writes the accumulated
+// families here just before exiting so the parent can aggregate them.
+const metricsFD = 4
+
 func runProtocolHandler() {
 	flags := config.ParseFlags()
 
@@ -71,6 +77,24 @@ func runProtocolHandler() {
 		}()
 	}
 
+	// Metrics collector. When enabled, record into a private registry and flush
+	// the accumulated families to the parent over fd 4 at exit; the parent owns
+	// the /metrics endpoint and aggregates across all handler subprocesses.
+	var collector metrics.Collector = &metrics.NoopCollector{}
+	var flushMetrics func()
+	if cfg.Metrics.Enabled {
+		c, reg := metrics.NewHandlerCollector()
+		collector = c
+		if reportFile := os.NewFile(uintptr(metricsFD), "smtp-metrics"); reportFile != nil {
+			flushMetrics = func() {
+				if err := metrics.WriteReport(reportFile, reg); err != nil {
+					logger.Debug("failed to write metrics report", slog.String("error", err.Error()))
+				}
+				_ = reportFile.Close()
+			}
+		}
+	}
+
 	// Build the full auth/delivery stack. Each subprocess gets its own stack
 	// instance; there is no shared state with the parent listener process.
 	stack, err := smtp.NewStack(smtp.StackConfig{
@@ -78,7 +102,7 @@ func runProtocolHandler() {
 		TLSConfig:   tlsConfig,
 		SpamChecker: spamChecker,
 		SpamConfig:  spamCheckConfig,
-		Collector:   &metrics.NoopCollector{},
+		Collector:   collector,
 		Logger:      logger,
 	})
 	if err != nil {
@@ -108,5 +132,11 @@ func runProtocolHandler() {
 	// Run exactly one SMTP session then exit.
 	if err := stack.Server.RunSingleConn(netConn, listenerMode, tlsConfig); err != nil {
 		logger.Debug("session ended", slog.String("error", err.Error()))
+	}
+
+	// Ship the session's metrics to the parent. Done after the session returns
+	// so every counter (including the connection-close path) is recorded.
+	if flushMetrics != nil {
+		flushMetrics()
 	}
 }

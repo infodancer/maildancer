@@ -8,7 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"runtime/debug"
 
+	"github.com/infodancer/logging"
 	"github.com/infodancer/maildancer/internal/pop3d/config"
 	"github.com/infodancer/maildancer/internal/pop3d/metrics"
 	"github.com/infodancer/maildancer/internal/pop3d/server"
@@ -79,11 +81,6 @@ func NewStack(cfg StackConfig) (*Stack, error) {
 	return s, nil
 }
 
-// Run starts the server and blocks until the context is cancelled.
-func (s *Stack) Run(ctx context.Context) error {
-	return s.server.Run(ctx)
-}
-
 // Close shuts down all closeable components in reverse registration order.
 func (s *Stack) Close() error {
 	var errs []error
@@ -95,9 +92,14 @@ func (s *Stack) Close() error {
 	return errors.Join(errs...)
 }
 
-// RunSingleConn processes exactly one POP3 session on the given connection.
-// For POP3S mode, the connection is wrapped with TLS before the session starts.
-func (s *Stack) RunSingleConn(conn net.Conn, mode config.ListenerMode, tlsConfig *tls.Config) error {
+// RunSingleConn processes exactly one POP3 session on the given connection --
+// the code path the protocol-handler subprocess runs (mail-security-model.md,
+// #179). For POP3S mode, the connection is wrapped with the stack's TLS
+// configuration before the session starts. It applies the same session guards
+// the goroutine listener path had: idle-timeout enforcement and panic
+// recovery (#137) -- without them an idle or crashed session would pin the
+// handler process (and its dispatcher connection slot) indefinitely.
+func (s *Stack) RunSingleConn(conn net.Conn, mode config.ListenerMode) (err error) {
 	cfg := s.server.Config()
 	connCfg := server.ConnectionConfig{
 		IdleTimeout:    cfg.Timeouts.ConnectionTimeout(),
@@ -106,7 +108,21 @@ func (s *Stack) RunSingleConn(conn net.Conn, mode config.ListenerMode, tlsConfig
 		Logger:         s.logger,
 	}
 	c := server.NewConnection(conn, connCfg)
+	logger := c.Logger()
+
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("panic serving connection",
+				slog.Any("panic", r),
+				slog.String("stack", string(debug.Stack())),
+			)
+			_ = c.Close()
+			err = fmt.Errorf("panic serving connection: %v", r)
+		}
+	}()
+
 	if mode == config.ModePop3s {
+		tlsConfig := s.server.TLSConfig()
 		if tlsConfig == nil {
 			return fmt.Errorf("POP3S mode requires TLS configuration")
 		}
@@ -114,11 +130,38 @@ func (s *Stack) RunSingleConn(conn net.Conn, mode config.ListenerMode, tlsConfig
 			return fmt.Errorf("TLS upgrade: %w", err)
 		}
 	}
-	ctx := context.Background()
+
 	handler := s.server.Handler()
 	if handler == nil {
 		return fmt.Errorf("no handler configured on server")
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = logging.NewContext(ctx, logger)
+
+	if err := c.ResetIdleTimeout(); err != nil {
+		_ = c.Close()
+		return fmt.Errorf("set initial timeout: %w", err)
+	}
+
+	// The idle monitor runs in its own goroutine, so it needs its own panic
+	// guard; on panic, cancel the session context rather than crash without
+	// the structured log.
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("panic in idle monitor",
+					slog.Any("panic", r),
+					slog.String("stack", string(debug.Stack())),
+				)
+				cancel()
+			}
+		}()
+		c.IdleMonitor(ctx)
+	}()
+
 	handler(ctx, c)
+	_ = c.Close()
 	return nil
 }

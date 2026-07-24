@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/infodancer/logging"
@@ -15,6 +15,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
+// runServe is the listener process: it accepts client connections and hands
+// each one to a protocol-handler subprocess (mail-security-model.md, #179).
+// It never speaks POP3 and never loads TLS keys; handlers do both.
 func runServe() {
 	flags := config.ParseFlags()
 
@@ -31,6 +34,39 @@ func runServe() {
 
 	logger := logging.NewLogger(cfg.LogLevel)
 
+	// Handlers re-read the config themselves; hand them a path that
+	// survives any working-directory difference.
+	configPath, err := filepath.Abs(flags.ConfigPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving config path: %v\n", err)
+		os.Exit(1)
+	}
+
+	execPath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving executable path: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Connection counters live here in the dispatcher (spawn/reap);
+	// session-level metrics are the handlers' business.
+	var collector metrics.Collector = &metrics.NoopCollector{}
+	if cfg.Metrics.Enabled {
+		collector = metrics.NewPrometheusCollector(prometheus.DefaultRegisterer)
+	}
+
+	dispatcher, err := pop3.NewDispatcher(pop3.DispatcherConfig{
+		Config:     cfg,
+		ExecPath:   execPath,
+		ConfigPath: configPath,
+		Collector:  collector,
+		Logger:     logger,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error building dispatcher: %v\n", err)
+		os.Exit(1)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -42,57 +78,20 @@ func runServe() {
 		cancel()
 	}()
 
-	// Load TLS configuration if specified.
-	var tlsConfig *tls.Config
-	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error loading TLS certificate: %v\n", err)
-			os.Exit(1)
-		}
-		tlsConfig = &tls.Config{
-			Certificates: []tls.Certificate{cert},
-			MinVersion:   cfg.TLS.MinTLSVersion(),
-		}
-	}
-
-	// Metrics HTTP server and collector.
-	var collector metrics.Collector = &metrics.NoopCollector{}
 	if cfg.Metrics.Enabled {
-		collector = metrics.NewPrometheusCollector(prometheus.DefaultRegisterer)
-
 		metricsServer := metrics.NewPrometheusServer(cfg.Metrics.Address, cfg.Metrics.Path)
 		go func() {
 			if err := metricsServer.Start(ctx); err != nil && err != context.Canceled {
 				logger.Error("metrics server error", "error", err)
 			}
 		}()
+		logger.Info("metrics server started", "address", cfg.Metrics.Address, "path", cfg.Metrics.Path)
 	}
 
-	logger.Info("starting pop3d",
-		"hostname", cfg.Hostname,
-		"listeners", len(cfg.Listeners))
+	logger.Info("starting pop3d dispatcher", "hostname", cfg.Hostname, "listeners", len(cfg.Listeners))
 
-	stack, err := pop3.NewStack(pop3.StackConfig{
-		Config:    cfg,
-		TLSConfig: tlsConfig,
-		Collector: collector,
-		Logger:    logger,
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error creating stack: %v\n", err)
-		os.Exit(1)
+	if err := dispatcher.Run(ctx); err != nil && err != context.Canceled {
+		logger.Error("dispatcher error", "error", err)
 	}
-	defer func() {
-		if err := stack.Close(); err != nil {
-			logger.Error("error closing stack", "error", err)
-		}
-	}()
-
-	if err := stack.Run(ctx); err != nil && err != context.Canceled {
-		fmt.Fprintf(os.Stderr, "server error: %v\n", err)
-		os.Exit(1)
-	}
-
 	logger.Info("POP3 server stopped")
 }

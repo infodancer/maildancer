@@ -15,6 +15,13 @@ min_version = "1.2"
 [pop3d]
 log_level = "info"
 
+# Credentials each protocol-handler subprocess is dropped to. Leave unset
+# (0) to run handlers under the dispatcher's own credentials (dev and
+# rootless setups). Mirrors smtpd's handler credential model.
+# handler_uid = 902
+# handler_gid = 903
+# handler_groups = [903]
+
 [pop3d.timeouts]
 connection = "10m"      # POP3 sessions tend to be longer than SMTP
 command = "1m"

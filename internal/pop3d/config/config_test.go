@@ -62,6 +62,30 @@ func TestDefault(t *testing.T) {
 	}
 }
 
+// TestValidateHandlerCredentials verifies that handler_gid/handler_groups
+// cannot be set without handler_uid, and that a full credential set passes.
+func TestValidateHandlerCredentials(t *testing.T) {
+	cfg := Default()
+	cfg.HandlerGID = 903
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for handler_gid without handler_uid, got nil")
+	}
+
+	cfg = Default()
+	cfg.HandlerGroups = []uint32{904}
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for handler_groups without handler_uid, got nil")
+	}
+
+	cfg = Default()
+	cfg.HandlerUID = 902
+	cfg.HandlerGID = 903
+	cfg.HandlerGroups = []uint32{904}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected full handler credential set to validate, got %v", err)
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -193,7 +193,7 @@ func TestFollowRedirect_LocalTarget(t *testing.T) {
 
 	ingress := "Received: from upstream (unknown [203.0.113.9])\r\n\tby mail.example.com with ESMTP id abc;\r\n\tMon, 02 Jan 2006 15:04:05 -0700\r\n"
 	redirect := &RedirectError{Addresses: []string{"bob@example.com"}}
-	if err := s.followRedirect(context.Background(), redirect, memBuf("Subject: x\r\n\r\nbody"), "msgid1", ingress); err != nil {
+	if err := s.followRedirect(context.Background(), redirect, memBuf("Subject: x\r\n\r\nbody"), "msgid1", ingress, ""); err != nil {
 		t.Fatalf("followRedirect returned error: %v", err)
 	}
 
@@ -243,7 +243,7 @@ func TestFollowRedirect_ExternalTarget(t *testing.T) {
 
 	ingress := "Received: from upstream (unknown [203.0.113.9])\r\n\tby mail.example.com with ESMTP id abc;\r\n\tMon, 02 Jan 2006 15:04:05 -0700\r\n"
 	redirect := &RedirectError{Addresses: []string{"matthew@gmail.com"}}
-	if err := s.followRedirect(context.Background(), redirect, memBuf("Subject: x\r\n\r\nbody"), "msgid1", ingress); err != nil {
+	if err := s.followRedirect(context.Background(), redirect, memBuf("Subject: x\r\n\r\nbody"), "msgid1", ingress, ""); err != nil {
 		t.Fatalf("followRedirect returned error: %v", err)
 	}
 
@@ -284,7 +284,7 @@ func TestFollowRedirect_OneHopCeiling(t *testing.T) {
 	s := newRedirectSession(t, agent)
 
 	redirect := &RedirectError{Addresses: []string{"bob@example.com"}}
-	err := s.followRedirect(context.Background(), redirect, memBuf("Subject: x\r\n\r\nbody"), "msgid1", "Received: from x\r\n")
+	err := s.followRedirect(context.Background(), redirect, memBuf("Subject: x\r\n\r\nbody"), "msgid1", "Received: from x\r\n", "")
 	if err == nil {
 		t.Fatal("expected error for second redirect (1-hop limit), got nil")
 	}

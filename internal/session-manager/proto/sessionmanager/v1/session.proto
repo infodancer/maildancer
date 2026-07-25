@@ -78,6 +78,12 @@ message LogoutResponse {}
 message ValidateRecipientRequest {
   // Fully-qualified recipient address (user@domain).
   string address = 1;
+
+  // Client's IP address, as seen by the calling daemon. Optional, but without
+  // it a recipient dictionary attack cannot be attributed to anyone: an
+  // invalid recipient on a local domain is counted as an abuse signal against
+  // this address (#206, rule 3).
+  string client_ip = 2;
 }
 
 message CheckPeerRequest {

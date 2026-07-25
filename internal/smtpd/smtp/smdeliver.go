@@ -116,9 +116,12 @@ type ValidateRecipientResult struct {
 }
 
 // ValidateRecipient checks whether a recipient address is deliverable.
-func (a *SessionManagerDeliveryAgent) ValidateRecipient(ctx context.Context, address string) (*ValidateRecipientResult, error) {
+// clientIP is forwarded so session-manager can attribute recipient probing to a
+// peer (#206, rule 3); it may be empty, in which case no abuse is recorded.
+func (a *SessionManagerDeliveryAgent) ValidateRecipient(ctx context.Context, address, clientIP string) (*ValidateRecipientResult, error) {
 	resp, err := a.session.ValidateRecipient(ctx, &smpb.ValidateRecipientRequest{
-		Address: address,
+		Address:  address,
+		ClientIp: clientIP,
 	})
 	if err != nil {
 		return nil, err
@@ -299,4 +302,26 @@ func buildClientTLS(caCertPath, clientCertPath, clientKeyPath string) (*tls.Conf
 		RootCAs:      pool,
 		MinVersion:   tls.VersionTLS13,
 	}, nil
+}
+
+// ReportPeer records an abuse signal the handler observed against clientIP.
+//
+// Best-effort and fire-and-forget by design: an abuse count is not worth
+// failing a mail transaction over, and the handler has nothing useful to do
+// with the error. Errors are logged at debug -- session-manager already logs
+// the ones that matter, and a broken link here would otherwise noise up every
+// hostile connection's log.
+func (a *SessionManagerDeliveryAgent) ReportPeer(ctx context.Context, clientIP, signal string) {
+	if clientIP == "" || signal == "" {
+		return
+	}
+	if _, err := a.session.ReportPeer(ctx, &smpb.ReportPeerRequest{
+		Ip:     clientIP,
+		Signal: signal,
+	}); err != nil {
+		a.logger.Debug("peer abuse report failed",
+			slog.String("peer", clientIP),
+			slog.String("signal", signal),
+			slog.String("error", err.Error()))
+	}
 }

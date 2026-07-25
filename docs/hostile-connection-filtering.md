@@ -1,7 +1,8 @@
 # Hostile connection filtering
 
 Design for issue #206 (Redis-backed auth rate limiting and connection-level
-banning). Status: phases 1-4 implemented; phase 5 outstanding (see Phasing).
+banning). Status: implemented. Phases 1-5 are done; the outstanding work is
+narrower than the original design and tracked in #221 and the open items below.
 Read the issue and its first comment
 for the production data this is built on; the numbers are not repeated here
 beyond what the design turns on.
@@ -459,8 +460,11 @@ good_ttl = "720h"             # 30 days, refreshed on every success
 revoke_after = 10             # suppressed bans before trust is withdrawn; -1 never
 
 [session-manager.peerfilter.abuse_thresholds]
-# Signals with no entry here are counted but never ban on their own.
-# Populated in phase 5, when smtpd starts reporting them.
+# Signals with no entry here are counted but never ban on their own. An absent
+# table takes these defaults; a table you write is used verbatim, so omitting a
+# signal is how you turn it off.
+invalid_recipient = 10        # a dictionary, not a typo
+relay_denied = 5              # nothing legitimate probes for an open relay
 
 # Enforcement: how the dispatchers act on that policy.
 [peergate]
@@ -524,7 +528,8 @@ that must not be skipped.
    existing connfork suite, unmodified). *(Done: `TestGate_NilGateSpawnsHandler`,
    plus the unmodified suite.)*
 10. Rule 2 lockout thresholds and window expiry against `memLimitStore` with an
-    injected clock; rule 3 counters likewise.
+    injected clock; rule 3 counters likewise. *(Done: the `auth/domain` suite for
+    rule 2, `TestReport_*` and the `rule3_test.go` suite for rule 3.)*
 
 ## Phasing
 
@@ -541,6 +546,9 @@ Each phase is separately shippable and separately reviewable.
 4. Rule 1 recording on the `Login` path plus the uniform failure deadline and
    the decoy verify. **Done.**
 5. Rule 3 counters in smtpd, via `ValidateRecipient` and `ReportPeer`.
+   **Partly done** -- `invalid_recipient` and `relay_denied` ship; the
+   connection-rate, early-talker, and malformed-command signals need mechanisms
+   that do not exist yet and are tracked in #221.
 
 Phase 3 lands the enforcement, so nothing before it changes what a client sees;
 phase 4 is where the timing test becomes mandatory.
@@ -579,6 +587,32 @@ Two consequences for phase 2, both required before any of this does anything:
 Note that this makes phase 2 the first point where a real user can be locked
 out, which is worth remembering when picking the initial thresholds: they will
 be applied to production traffic that has never had them before.
+
+### Decided during phase 5
+
+- **`invalid_recipient` is recorded in `ValidateRecipient`, not reported by
+  smtpd.** session-manager already knows whether the recipient exists, so the
+  signal costs one line where the answer is computed rather than a round trip
+  from the daemon. Only `client_ip` had to be added to the request.
+- **A nonexistent *domain* is not counted.** That is misdirected mail, not
+  probing of our address space, and counting it would ban anyone whose
+  forwarding is misconfigured.
+- **Rule 3 is a rate, not a first-attempt ban** -- the opposite of rule 1. A
+  nonexistent *account* on the auth path is proof of hostility; a nonexistent
+  *recipient* is what writing to a retired address looks like, and real MTAs
+  retry.
+- **Signal names live in a dependency-free `internal/peersignal`.** They cross
+  the wire and appear as config keys, so they are a compatibility surface:
+  renaming one silently orphans an operator's threshold. The names for the
+  unimplemented signals are reserved there for the same reason.
+- **Default thresholds ship set**, so rule 3 enforces unconfigured. An absent
+  table takes the defaults; a table the operator wrote is used verbatim,
+  including an empty one, because omitting a signal is how you disable it.
+- **Connection-rate counting cannot live in `CheckPeer`.** The phase 3 verdict
+  cache means session-manager sees roughly one check per address per 10s, not
+  one per connection, so any count derived there undercounts a flood by exactly
+  the factor that matters. It needs local counting in the dispatcher with
+  central policy -- see #221.
 
 ### Decided during phase 4
 
@@ -651,11 +685,26 @@ be applied to production traffic that has never had them before.
 
 ## Left to decide
 
-- Whether `ban_on_password_failures` ships as a knob in phase 4 or waits until
-  the residual oracle is shown to matter.
+- Whether `ban_on_password_failures` ships as a knob or waits until the residual
+  oracle is shown to matter. Still deferred: nothing has been observed exercising
+  the oracle, and it costs an attacker one address per username tested.
 - **Initial production thresholds.** Nothing has ever been enforced here, so
-  there is no baseline for how often a real client fails a login. The defaults
-  (5 per pair, 20 per address, 5-minute window, 15-minute lockout) are inherited
-  guesses, not measurements. Worth watching the first week with
-  `peerfilter.enabled` on and the auth limiter's thresholds set high, then
+  there is no baseline for how often a real client fails a login, writes to a
+  retired address, or trips any rule 3 signal. Every default in this document is
+  an inherited guess, not a measurement. Worth watching the first week and then
   tightening.
+
+  The instrumentation to watch, in order of what would show a false positive
+  first: `userctl peer list` (what is being banned and why),
+  `userctl peer good` (addresses carrying both a real user and hostile traffic
+  -- a nonzero suppressed count is the exemption earning its keep),
+  `<daemon>_peer_gate_checks_total{verdict="deny"}` (how much is being refused
+  at accept time), and `<daemon>_peer_tarpit_rejected_total` (nonzero means
+  `max_tarpit` is undersized).
+
+  The knobs to reach for, from least to most drastic: raise the specific
+  threshold; `revoke_after = -1` to trust known-good addresses
+  unconditionally; `known_good = false` if the exemption turns out to cost more
+  than it buys; `peerfilter.enabled = false` to stop enforcing while keeping the
+  counters. `userctl peer unban` handles the individual case without changing
+  policy at all.

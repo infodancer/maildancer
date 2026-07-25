@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infodancer/maildancer/internal/peersignal"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -140,9 +141,22 @@ func Defaults() Config {
 		BanTTLRepeat: 7 * 24 * time.Hour,
 		AcceptTarpit: 30 * time.Second,
 		AbuseWindow:  time.Hour,
-		KnownGood:    &knownGood,
-		GoodTTL:      30 * 24 * time.Hour,
-		RevokeAfter:  10,
+		// Rule 3 thresholds, per AbuseWindow. Conservative because there is no
+		// production baseline for either signal yet -- nothing has ever counted
+		// them -- so these are set to catch a campaign rather than a stray.
+		AbuseThresholds: map[string]int{
+			// Legitimate senders do write to retired addresses, and a real MTA
+			// retries the same one. Ten distinct-or-repeated misses in an hour
+			// is a dictionary, not a typo.
+			peersignal.InvalidRecipient: 10,
+			// Nothing legitimate asks an unauthenticated relay for a foreign
+			// domain, so this could defensibly be 1. Five leaves room for a
+			// misconfigured client to fail loudly before being banned.
+			peersignal.RelayDenied: 5,
+		},
+		KnownGood:   &knownGood,
+		GoodTTL:     30 * 24 * time.Hour,
+		RevokeAfter: 10,
 	}
 }
 
@@ -195,6 +209,14 @@ func (c *Config) Normalize() error {
 	}
 	if c.RevokeAfter == 0 {
 		c.RevokeAfter = d.RevokeAfter
+	}
+
+	// An absent table takes the defaults, so rule 3 enforces without being
+	// configured. A table the operator did write is used verbatim, including a
+	// deliberately empty one: omitting a signal there is how a signal is turned
+	// off, and silently merging defaults back in would make that impossible.
+	if c.AbuseThresholds == nil {
+		c.AbuseThresholds = d.AbuseThresholds
 	}
 	return nil
 }

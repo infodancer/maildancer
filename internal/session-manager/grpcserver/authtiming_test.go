@@ -42,7 +42,12 @@ func (timingAuthAgent) Authenticate(_ context.Context, username, password string
 	return &auth.AuthSession{User: &auth.User{Username: "alice", Mailbox: "alice@example.com"}}, nil
 }
 
-func (timingAuthAgent) UserExists(_ context.Context, _ string) (bool, error) { return true, nil }
+// UserExists mirrors Authenticate: only alice is real. Rule 3's
+// invalid-recipient signal keys on exactly this, so an agent that claims every
+// address exists would make that path untestable.
+func (timingAuthAgent) UserExists(_ context.Context, username string) (bool, error) {
+	return username == "alice", nil
+}
 
 func (timingAuthAgent) ResolveForward(_ context.Context, _ string) ([]string, bool) {
 	return nil, false
@@ -368,4 +373,23 @@ func TestLogin_UnknownAddressStillBannedByRule1(t *testing.T) {
 	if v := filter.Check(ctx, ip); !v.Banned {
 		t.Error("address with no successful login was not banned by rule 1")
 	}
+}
+
+// newFilterOverMiniredis builds a peerfilter with its own in-process Redis, so
+// each test starts from an empty keyspace.
+func newFilterOverMiniredis(t *testing.T, cfg peerfilter.Config) (*peerfilter.Filter, *miniredis.Miniredis) {
+	t.Helper()
+	mr := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{
+		Addr:        mr.Addr(),
+		MaxRetries:  -1,
+		DialTimeout: 250 * time.Millisecond,
+	})
+	t.Cleanup(func() { _ = client.Close() })
+
+	filter, err := peerfilter.New(cfg, client, nil)
+	if err != nil {
+		t.Fatalf("peerfilter.New: %v", err)
+	}
+	return filter, mr
 }

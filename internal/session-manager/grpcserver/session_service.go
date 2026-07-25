@@ -53,7 +53,7 @@ func (s *sessionServer) Login(ctx context.Context, req *smpb.LoginRequest) (*smp
 		// the only rule that catches the measured attack, where 41 of 59
 		// addresses made exactly one attempt.
 		if errors.Is(err, autherrors.ErrUserNotFound) && req.ClientIp != "" {
-			if berr := s.filter.Ban(ctx, req.ClientIp, "nonexistent_account"); berr != nil {
+			if berr := s.filter.Ban(ctx, req.ClientIp, peerfilter.ReasonNonexistentAccount); berr != nil {
 				slog.Error("failed to ban peer for nonexistent-account attempt",
 					"client_ip", req.ClientIp, "error", berr)
 			}
@@ -174,11 +174,12 @@ func (s *sessionServer) CheckPeer(ctx context.Context, req *smpb.CheckPeerReques
 		return &smpb.CheckPeerResponse{}, nil
 	}
 
-	verdict := s.filter.Check(ctx, req.Ip)
+	verdict := s.filter.Check(ctx, req.Ip, req.AuthFacing)
 	return &smpb.CheckPeerResponse{
-		Banned:   verdict.Banned,
-		TarpitMs: verdict.Tarpit.Milliseconds(),
-		Reason:   verdict.Reason,
+		Banned:       verdict.Banned,
+		TarpitMs:     verdict.Tarpit.Milliseconds(),
+		Reason:       verdict.Reason,
+		ShadowBanned: verdict.ShadowBanned,
 	}, nil
 }
 

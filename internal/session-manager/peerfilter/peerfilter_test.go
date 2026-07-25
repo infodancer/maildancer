@@ -70,11 +70,11 @@ func TestIPv6SiblingsShareABan(t *testing.T) {
 		t.Fatalf("Ban: %v", err)
 	}
 
-	if v := f.Check(ctx, "2001:db8:1:2:ffff:ffff:ffff:ffff"); !v.Banned {
+	if v := f.Check(ctx, "2001:db8:1:2:ffff:ffff:ffff:ffff", true); !v.Banned {
 		t.Error("sibling address in the same /64 is not banned")
 	}
 	// A different /64 must be unaffected.
-	if v := f.Check(ctx, "2001:db8:1:3::1"); v.Banned {
+	if v := f.Check(ctx, "2001:db8:1:3::1", true); v.Banned {
 		t.Error("a different /64 was caught by the ban")
 	}
 }
@@ -96,7 +96,7 @@ func TestNew_DisabledReturnsNilFilter(t *testing.T) {
 	}
 	// A nil filter must be safe to use and must allow everything, so callers
 	// need no nil check of their own.
-	if v := f.Check(context.Background(), "203.0.113.5"); v.Banned {
+	if v := f.Check(context.Background(), "203.0.113.5", true); v.Banned {
 		t.Error("nil filter banned a peer")
 	}
 	if err := f.Ban(context.Background(), "203.0.113.5", "x"); err != nil {
@@ -140,7 +140,7 @@ func TestNew_InvalidAllowlistIsAnError(t *testing.T) {
 
 func TestCheck_UnbannedPeerIsAllowed(t *testing.T) {
 	f, _ := newTestFilter(t, nil)
-	if v := f.Check(context.Background(), "203.0.113.5"); v.Banned {
+	if v := f.Check(context.Background(), "203.0.113.5", true); v.Banned {
 		t.Error("peer with no ban was denied")
 	}
 }
@@ -153,7 +153,7 @@ func TestBanAndCheck(t *testing.T) {
 		t.Fatalf("Ban: %v", err)
 	}
 
-	v := f.Check(ctx, "203.0.113.5")
+	v := f.Check(ctx, "203.0.113.5", true)
 	if !v.Banned {
 		t.Fatal("banned peer was allowed")
 	}
@@ -176,7 +176,7 @@ func TestBan_ReleasesOnTTL(t *testing.T) {
 	}
 	mr.FastForward(61 * time.Minute)
 
-	if v := f.Check(ctx, "203.0.113.5"); v.Banned {
+	if v := f.Check(ctx, "203.0.113.5", true); v.Banned {
 		t.Error("ban outlived its TTL; nothing sweeps it")
 	}
 }
@@ -242,7 +242,7 @@ func TestAllowlist_NeverBannedNeverChecked(t *testing.T) {
 		if err := f.Ban(ctx, ip, "test"); err != nil {
 			t.Fatalf("Ban(%s): %v", ip, err)
 		}
-		if v := f.Check(ctx, ip); v.Banned {
+		if v := f.Check(ctx, ip, true); v.Banned {
 			t.Errorf("allowlisted %s was banned", ip)
 		}
 	}
@@ -268,7 +268,7 @@ func TestUnban(t *testing.T) {
 	if !removed {
 		t.Error("Unban reported no ban present")
 	}
-	if v := f.Check(ctx, ip); v.Banned {
+	if v := f.Check(ctx, ip, true); v.Banned {
 		t.Error("peer still banned after Unban")
 	}
 
@@ -319,7 +319,7 @@ func TestReport_BansAtThreshold(t *testing.T) {
 		if err := f.Report(ctx, ip, "early_talker"); err != nil {
 			t.Fatalf("Report %d: %v", i, err)
 		}
-		if v := f.Check(ctx, ip); v.Banned {
+		if v := f.Check(ctx, ip, true); v.Banned {
 			t.Fatalf("banned after %d reports, threshold is 3", i+1)
 		}
 	}
@@ -327,7 +327,7 @@ func TestReport_BansAtThreshold(t *testing.T) {
 	if err := f.Report(ctx, ip, "early_talker"); err != nil {
 		t.Fatalf("Report: %v", err)
 	}
-	if v := f.Check(ctx, ip); !v.Banned {
+	if v := f.Check(ctx, ip, true); !v.Banned {
 		t.Error("not banned after reaching the threshold")
 	}
 }
@@ -346,7 +346,7 @@ func TestReport_UnknownSignalNeverBans(t *testing.T) {
 			t.Fatalf("Report: %v", err)
 		}
 	}
-	if v := f.Check(ctx, ip); v.Banned {
+	if v := f.Check(ctx, ip, true); v.Banned {
 		t.Error("an unconfigured signal produced a ban")
 	}
 }
@@ -364,7 +364,7 @@ func TestReport_SignalsCountedSeparately(t *testing.T) {
 	if err := f.Report(ctx, ip, "data_abort"); err != nil {
 		t.Fatalf("Report: %v", err)
 	}
-	if v := f.Check(ctx, ip); v.Banned {
+	if v := f.Check(ctx, ip, true); v.Banned {
 		t.Error("one occurrence of each of two signals should not reach either threshold")
 	}
 }
@@ -389,7 +389,7 @@ func TestReport_CounterExpiresWithWindow(t *testing.T) {
 	if err := f.Report(ctx, ip, "early_talker"); err != nil {
 		t.Fatalf("Report: %v", err)
 	}
-	if v := f.Check(ctx, ip); v.Banned {
+	if v := f.Check(ctx, ip, true); v.Banned {
 		t.Error("abuse counter did not expire with its window")
 	}
 }
@@ -411,7 +411,7 @@ func TestReport_AllowlistedPeerIsIgnored(t *testing.T) {
 	if err := f.Report(ctx, "10.1.2.3", "early_talker"); err != nil {
 		t.Fatalf("Report: %v", err)
 	}
-	if v := f.Check(ctx, "10.1.2.3"); v.Banned {
+	if v := f.Check(ctx, "10.1.2.3", true); v.Banned {
 		t.Error("allowlisted peer banned via Report")
 	}
 }
@@ -474,12 +474,12 @@ func TestCheck_FailsOpenOnRedisError(t *testing.T) {
 	if err := f.Ban(ctx, "203.0.113.5", "test"); err != nil {
 		t.Fatalf("Ban: %v", err)
 	}
-	if v := f.Check(ctx, "203.0.113.5"); !v.Banned {
+	if v := f.Check(ctx, "203.0.113.5", true); !v.Banned {
 		t.Fatal("precondition: peer should be banned")
 	}
 
 	mr.Close()
-	if v := f.Check(ctx, "203.0.113.5"); v.Banned {
+	if v := f.Check(ctx, "203.0.113.5", true); v.Banned {
 		t.Error("Check failed closed on a Redis error; must fail open")
 	}
 }
@@ -489,7 +489,7 @@ func TestCheck_UnparseableAddressIsAllowed(t *testing.T) {
 	// Not a security hole: an address we cannot parse cannot be matched
 	// against a ban either, and refusing it would break on any future
 	// address form we do not yet handle.
-	if v := f.Check(context.Background(), "garbage"); v.Banned {
+	if v := f.Check(context.Background(), "garbage", true); v.Banned {
 		t.Error("unparseable address was denied")
 	}
 }

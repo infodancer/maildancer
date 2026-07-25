@@ -38,6 +38,13 @@ const ReportFD = 4
 type Listener struct {
 	Address string
 	Mode    string
+	// AuthFacing marks a listener where authentication is the point (imap,
+	// pop3, submission) rather than inbound mail reception (smtp on 25).
+	//
+	// The daemon sets it because Mode is opaque here and each daemon owns its
+	// own vocabulary. It reaches the gate, which enforces auth-derived bans
+	// only on auth-facing listeners (#225).
+	AuthFacing bool
 }
 
 // Verdict is a PeerGate's answer for one peer.
@@ -49,6 +56,11 @@ type Verdict struct {
 	Tarpit time.Duration
 	// Reason is a coarse policy label, for the dispatcher's logs only.
 	Reason string
+	// ShadowBanned reports a ban that exists but is out of scope for this
+	// listener. The connection is served; the dispatcher records what it would
+	// have refused so the cost of widening the ban can be measured (#225).
+	// Never set together with Banned.
+	ShadowBanned bool
 }
 
 // PeerGate decides whether an accepted connection may reach a handler.
@@ -59,7 +71,7 @@ type Verdict struct {
 // outage. Implementations should not apply their own timeout policy -- the
 // dispatcher bounds the call with Config.GateTimeout.
 type PeerGate interface {
-	CheckPeer(ctx context.Context, ip string) (Verdict, error)
+	CheckPeer(ctx context.Context, ip string, authFacing bool) (Verdict, error)
 }
 
 // Config describes how the dispatcher spawns handler subprocesses.
@@ -309,7 +321,7 @@ func (s *Server) release() {
 // logged at error level and counted, deliberately: a silent fail-open is a
 // protection mechanism that can be switched off by breaking the gate's backing
 // store, and nobody would notice.
-func (s *Server) gateVerdict(ctx context.Context, clientIP string) (Verdict, bool) {
+func (s *Server) gateVerdict(ctx context.Context, clientIP string, lc Listener) (Verdict, bool) {
 	if s.cfg.Gate == nil || clientIP == "" {
 		return Verdict{}, false
 	}
@@ -317,7 +329,7 @@ func (s *Server) gateVerdict(ctx context.Context, clientIP string) (Verdict, boo
 	gctx, cancel := context.WithTimeout(ctx, s.cfg.GateTimeout)
 	defer cancel()
 
-	verdict, err := s.cfg.Gate.CheckPeer(gctx, clientIP)
+	verdict, err := s.cfg.Gate.CheckPeer(gctx, clientIP, lc.AuthFacing)
 	switch {
 	case err != nil:
 		s.reportVerdict("error")
@@ -335,6 +347,18 @@ func (s *Server) gateVerdict(ctx context.Context, clientIP string) (Verdict, boo
 			slog.String("client_ip", clientIP),
 			slog.String("reason", verdict.Reason))
 		return verdict, true
+	case verdict.ShadowBanned:
+		// Served, but recorded. Warn rather than info: this line is the whole
+		// dataset for deciding whether the ban should widen, and it needs to be
+		// greppable alongside whatever mail the connection went on to deliver
+		// (#225).
+		s.reportVerdict("shadow")
+		s.cfg.Logger.Warn("peer would have been denied (ban out of scope for this listener)",
+			slog.String("client_ip", clientIP),
+			slog.String("reason", verdict.Reason),
+			slog.String("listener", lc.Address),
+			slog.String("mode", lc.Mode))
+		return verdict, false
 	default:
 		s.reportVerdict("allow")
 		return verdict, false
@@ -442,7 +466,7 @@ func (s *Server) spawnHandler(ctx context.Context, conn net.Conn, lc Listener) {
 	// gate implementation. The alternative -- consulting the gate before
 	// acquiring a token -- would mean accepting connections we have no slot
 	// for, which is what acquiring before Accept deliberately avoids.
-	if verdict, denied := s.gateVerdict(ctx, clientIP); denied {
+	if verdict, denied := s.gateVerdict(ctx, clientIP, lc); denied {
 		go s.tarpitConn(ctx, conn, clientIP, verdict)
 		return
 	}

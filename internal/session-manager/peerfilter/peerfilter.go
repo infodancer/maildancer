@@ -39,6 +39,15 @@ const (
 	keySuppressed = "peer:suppressed:"
 )
 
+// Values for Config.AuthBanScope.
+const (
+	// AuthBanScopeAuthListeners enforces auth-derived bans only where
+	// authentication happens, and shadow-logs them on inbound SMTP.
+	AuthBanScopeAuthListeners = "auth_listeners"
+	// AuthBanScopeAll enforces auth-derived bans on every listener.
+	AuthBanScopeAll = "all"
+)
+
 // strikeTTL is how long a released ban is remembered for the purpose of
 // escalating a repeat offender. Longer than the longest ban, so an address
 // that reoffends after serving a full ban is still recognized.
@@ -51,6 +60,37 @@ const (
 	ReasonBanned = "banned"
 	ReasonAbuse  = "abuse"
 )
+
+// Stored ban reasons. Unlike the labels above these are internal -- they are the
+// value of peer:ban:<prefix> and never cross the wire -- and they carry the
+// provenance a ban's scope is derived from (#225).
+const (
+	// ReasonNonexistentAccount is rule 1: an authentication attempt against an
+	// account that does not exist.
+	ReasonNonexistentAccount = "nonexistent_account"
+	// ReasonManual is an operator ban placed with userctl.
+	ReasonManual = "manual"
+)
+
+// authDerivedReasons are the stored reasons whose evidence came from the
+// authentication path rather than from SMTP behaviour.
+//
+// The distinction matters because rule 1's justification does not transfer to
+// inbound mail. "No legitimate client authenticates as a nonexistent account"
+// is airtight; "no legitimate MTA sends from an address that once did" is a
+// different and much weaker claim, and acting on it destroys a third party's
+// message rather than costing an attacker nothing (#225).
+var authDerivedReasons = map[string]bool{
+	ReasonNonexistentAccount: true,
+}
+
+// isAuthDerived reports whether a stored ban reason came from the auth path.
+// Unknown reasons are treated as not auth-derived, so they keep enforcing
+// everywhere: a reason nobody has classified should fail toward the stricter
+// behaviour, and rule 3's "abuse:<signal>" values land here deliberately.
+func isAuthDerived(reason string) bool {
+	return authDerivedReasons[reason]
+}
 
 // Config is the policy half of the peer filter. The dispatcher half
 // (MaxTarpit, GateTimeout, StrictGate) is read by the daemons in phase 3.
@@ -118,6 +158,25 @@ type Config struct {
 	// GoodTTLStr is the TOML-friendly form of GoodTTL.
 	GoodTTLStr string `toml:"good_ttl"`
 
+	// AuthBanScope controls which listeners an auth-derived ban is enforced on
+	// (#225). Two values:
+	//
+	//   "auth_listeners" (default) -- enforce on the listeners where
+	//       authentication is the point (imap, pop3, submission), and only
+	//       *record* what would have been refused on inbound SMTP.
+	//   "all" -- enforce everywhere, the pre-#225 behaviour.
+	//
+	// The default is deliberately the narrower one. Refusing an authenticated
+	// client's connection costs an attacker nothing; refusing inbound SMTP
+	// destroys a third party's message, and rule 1's near-zero false-positive
+	// claim is about authentication, not about sending reputation. Shadow mode
+	// makes the volume measurable before the stricter setting is chosen.
+	//
+	// Rule 3 bans (abuse:<signal>) and operator bans are unaffected: their
+	// evidence is SMTP-native or deliberate, so they enforce on every listener
+	// regardless of this setting.
+	AuthBanScope string `toml:"auth_ban_scope"`
+
 	// RevokeAfter is how many suppressed bans an address may accumulate before
 	// its known-good status is revoked and bans apply normally. Default 10;
 	// negative disables revocation, matching the max_tarpit convention.
@@ -154,9 +213,10 @@ func Defaults() Config {
 			// misconfigured client to fail loudly before being banned.
 			peersignal.RelayDenied: 5,
 		},
-		KnownGood:   &knownGood,
-		GoodTTL:     30 * 24 * time.Hour,
-		RevokeAfter: 10,
+		AuthBanScope: AuthBanScopeAuthListeners,
+		KnownGood:    &knownGood,
+		GoodTTL:      30 * 24 * time.Hour,
+		RevokeAfter:  10,
 	}
 }
 
@@ -218,6 +278,14 @@ func (c *Config) Normalize() error {
 	if c.AbuseThresholds == nil {
 		c.AbuseThresholds = d.AbuseThresholds
 	}
+	switch c.AuthBanScope {
+	case "":
+		c.AuthBanScope = d.AuthBanScope
+	case AuthBanScopeAuthListeners, AuthBanScopeAll:
+	default:
+		return fmt.Errorf("invalid auth_ban_scope %q (want %q or %q)",
+			c.AuthBanScope, AuthBanScopeAuthListeners, AuthBanScopeAll)
+	}
 	return nil
 }
 
@@ -229,6 +297,12 @@ type Verdict struct {
 	Tarpit time.Duration
 	// Reason is a coarse policy label for logs and metrics.
 	Reason string
+	// ShadowBanned is true when a ban exists for this peer but is out of scope
+	// for the listener that asked (#225). The connection must be served; the
+	// dispatcher records what it would have refused so the false-positive cost
+	// can be measured before the ban is widened. Never set together with
+	// Banned.
+	ShadowBanned bool
 }
 
 // Filter enforces the peer ban policy against Redis.
@@ -288,7 +362,7 @@ func (f *Filter) Allowed(ip string) bool {
 // the connection, because a Redis outage must not become a total mail outage.
 // The error is logged so the fail-open is visible rather than silent; the
 // dispatcher-side metric arrives with phase 3.
-func (f *Filter) Check(ctx context.Context, ip string) Verdict {
+func (f *Filter) Check(ctx context.Context, ip string, authFacing bool) Verdict {
 	if f == nil {
 		return Verdict{}
 	}
@@ -301,13 +375,15 @@ func (f *Filter) Check(ctx context.Context, ip string) Verdict {
 		return Verdict{}
 	}
 
-	n, err := f.client.Exists(ctx, keyBan+prefix).Result()
-	if err != nil {
+	// GET rather than EXISTS: the stored value is the ban's reason, and the
+	// reason is what the scope decision below is derived from. Same round trip.
+	reason, err := f.client.Get(ctx, keyBan+prefix).Result()
+	switch {
+	case errors.Is(err, redis.Nil):
+		return Verdict{} // not banned, the overwhelmingly common case
+	case err != nil:
 		f.logger.Error("peer ban check failed, allowing connection",
 			"error", err.Error(), "peer", prefix)
-		return Verdict{}
-	}
-	if n == 0 {
 		return Verdict{}
 	}
 
@@ -316,6 +392,15 @@ func (f *Filter) Check(ctx context.Context, ip string) Verdict {
 	// overwhelming majority are not banned.
 	if f.suppressBan(ctx, prefix) {
 		return Verdict{}
+	}
+
+	// A ban whose evidence came from the auth path is out of scope for a
+	// listener where nobody authenticates (#225). Report it as a shadow ban so
+	// the dispatcher serves the connection but records what it would have
+	// refused -- the false-positive cost of widening this is a third party's
+	// message, so it gets measured before it gets paid.
+	if !authFacing && f.cfg.AuthBanScope == AuthBanScopeAuthListeners && isAuthDerived(reason) {
+		return Verdict{ShadowBanned: true, Reason: ReasonBanned}
 	}
 
 	return Verdict{Banned: true, Tarpit: f.cfg.AcceptTarpit, Reason: ReasonBanned}

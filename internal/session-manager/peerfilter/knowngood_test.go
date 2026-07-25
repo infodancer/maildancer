@@ -18,7 +18,7 @@ func TestRecordGood_SuppressesBan(t *testing.T) {
 		t.Fatalf("Ban: %v", err)
 	}
 
-	if v := f.Check(ctx, ip); v.Banned {
+	if v := f.Check(ctx, ip, true); v.Banned {
 		t.Error("known-good peer was denied despite a recent successful auth")
 	}
 }
@@ -37,7 +37,7 @@ func TestKnownGood_DoesNotDeleteTheBan(t *testing.T) {
 	if err := f.Ban(ctx, ip, "nonexistent_account"); err != nil {
 		t.Fatalf("Ban: %v", err)
 	}
-	if v := f.Check(ctx, ip); v.Banned {
+	if v := f.Check(ctx, ip, true); v.Banned {
 		t.Fatal("precondition: expected the ban to be suppressed")
 	}
 
@@ -66,17 +66,17 @@ func TestKnownGood_RevokedAfterThreshold(t *testing.T) {
 
 	// Three suppressions are allowed.
 	for i := range 3 {
-		if v := f.Check(ctx, ip); v.Banned {
+		if v := f.Check(ctx, ip, true); v.Banned {
 			t.Fatalf("check %d: denied before the revoke threshold", i+1)
 		}
 	}
 
 	// The fourth revokes and enforces.
-	if v := f.Check(ctx, ip); !v.Banned {
+	if v := f.Check(ctx, ip, true); !v.Banned {
 		t.Error("known-good status was not revoked past the threshold")
 	}
 	// And it stays revoked.
-	if v := f.Check(ctx, ip); !v.Banned {
+	if v := f.Check(ctx, ip, true); !v.Banned {
 		t.Error("ban not enforced after revocation")
 	}
 }
@@ -94,7 +94,7 @@ func TestKnownGood_RevocationDisabled(t *testing.T) {
 	}
 
 	for i := range 50 {
-		if v := f.Check(ctx, ip); v.Banned {
+		if v := f.Check(ctx, ip, true); v.Banned {
 			t.Fatalf("check %d: denied with revocation disabled", i+1)
 		}
 	}
@@ -115,7 +115,7 @@ func TestKnownGood_Disabled(t *testing.T) {
 	if err := f.Ban(ctx, ip, "nonexistent_account"); err != nil {
 		t.Fatalf("Ban: %v", err)
 	}
-	if v := f.Check(ctx, ip); !v.Banned {
+	if v := f.Check(ctx, ip, true); !v.Banned {
 		t.Error("ban suppressed with known_good disabled")
 	}
 }
@@ -136,12 +136,12 @@ func TestKnownGood_ExpiresWithTTL(t *testing.T) {
 	if err := f.Ban(ctx, ip, "nonexistent_account"); err != nil {
 		t.Fatalf("Ban: %v", err)
 	}
-	if v := f.Check(ctx, ip); v.Banned {
+	if v := f.Check(ctx, ip, true); v.Banned {
 		t.Fatal("precondition: expected suppression while known-good is live")
 	}
 
 	mr.FastForward(61 * time.Minute)
-	if v := f.Check(ctx, ip); !v.Banned {
+	if v := f.Check(ctx, ip, true); !v.Banned {
 		t.Error("known-good status outlived its TTL")
 	}
 }
@@ -165,7 +165,7 @@ func TestRecordGood_RefreshesTTL(t *testing.T) {
 	if err := f.Ban(ctx, ip, "nonexistent_account"); err != nil {
 		t.Fatalf("Ban: %v", err)
 	}
-	if v := f.Check(ctx, ip); v.Banned {
+	if v := f.Check(ctx, ip, true); v.Banned {
 		t.Error("known-good expired on the original deadline; the second success did not extend it")
 	}
 }
@@ -218,7 +218,7 @@ func TestKnownGood_IPv6SharesPrefixWithBan(t *testing.T) {
 	if err := f.Ban(ctx, "2001:db8:aa:bb:cafe::9", "nonexistent_account"); err != nil {
 		t.Fatalf("Ban: %v", err)
 	}
-	if v := f.Check(ctx, "2001:db8:aa:bb:dead::7"); v.Banned {
+	if v := f.Check(ctx, "2001:db8:aa:bb:dead::7", true); v.Banned {
 		t.Error("known-good /64 did not suppress a ban earned by a sibling address")
 	}
 }
@@ -243,7 +243,7 @@ func TestListGood_ReportsBothSides(t *testing.T) {
 		t.Fatalf("Ban: %v", err)
 	}
 	for range 2 {
-		f.Check(ctx, ip)
+		f.Check(ctx, ip, true)
 	}
 
 	entries, err := f.ListGood(ctx)
@@ -281,8 +281,8 @@ func TestUnban_ClearsSuppressionCounter(t *testing.T) {
 	if err := f.Ban(ctx, ip, "test"); err != nil {
 		t.Fatalf("Ban: %v", err)
 	}
-	f.Check(ctx, ip)
-	f.Check(ctx, ip)
+	f.Check(ctx, ip, true)
+	f.Check(ctx, ip, true)
 
 	if _, err := f.Unban(ctx, ip); err != nil {
 		t.Fatalf("Unban: %v", err)

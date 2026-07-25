@@ -90,6 +90,16 @@ message CheckPeerRequest {
   // Peer IP address. IPv6 addresses are normalized to their /64 before
   // lookup, since individual v6 addresses are free to an attacker.
   string ip = 1;
+
+  // True when the listener that accepted this connection is one where
+  // authentication is the point (imap, pop3, submission) rather than inbound
+  // mail reception (smtp on 25).
+  //
+  // The daemon classifies its own listener because connfork treats the mode
+  // string as opaque and each daemon owns its own vocabulary. Bans derived from
+  // authentication signals are enforced only on auth-facing listeners; on
+  // inbound SMTP they come back as shadow_banned instead (#225).
+  bool auth_facing = 2;
 }
 
 message CheckPeerResponse {
@@ -105,6 +115,12 @@ message CheckPeerResponse {
   // the username, and not which signal fired -- it must not become a
   // side channel.
   string reason = 3;
+
+  // True when a ban exists for this peer but is out of scope for the listener
+  // that asked. The connection must be served; the dispatcher records what it
+  // would have refused, so the cost of widening the ban can be measured before
+  // it is paid (#225). Never set together with banned.
+  bool shadow_banned = 4;
 }
 
 message ReportPeerRequest {

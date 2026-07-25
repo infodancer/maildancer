@@ -22,8 +22,18 @@ type fakeSessionService struct {
 
 	mu     sync.Mutex
 	banned map[string]bool
+	scoped map[string]bool
 	err    error
 	calls  int
+}
+
+func (s *fakeSessionService) setScoped(ip string, scoped bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.scoped == nil {
+		s.scoped = make(map[string]bool)
+	}
+	s.scoped[ip] = scoped
 }
 
 func (s *fakeSessionService) CheckPeer(_ context.Context, req *smpb.CheckPeerRequest) (*smpb.CheckPeerResponse, error) {
@@ -32,6 +42,14 @@ func (s *fakeSessionService) CheckPeer(_ context.Context, req *smpb.CheckPeerReq
 	s.calls++
 	if s.err != nil {
 		return nil, s.err
+	}
+	// scoped addresses stand in for an auth-derived ban: enforced on an
+	// auth-facing listener, shadowed on inbound SMTP.
+	if s.scoped[req.Ip] {
+		if req.AuthFacing {
+			return &smpb.CheckPeerResponse{Banned: true, TarpitMs: 30_000, Reason: "banned"}, nil
+		}
+		return &smpb.CheckPeerResponse{ShadowBanned: true, Reason: "banned"}, nil
 	}
 	if s.banned[req.Ip] {
 		return &smpb.CheckPeerResponse{
@@ -106,7 +124,7 @@ func newTestGate(t *testing.T, cfgFn func(*Config)) (*Gate, *fakeSessionService,
 func TestCheckPeer_AllowsUnbannedPeer(t *testing.T) {
 	gate, _, _ := newTestGate(t, nil)
 
-	verdict, err := gate.CheckPeer(context.Background(), "203.0.113.5")
+	verdict, err := gate.CheckPeer(context.Background(), "203.0.113.5", true)
 	if err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
@@ -119,7 +137,7 @@ func TestCheckPeer_DeniesBannedPeer(t *testing.T) {
 	gate, svc, _ := newTestGate(t, nil)
 	svc.setBanned("203.0.113.5", true)
 
-	verdict, err := gate.CheckPeer(context.Background(), "203.0.113.5")
+	verdict, err := gate.CheckPeer(context.Background(), "203.0.113.5", true)
 	if err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
@@ -143,7 +161,7 @@ func TestCheckPeer_AllowlistCostsNoRPC(t *testing.T) {
 	svc.setBanned("10.1.2.3", true)
 
 	for _, ip := range []string{"10.1.2.3", "::1"} {
-		verdict, err := gate.CheckPeer(context.Background(), ip)
+		verdict, err := gate.CheckPeer(context.Background(), ip, true)
 		if err != nil {
 			t.Fatalf("CheckPeer(%s): %v", ip, err)
 		}
@@ -173,7 +191,7 @@ func TestNew_DisabledReturnsNilGate(t *testing.T) {
 		t.Error("disabled config produced an enabled gate")
 	}
 	// A nil gate must be safe to use and allow everything.
-	verdict, err := gate.CheckPeer(context.Background(), "203.0.113.5")
+	verdict, err := gate.CheckPeer(context.Background(), "203.0.113.5", true)
 	if err != nil {
 		t.Fatalf("CheckPeer on nil gate: %v", err)
 	}
@@ -212,7 +230,7 @@ func TestCheckPeer_CacheAbsorbsReconnectStorm(t *testing.T) {
 	ctx := context.Background()
 
 	for i := range 50 {
-		verdict, err := gate.CheckPeer(ctx, "203.0.113.5")
+		verdict, err := gate.CheckPeer(ctx, "203.0.113.5", true)
 		if err != nil {
 			t.Fatalf("CheckPeer %d: %v", i, err)
 		}
@@ -243,11 +261,11 @@ func TestCheckPeer_CacheTTLAsymmetry(t *testing.T) {
 	ctx := context.Background()
 
 	// An allow, then a deny for a different address.
-	if _, err := gate.CheckPeer(ctx, "198.51.100.1"); err != nil {
+	if _, err := gate.CheckPeer(ctx, "198.51.100.1", true); err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
 	svc.setBanned("203.0.113.5", true)
-	if _, err := gate.CheckPeer(ctx, "203.0.113.5"); err != nil {
+	if _, err := gate.CheckPeer(ctx, "203.0.113.5", true); err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
 	if got := svc.callCount(); got != 2 {
@@ -257,14 +275,14 @@ func TestCheckPeer_CacheTTLAsymmetry(t *testing.T) {
 	// 15s later: the allow has expired, the deny has not.
 	now = now.Add(15 * time.Second)
 
-	if _, err := gate.CheckPeer(ctx, "198.51.100.1"); err != nil {
+	if _, err := gate.CheckPeer(ctx, "198.51.100.1", true); err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
 	if got := svc.callCount(); got != 3 {
 		t.Errorf("allow was not re-checked after AllowTTL (calls=%d, want 3)", got)
 	}
 
-	if _, err := gate.CheckPeer(ctx, "203.0.113.5"); err != nil {
+	if _, err := gate.CheckPeer(ctx, "203.0.113.5", true); err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
 	if got := svc.callCount(); got != 3 {
@@ -273,7 +291,7 @@ func TestCheckPeer_CacheTTLAsymmetry(t *testing.T) {
 
 	// Past DenyTTL it is re-checked too.
 	now = now.Add(60 * time.Second)
-	if _, err := gate.CheckPeer(ctx, "203.0.113.5"); err != nil {
+	if _, err := gate.CheckPeer(ctx, "203.0.113.5", true); err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
 	if got := svc.callCount(); got != 4 {
@@ -289,7 +307,7 @@ func TestCheckPeer_ErrorsAreNotCached(t *testing.T) {
 	ctx := context.Background()
 
 	for i := range 3 {
-		if _, err := gate.CheckPeer(ctx, "203.0.113.5"); err == nil {
+		if _, err := gate.CheckPeer(ctx, "203.0.113.5", true); err == nil {
 			t.Fatalf("attempt %d: expected an error", i+1)
 		}
 	}
@@ -300,7 +318,7 @@ func TestCheckPeer_ErrorsAreNotCached(t *testing.T) {
 	// Once the server recovers, the next check sees the real verdict.
 	svc.setErr(nil)
 	svc.setBanned("203.0.113.5", true)
-	verdict, err := gate.CheckPeer(ctx, "203.0.113.5")
+	verdict, err := gate.CheckPeer(ctx, "203.0.113.5", true)
 	if err != nil {
 		t.Fatalf("CheckPeer after recovery: %v", err)
 	}
@@ -315,18 +333,18 @@ func TestForget(t *testing.T) {
 	svc.setBanned("203.0.113.5", true)
 	ctx := context.Background()
 
-	if verdict, err := gate.CheckPeer(ctx, "203.0.113.5"); err != nil || !verdict.Banned {
+	if verdict, err := gate.CheckPeer(ctx, "203.0.113.5", true); err != nil || !verdict.Banned {
 		t.Fatalf("setup: verdict=%+v err=%v", verdict, err)
 	}
 
 	svc.setBanned("203.0.113.5", false)
 	// Still cached as denied.
-	if verdict, _ := gate.CheckPeer(ctx, "203.0.113.5"); !verdict.Banned {
+	if verdict, _ := gate.CheckPeer(ctx, "203.0.113.5", true); !verdict.Banned {
 		t.Fatal("cache did not hold the deny")
 	}
 
 	gate.Forget("203.0.113.5")
-	if verdict, err := gate.CheckPeer(ctx, "203.0.113.5"); err != nil || verdict.Banned {
+	if verdict, err := gate.CheckPeer(ctx, "203.0.113.5", true); err != nil || verdict.Banned {
 		t.Errorf("after Forget: verdict=%+v err=%v, want allowed", verdict, err)
 	}
 }
@@ -452,4 +470,79 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf)
+}
+
+// TestCheckPeer_CacheIsScopedByListenerRole is the correctness bug the scoped
+// cache key prevents. One dispatcher process serves listeners of both kinds --
+// smtpd owns 25, 465 and 587 -- and an auth-derived ban is enforced on one and
+// shadowed on the other. A single-key cache would serve whichever verdict
+// happened to be cached first to both.
+func TestCheckPeer_CacheIsScopedByListenerRole(t *testing.T) {
+	gate, svc, _ := newTestGate(t, nil)
+	ctx := context.Background()
+	const ip = "203.0.113.5"
+
+	svc.setScoped(ip, true)
+
+	// Inbound SMTP asks first and is told "shadow".
+	v, err := gate.CheckPeer(ctx, ip, false)
+	if err != nil {
+		t.Fatalf("CheckPeer: %v", err)
+	}
+	if v.Banned || !v.ShadowBanned {
+		t.Fatalf("inbound verdict = %+v, want shadow", v)
+	}
+
+	// The auth-facing listener must get its own answer, not the cached one.
+	v, err = gate.CheckPeer(ctx, ip, true)
+	if err != nil {
+		t.Fatalf("CheckPeer: %v", err)
+	}
+	if !v.Banned {
+		t.Error("auth-facing listener got the inbound listener's cached shadow verdict")
+	}
+
+	if got := svc.callCount(); got != 2 {
+		t.Errorf("RPCs = %d, want 2 (one per listener role)", got)
+	}
+
+	// Each role now caches independently.
+	if _, err := gate.CheckPeer(ctx, ip, false); err != nil {
+		t.Fatalf("CheckPeer: %v", err)
+	}
+	if _, err := gate.CheckPeer(ctx, ip, true); err != nil {
+		t.Fatalf("CheckPeer: %v", err)
+	}
+	if got := svc.callCount(); got != 2 {
+		t.Errorf("RPCs = %d after repeats, want 2: both roles should be cached", got)
+	}
+}
+
+// TestForget_ClearsBothRoles keeps an operator unban from taking effect on one
+// listener role and not the other.
+func TestForget_ClearsBothRoles(t *testing.T) {
+	gate, svc, _ := newTestGate(t, nil)
+	ctx := context.Background()
+	const ip = "203.0.113.5"
+
+	svc.setBanned(ip, true)
+	if _, err := gate.CheckPeer(ctx, ip, true); err != nil {
+		t.Fatalf("CheckPeer: %v", err)
+	}
+	if _, err := gate.CheckPeer(ctx, ip, false); err != nil {
+		t.Fatalf("CheckPeer: %v", err)
+	}
+
+	svc.setBanned(ip, false)
+	gate.Forget(ip)
+
+	for _, authFacing := range []bool{true, false} {
+		v, err := gate.CheckPeer(ctx, ip, authFacing)
+		if err != nil {
+			t.Fatalf("CheckPeer: %v", err)
+		}
+		if v.Banned || v.ShadowBanned {
+			t.Errorf("stale verdict after Forget (auth_facing=%v): %+v", authFacing, v)
+		}
+	}
 }

@@ -87,7 +87,13 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 
 	listeners := make([]connfork.Listener, 0, len(cfg.Config.Listeners))
 	for _, lc := range cfg.Config.Listeners {
-		listeners = append(listeners, connfork.Listener{Address: lc.Address, Mode: string(lc.Mode)})
+		// Every imapd listener is auth-facing: authentication is the point of
+		// the protocol on both 143 and 993 (#225).
+		listeners = append(listeners, connfork.Listener{
+			Address:    lc.Address,
+			Mode:       string(lc.Mode),
+			AuthFacing: true,
+		})
 	}
 
 	var onStart, onEnd func()

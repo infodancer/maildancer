@@ -233,7 +233,7 @@ func (g *Gate) allowed(ip string) bool {
 // Order matters: allowlist first (no RPC at all), then the cache, then the
 // call. An error is returned rather than swallowed so connfork can apply its
 // own fail-open or strict policy and count the failure.
-func (g *Gate) CheckPeer(ctx context.Context, ip string) (connfork.Verdict, error) {
+func (g *Gate) CheckPeer(ctx context.Context, ip string, authFacing bool) (connfork.Verdict, error) {
 	if g == nil {
 		return connfork.Verdict{}, nil
 	}
@@ -241,7 +241,13 @@ func (g *Gate) CheckPeer(ctx context.Context, ip string) (connfork.Verdict, erro
 		return connfork.Verdict{}, nil
 	}
 
-	if verdict, ok := g.cache.get(ip); ok {
+	// The cache key includes the listener role: one dispatcher process serves
+	// listeners of both kinds (smtpd owns 25, 465 and 587), and the verdict for
+	// an auth-derived ban differs between them (#225). A single-key cache would
+	// leak one role's verdict onto the other.
+	key := cacheKey(ip, authFacing)
+
+	if verdict, ok := g.cache.get(key); ok {
 		if g.metrics.OnCache != nil {
 			g.metrics.OnCache(true)
 		}
@@ -251,7 +257,10 @@ func (g *Gate) CheckPeer(ctx context.Context, ip string) (connfork.Verdict, erro
 		g.metrics.OnCache(false)
 	}
 
-	resp, err := g.client.CheckPeer(ctx, &smpb.CheckPeerRequest{Ip: ip})
+	resp, err := g.client.CheckPeer(ctx, &smpb.CheckPeerRequest{
+		Ip:         ip,
+		AuthFacing: authFacing,
+	})
 	if err != nil {
 		// Not cached: caching a failure would extend one outage into a
 		// cache-TTL-long blind spot.
@@ -259,27 +268,40 @@ func (g *Gate) CheckPeer(ctx context.Context, ip string) (connfork.Verdict, erro
 	}
 
 	verdict := connfork.Verdict{
-		Banned: resp.Banned,
-		Tarpit: time.Duration(resp.TarpitMs) * time.Millisecond,
-		Reason: resp.Reason,
+		Banned:       resp.Banned,
+		Tarpit:       time.Duration(resp.TarpitMs) * time.Millisecond,
+		Reason:       resp.Reason,
+		ShadowBanned: resp.ShadowBanned,
 	}
 
+	// A shadow ban caches on the deny TTL even though the connection is served:
+	// the underlying ban is real, and re-asking every AllowTTL would spend an
+	// RPC per connection on exactly the addresses that reconnect most.
 	ttl := g.cfg.AllowTTL
-	if verdict.Banned {
+	if verdict.Banned || verdict.ShadowBanned {
 		ttl = g.cfg.DenyTTL
 	}
-	g.cache.put(ip, verdict, ttl)
+	g.cache.put(key, verdict, ttl)
 
 	return verdict, nil
 }
 
+// cacheKey scopes a cached verdict to the listener role it was answered for.
+func cacheKey(ip string, authFacing bool) string {
+	if authFacing {
+		return "a:" + ip
+	}
+	return "i:" + ip
+}
+
 // Forget drops any cached verdict for ip, so an operator unban takes effect
-// without waiting out DenyTTL.
+// without waiting out DenyTTL. Both listener roles are cleared.
 func (g *Gate) Forget(ip string) {
 	if g == nil {
 		return
 	}
-	g.cache.forget(ip)
+	g.cache.forget(cacheKey(ip, true))
+	g.cache.forget(cacheKey(ip, false))
 }
 
 // verdictCache is a bounded, TTL'd verdict cache.

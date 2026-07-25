@@ -59,7 +59,7 @@ func New(mgr *manager.Manager, cfg *config.Config, mc metrics.Collector, filter 
 		gsrv: gsrv,
 	}
 
-	smpb.RegisterSessionServiceServer(gsrv, &sessionServer{mgr: mgr, filter: filter})
+	smpb.RegisterSessionServiceServer(gsrv, &sessionServer{mgr: mgr, filter: filter, authFailDelay: cfg.AuthFailDelay})
 	pb.RegisterMailboxServiceServer(gsrv, &mailboxProxy{mgr: mgr})
 	pb.RegisterFolderServiceServer(gsrv, &folderProxy{mgr: mgr})
 	pb.RegisterDeliveryServiceServer(gsrv, &deliveryProxy{mgr: mgr, metrics: mc})

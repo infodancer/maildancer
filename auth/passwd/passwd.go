@@ -4,6 +4,7 @@ package passwd
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
@@ -177,6 +178,13 @@ func (a *Agent) Authenticate(ctx context.Context, username, password string) (*a
 	a.mu.RUnlock()
 
 	if !exists {
+		// Verify against a decoy hash before reporting the miss (#206). Without
+		// this the nonexistent-account path skips argon2id entirely and returns
+		// in microseconds where a real account takes tens of milliseconds --
+		// a timing oracle for account existence that no amount of care in the
+		// response text can hide. The decoy uses the same parameters, so the
+		// two paths cost the same CPU and take the same time.
+		a.decoyVerify(password)
 		return nil, errors.ErrUserNotFound
 	}
 
@@ -301,6 +309,40 @@ func (a *Agent) HasEncryption(ctx context.Context, username string) (bool, error
 }
 
 // verifyPassword checks if the password matches the stored hash.
+// decoyHash is a valid argon2id hash of a random password, built once on first
+// use. Its plaintext is never retained, so nothing can verify against it -- the
+// point is only that verifying costs what a real hash costs.
+//
+// Built lazily rather than at init so a process that never sees an
+// unknown-account attempt never pays the 64 MB derivation.
+var decoyHash = sync.OnceValue(func() string {
+	// The password is discarded; only its hash matters.
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		// Unreachable in practice. A fixed fallback still exercises argon2id
+		// with the same parameters, which is all the decoy has to do.
+		buf = []byte("decoy-fallback-password-material")
+	}
+	hash, err := HashPassword(base64.RawStdEncoding.EncodeToString(buf))
+	if err != nil {
+		return ""
+	}
+	return hash
+})
+
+// decoyVerify performs a throwaway password verification so that an
+// unknown-account attempt costs the same time and CPU as a wrong password
+// against a real account. The result is deliberately discarded.
+func (a *Agent) decoyVerify(password string) {
+	hash := decoyHash()
+	if hash == "" {
+		return // could not build a decoy; nothing useful to do
+	}
+	// The return value is meaningless: the caller already knows the account
+	// does not exist. Only the work matters.
+	_ = a.verifyPassword(password, hash)
+}
+
 func (a *Agent) verifyPassword(password, hash string) bool {
 	// Parse the hash format: $argon2id$v=19$m=65536,t=3,p=4$salt$hash
 	if !strings.HasPrefix(hash, "$argon2id$") {

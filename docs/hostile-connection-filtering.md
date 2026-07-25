@@ -413,9 +413,10 @@ Each phase is separately shippable and separately reviewable.
 
 1. `limitStore` interface plus `redisLimitStore` behind the existing
    `auth/domain` API; drop the username dimension; delete the sweep goroutine.
-   No behavior change for the daemons.
-2. `CheckPeer`/`ReportPeer` on `SessionService`; policy and Redis in
-   session-manager; `userctl peer list|unban`.
+   No behavior change for the daemons. **Done.**
+2. **Wire the limiter up at all** (see below), then `CheckPeer`/`ReportPeer` on
+   `SessionService`; policy and Redis in session-manager; `userctl peer
+   list|unban`.
 3. `PeerGate` in connfork, with the token accounting, tarpit budget, allowlist,
    and parent cache. Wire all three dispatchers.
 4. Rule 1 recording on the `Login` path plus the uniform failure deadline and
@@ -424,6 +425,36 @@ Each phase is separately shippable and separately reviewable.
 
 Phase 3 lands the enforcement, so nothing before it changes what a client sees;
 phase 4 is where the timing test becomes mandatory.
+
+### The limiter is not wired up, and phase 2 has to fix that first
+
+Found while implementing phase 1. The issue describes the existing limiter as
+losing its state on restart, which is true but understates the situation:
+
+- `session-manager/manager/manager.go` builds the `AuthRouter` with
+  `domain.NewAuthRouter(...)` and **never calls `WithRateLimit`**, so
+  `rateLimiter` is nil and every check, record, and reset is skipped.
+- **Nothing anywhere calls `WithClientIP`.** Even with the limiter enabled,
+  every IP-keyed dimension would see `""`.
+
+Together those mean there has never been any authentication rate limiting in
+production, and that the only dimension that could have fired is the
+username-keyed one that phase 1 removed as a DoS vector. So the >99%-hostile
+traffic in the measured window met no limiter at all.
+
+Two consequences for phase 2, both required before any of this does anything:
+
+1. **`LoginRequest` needs a `client_ip` field.** The daemons know the peer
+   address; session-manager, which performs the authentication, currently has no
+   way to learn it. Without that field the limiter cannot key on anything, and
+   `WithClientIP` has no value to carry. This also gives rule 1 the address it
+   needs to ban.
+2. **session-manager must call `WithRedisRateLimit`** and set the client IP on
+   the context around `AuthenticateWithDomain`.
+
+Note that this makes phase 2 the first point where a real user can be locked
+out, which is worth remembering when picking the initial thresholds: they will
+be applied to production traffic that has never had them before.
 
 ## Left to decide
 

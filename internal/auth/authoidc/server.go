@@ -30,8 +30,11 @@ const (
 )
 
 // sweepInterval is how often the background goroutine drops expired codes and
-// sessions from the store. Five minutes matches the "every few minutes" cadence
-// established by domain/ratelimit.go's cleanup comment.
+// sessions from the store. Five minutes is a conservative cadence for state
+// whose expiry is already enforced on read, so the sweep only reclaims memory.
+// (It used to cite domain/ratelimit.go, whose sweep is gone: that limiter now
+// expires entries by TTL and needs no goroutine. This store still does, since
+// nothing here carries a TTL.)
 const sweepInterval = 5 * time.Minute
 
 // domainEntry holds the runtime state for a configured domain.

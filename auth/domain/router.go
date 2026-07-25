@@ -4,10 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/infodancer/maildancer/auth"
 	autherrors "github.com/infodancer/maildancer/auth/errors"
+	"github.com/redis/go-redis/v9"
 )
 
 // AuthResult contains the authentication session and the resolved domain.
@@ -34,7 +34,6 @@ type AuthRouter struct {
 	provider    DomainProvider
 	fallback    auth.AuthenticationAgent
 	rateLimiter *authRateLimiter
-	cleanupDone chan struct{} // closed to stop the cleanup goroutine
 }
 
 // NewAuthRouter creates a new AuthRouter with no rate limiting.
@@ -49,27 +48,27 @@ func NewAuthRouter(provider DomainProvider, fallback auth.AuthenticationAgent) *
 	}
 }
 
-// WithRateLimit enables authentication rate limiting on the router.
-// Starts a background cleanup goroutine; call Close() to stop it.
+// WithRateLimit enables authentication rate limiting backed by an in-process
+// store. State is not shared with other processes and does not survive a
+// restart, so this is the fallback for deployments without Redis (and the
+// path tests use). Prefer WithRedisRateLimit in production.
 func (r *AuthRouter) WithRateLimit(cfg RateLimitConfig) *AuthRouter {
-	r.rateLimiter = newAuthRateLimiter(cfg)
-	r.cleanupDone = make(chan struct{})
-	go r.cleanupLoop()
+	r.rateLimiter = newAuthRateLimiter(cfg, newMemLimitStore())
 	return r
 }
 
-// cleanupLoop periodically removes expired rate limit entries.
-func (r *AuthRouter) cleanupLoop() {
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			r.rateLimiter.cleanup()
-		case <-r.cleanupDone:
-			return
-		}
+// WithRedisRateLimit enables authentication rate limiting backed by Redis, so
+// counters and lockouts are shared across every daemon and survive restarts
+// (#206). The caller owns client's lifecycle.
+//
+// A nil client falls back to the in-process store rather than silently
+// disabling rate limiting.
+func (r *AuthRouter) WithRedisRateLimit(cfg RateLimitConfig, client *redis.Client) *AuthRouter {
+	if client == nil {
+		return r.WithRateLimit(cfg)
 	}
+	r.rateLimiter = newAuthRateLimiter(cfg, newRedisLimitStore(client))
+	return r
 }
 
 // ParseLocalPart splits a local part on the first '+' into base and extension.
@@ -107,14 +106,16 @@ func (r *AuthRouter) Authenticate(ctx context.Context, username, password string
 // session and the resolved domain. Use this when the caller needs access
 // to domain-specific resources (e.g., MessageStore for pop3d/imapd).
 //
-// Rate limiting: if WithRateLimit has been called, failed attempts are tracked
-// by client IP (from context, see WithClientIP), username, and (IP, username)
-// pair. Exceeding any threshold returns errors.ErrRateLimited.
+// Rate limiting: if WithRateLimit or WithRedisRateLimit has been called, failed
+// attempts are tracked by (IP, username) pair and by IP. Exceeding either
+// threshold returns errors.ErrRateLimited. The client IP must be present in the
+// context (see WithClientIP); without it there is no dimension to key on and no
+// limiting happens.
 func (r *AuthRouter) AuthenticateWithDomain(ctx context.Context, username, password string) (*AuthResult, error) {
 	clientIP := clientIPFromContext(ctx)
 
 	// Check rate limits before attempting authentication.
-	if r.rateLimiter != nil && r.rateLimiter.isLimited(clientIP, username) {
+	if r.rateLimiter != nil && r.rateLimiter.isLimited(ctx, clientIP, username) {
 		slog.Warn("auth rate limited", "username", username, "ip", clientIP)
 		return nil, autherrors.ErrRateLimited
 	}
@@ -122,14 +123,14 @@ func (r *AuthRouter) AuthenticateWithDomain(ctx context.Context, username, passw
 	result, err := r.authenticateInternal(ctx, username, password)
 	if err != nil {
 		if r.rateLimiter != nil {
-			r.rateLimiter.recordFailure(clientIP, username)
+			r.rateLimiter.recordFailure(ctx, clientIP, username)
 		}
 		return nil, err
 	}
 
 	// Clear the (IP, username) pair on success.
 	if r.rateLimiter != nil {
-		r.rateLimiter.recordSuccess(clientIP, username)
+		r.rateLimiter.recordSuccess(ctx, clientIP, username)
 	}
 	return result, nil
 }
@@ -201,12 +202,13 @@ func (r *AuthRouter) UserExists(ctx context.Context, username string) (bool, err
 	return false, nil
 }
 
-// Close stops the rate limit cleanup goroutine (if running). AuthRouter does
-// not own the domain provider or fallback agent; the caller manages their
-// lifecycles independently.
+// Close releases router-owned resources. It is currently a no-op: the rate
+// limiter's expiry is TTL-based, so there is no longer a cleanup goroutine to
+// stop, and the Redis client belongs to the caller. It is retained because
+// callers already defer it and a future owned resource would need it back.
+//
+// AuthRouter does not own the domain provider or fallback agent; the caller
+// manages their lifecycles independently.
 func (r *AuthRouter) Close() error {
-	if r.cleanupDone != nil {
-		close(r.cleanupDone)
-	}
 	return nil
 }

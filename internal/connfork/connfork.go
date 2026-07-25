@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // ConnFD is the file descriptor number at which the handler subprocess
@@ -37,6 +38,28 @@ const ReportFD = 4
 type Listener struct {
 	Address string
 	Mode    string
+}
+
+// Verdict is a PeerGate's answer for one peer.
+type Verdict struct {
+	// Banned denies the connection.
+	Banned bool
+	// Tarpit is how long to hold a denied connection open before closing it.
+	// Zero closes immediately.
+	Tarpit time.Duration
+	// Reason is a coarse policy label, for the dispatcher's logs only.
+	Reason string
+}
+
+// PeerGate decides whether an accepted connection may reach a handler.
+//
+// Implementations must be safe for concurrent use. A returned error means the
+// gate could not reach a verdict; the dispatcher then allows the connection
+// (see Config.StrictGate), because a broken gate must not become a total
+// outage. Implementations should not apply their own timeout policy -- the
+// dispatcher bounds the call with Config.GateTimeout.
+type PeerGate interface {
+	CheckPeer(ctx context.Context, ip string) (Verdict, error)
 }
 
 // Config describes how the dispatcher spawns handler subprocesses.
@@ -73,8 +96,55 @@ type Config struct {
 	// dispatcher stops accepting, so excess connections queue in the
 	// kernel backlog rather than being accepted and dropped. 0 = unlimited.
 	MaxConns int
-	Logger   *slog.Logger
+
+	// Gate, when non-nil, is consulted for every accepted connection before
+	// a handler is spawned -- so a banned peer costs no subprocess, no TLS
+	// handshake, and no password hash. nil allows every connection.
+	Gate PeerGate
+
+	// GateTimeout bounds a single Gate call. Default 2s. A timeout is a gate
+	// error, handled per StrictGate.
+	GateTimeout time.Duration
+
+	// StrictGate makes a gate error deny the connection instead of allowing
+	// it. Off by default: failing closed turns an outage in the gate's
+	// backing store into a refusal of all mail, which is the outcome an
+	// attacker wants. Deployments that would rather be down than unprotected
+	// can turn it on.
+	StrictGate bool
+
+	// MaxTarpit caps connections held in the tarpit concurrently. Default
+	// 256; 0 uses the default, negative disables tarpitting (denied
+	// connections close immediately).
+	//
+	// This budget is deliberately separate from MaxConns. A tarpit that held
+	// handler slots would let a spray fill the handler budget with sleeping
+	// sockets and starve legitimate clients -- the tarpit would become the
+	// vulnerability it exists to mitigate. A tarpitted connection costs one
+	// descriptor and one goroutine, with no handler process behind it, so the
+	// two budgets can be sized independently.
+	MaxTarpit int
+
+	// OnGateVerdict, when non-nil, is called once per gate consultation with
+	// "allow", "deny", or "error".
+	OnGateVerdict func(verdict string)
+	// OnTarpitStart and OnTarpitEnd bracket a tarpitted connection, for a
+	// gauge. OnTarpitEnd is guaranteed to follow OnTarpitStart.
+	OnTarpitStart func()
+	OnTarpitEnd   func()
+	// OnTarpitRejected is called when a denied connection is closed
+	// immediately because the tarpit budget was full. A nonzero rate means
+	// MaxTarpit is undersized.
+	OnTarpitRejected func()
+
+	Logger *slog.Logger
 }
+
+// Dispatcher-side defaults.
+const (
+	defaultGateTimeout = 2 * time.Second
+	defaultMaxTarpit   = 256
+)
 
 // Server accepts connections and spawns one handler subprocess per
 // connection.
@@ -82,6 +152,9 @@ type Server struct {
 	cfg    Config
 	wg     sync.WaitGroup
 	tokens chan struct{} // nil when unlimited
+	// tarpitTokens is the tarpit's own budget, separate from tokens so held
+	// connections can never starve handlers. nil when tarpitting is disabled.
+	tarpitTokens chan struct{}
 }
 
 // NewServer creates a dispatcher from cfg.
@@ -89,9 +162,18 @@ func NewServer(cfg Config) *Server {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.GateTimeout == 0 {
+		cfg.GateTimeout = defaultGateTimeout
+	}
 	s := &Server{cfg: cfg}
 	if cfg.MaxConns > 0 {
 		s.tokens = make(chan struct{}, cfg.MaxConns)
+	}
+	switch {
+	case cfg.MaxTarpit > 0:
+		s.tarpitTokens = make(chan struct{}, cfg.MaxTarpit)
+	case cfg.MaxTarpit == 0:
+		s.tarpitTokens = make(chan struct{}, defaultMaxTarpit)
 	}
 	return s
 }
@@ -157,7 +239,7 @@ func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, lc Listener) {
 				return
 			}
 		}
-		go s.spawnHandler(conn, lc)
+		go s.spawnHandler(ctx, conn, lc)
 	}
 }
 
@@ -181,10 +263,127 @@ func (s *Server) release() {
 	}
 }
 
+// gateVerdict consults the configured gate for clientIP. It reports the
+// verdict and whether the connection is denied.
+//
+// A gate error allows the connection unless StrictGate is set. The error is
+// logged at error level and counted, deliberately: a silent fail-open is a
+// protection mechanism that can be switched off by breaking the gate's backing
+// store, and nobody would notice.
+func (s *Server) gateVerdict(ctx context.Context, clientIP string) (Verdict, bool) {
+	if s.cfg.Gate == nil || clientIP == "" {
+		return Verdict{}, false
+	}
+
+	gctx, cancel := context.WithTimeout(ctx, s.cfg.GateTimeout)
+	defer cancel()
+
+	verdict, err := s.cfg.Gate.CheckPeer(gctx, clientIP)
+	switch {
+	case err != nil:
+		s.reportVerdict("error")
+		s.cfg.Logger.Error("peer gate check failed",
+			slog.String("client_ip", clientIP),
+			slog.Bool("strict", s.cfg.StrictGate),
+			slog.String("error", err.Error()))
+		if !s.cfg.StrictGate {
+			return Verdict{}, false
+		}
+		return Verdict{Banned: true, Reason: "gate_error"}, true
+	case verdict.Banned:
+		s.reportVerdict("deny")
+		s.cfg.Logger.Info("connection denied by peer gate",
+			slog.String("client_ip", clientIP),
+			slog.String("reason", verdict.Reason))
+		return verdict, true
+	default:
+		s.reportVerdict("allow")
+		return verdict, false
+	}
+}
+
+func (s *Server) reportVerdict(verdict string) {
+	if s.cfg.OnGateVerdict != nil {
+		s.cfg.OnGateVerdict(verdict)
+	}
+}
+
+// tarpitConn holds a denied connection open for verdict.Tarpit, then closes it
+// without sending anything.
+//
+// Holding costs one descriptor and one goroutine and consumes an attacker
+// connection slot for the duration. Nothing is written: a banner or an error
+// reply would tell a scanner it reached a live service, whereas a silent hold
+// followed by a close is indistinguishable from a blackhole route.
+//
+// The wait is a blocking read rather than a sleep, so a peer that gives up
+// early frees the descriptor immediately. Anything it sends is discarded.
+func (s *Server) tarpitConn(ctx context.Context, conn net.Conn, clientIP string, verdict Verdict) {
+	if verdict.Tarpit <= 0 || s.tarpitTokens == nil {
+		_ = conn.Close()
+		return
+	}
+
+	// Non-blocking: over the cap, close immediately rather than queueing.
+	// Queueing would reintroduce exactly the unbounded hold the separate
+	// budget exists to prevent.
+	select {
+	case s.tarpitTokens <- struct{}{}:
+	default:
+		if s.cfg.OnTarpitRejected != nil {
+			s.cfg.OnTarpitRejected()
+		}
+		s.cfg.Logger.Warn("tarpit budget full; closing denied connection immediately",
+			slog.String("client_ip", clientIP),
+			slog.Int("max_tarpit", cap(s.tarpitTokens)))
+		_ = conn.Close()
+		return
+	}
+
+	if s.cfg.OnTarpitStart != nil {
+		s.cfg.OnTarpitStart()
+	}
+	defer func() {
+		<-s.tarpitTokens
+		if s.cfg.OnTarpitEnd != nil {
+			s.cfg.OnTarpitEnd()
+		}
+		_ = conn.Close()
+	}()
+
+	deadline := time.Now().Add(verdict.Tarpit)
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		// Without a deadline the read below could block indefinitely, so fall
+		// back to closing now rather than risk leaking the descriptor.
+		return
+	}
+
+	// Shutdown must not wait out every held connection.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.SetReadDeadline(time.Now())
+		case <-done:
+		}
+	}()
+
+	buf := make([]byte, 512)
+	for {
+		if _, err := conn.Read(buf); err != nil {
+			return // deadline reached, peer hung up, or shutdown
+		}
+		if !time.Now().Before(deadline) {
+			return
+		}
+	}
+}
+
 // spawnHandler passes conn to a handler subprocess and reaps it
 // asynchronously. It owns one limiter token, released when the handler is
 // reaped or on any failure to start it.
-func (s *Server) spawnHandler(conn net.Conn, lc Listener) {
+func (s *Server) spawnHandler(ctx context.Context, conn net.Conn, lc Listener) {
 	started := false
 	defer func() {
 		if !started {
@@ -193,6 +392,21 @@ func (s *Server) spawnHandler(conn net.Conn, lc Listener) {
 	}()
 
 	clientIP := RemoteIP(conn)
+
+	// Consult the gate before spending anything on this connection. A denial
+	// hands the socket to the tarpit, which takes its own budget; the handler
+	// token this goroutine holds is returned by the deferred release above.
+	//
+	// The token is held for the duration of the gate call, so a burst of
+	// banned peers can occupy handler slots until their checks resolve. That
+	// window is bounded by GateTimeout and is normally a cache hit inside the
+	// gate implementation. The alternative -- consulting the gate before
+	// acquiring a token -- would mean accepting connections we have no slot
+	// for, which is what acquiring before Accept deliberately avoids.
+	if verdict, denied := s.gateVerdict(ctx, clientIP); denied {
+		go s.tarpitConn(ctx, conn, clientIP, verdict)
+		return
+	}
 
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok {

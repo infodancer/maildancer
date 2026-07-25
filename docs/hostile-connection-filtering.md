@@ -237,7 +237,7 @@ handler must still consume the deadline -- and should perform a dummy argon2id
 verify against a fixed decoy hash, so that CPU and timing profiles match as well
 as wall-clock does.
 
-**Recommended D = 5s, not 30s.** The reasoning:
+**D = 5s, not 30s** (decided 2026-07-24). The reasoning:
 
 - 30s exceeds or brushes the idle/response timeout of several common IMAP
   clients. A real user who typos their password would get "connection timed out"
@@ -427,10 +427,6 @@ phase 4 is where the timing test becomes mandatory.
 
 ## Left to decide
 
-- **D = 5s vs 30s** for the uniform auth-failure delay. The doc recommends 5s
-  and puts the 30s hold at accept time instead, where there is no legitimate
-  client to inconvenience. If real-user lockout tolerance is not a concern, 30s
-  on both is defensible.
 - **Graduated ban TTL vs fixed.** Strike counters are a small amount of extra
   state for a policy we have no data on yet.
 - Whether `ban_on_password_failures` ships as a knob in phase 4 or waits until

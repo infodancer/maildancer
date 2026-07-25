@@ -17,6 +17,7 @@ import (
 	"github.com/emersion/go-smtp"
 	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
+	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -911,6 +912,32 @@ func (s *Session) Logout() error {
 	}
 	s.logger.Debug("session logout")
 	return nil
+}
+
+// recordTLSConnection counts c's TLS connection, if it has one, at session
+// creation (#207). Neither TLS path offers a hook of its own: implicit TLS
+// hands go-smtp an already-wrapped conn, and STARTTLS is performed inside
+// go-smtp. Session creation is where both are observable exactly once:
+//
+//   - SMTPS: go-smtp builds the session lazily at EHLO, by which point the
+//     implicit handshake has completed.
+//   - STARTTLS: the pre-upgrade session sees cleartext and does not count;
+//     go-smtp discards it after the handshake, and the replacement session
+//     built at the next EHLO sees TLS and counts once.
+//
+// Counting at session *end* instead would double-count STARTTLS, because
+// go-smtp assigns the upgraded conn before calling Logout on the session it is
+// discarding, so both sessions would observe the same TLS connection.
+//
+// HandshakeComplete is required, not merely the presence of a *tls.Conn:
+// implicit TLS wraps the connection before the handshake runs, so counting on
+// the wrapper alone would credit failed handshakes as established TLS
+// sessions -- the failure mode of #199.
+func recordTLSConnection(c *smtp.Conn, collector metrics.Collector) {
+	st, ok := sessionConnTLSState(c)
+	if ok && st.HandshakeComplete {
+		collector.TLSConnectionEstablished()
+	}
 }
 
 // sessionExtractRecipientDomain extracts the domain from the first recipient's email address.

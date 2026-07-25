@@ -51,13 +51,59 @@ func runPeerSubcommand(args []string, configPath string) error {
 	switch args[0] {
 	case "list":
 		return runPeerList(ctx, filter, os.Stdout)
+	case "good":
+		return runPeerGood(ctx, filter, os.Stdout)
 	case "unban":
 		return runPeerUnban(ctx, filter, args[1:])
 	case "ban":
 		return runPeerBan(ctx, filter, args[1:])
 	default:
-		return fmt.Errorf("peer: unknown action %q (expected list|unban|ban)", args[0])
+		return fmt.Errorf("peer: unknown action %q (expected list|good|unban|ban)", args[0])
 	}
+}
+
+// runPeerGood lists known-good addresses with both sides of the exemption's
+// tradeoff: how many real logins each has, and how many bans its exemption has
+// waved through. An address with a nonzero suppressed count is carrying a real
+// user *and* hostile traffic, which is the case worth an operator's judgement.
+func runPeerGood(ctx context.Context, filter *peerfilter.Filter, out io.Writer) error {
+	entries, err := filter.ListGood(ctx)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(out, "No known-good peers.")
+		return nil
+	}
+
+	// Most suppressed bans first: those are the addresses where the tradeoff is
+	// actually being exercised.
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].SuppressedBans != entries[j].SuppressedBans {
+			return entries[i].SuppressedBans > entries[j].SuppressedBans
+		}
+		return entries[i].Prefix < entries[j].Prefix
+	})
+
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "PEER\tLOGINS\tBANS SUPPRESSED\tEXPIRES IN")
+	var suppressed int
+	for _, e := range entries {
+		suppressed += e.SuppressedBans
+		fmt.Fprintf(tw, "%s\t%d\t%d\t%s\n",
+			e.Prefix, e.SuccessfulAuths, e.SuppressedBans, formatTTL(e.TTL))
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "\n%d known-good peer(s), %d ban(s) suppressed.\n",
+		len(entries), suppressed)
+	if suppressed > 0 {
+		fmt.Fprintln(out, "Addresses with suppressed bans carry both a real user "+
+			"and hostile traffic.")
+	}
+	return nil
 }
 
 // openPeerFilter builds a Filter from the shared config file.

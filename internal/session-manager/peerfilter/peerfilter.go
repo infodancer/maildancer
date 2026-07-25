@@ -31,9 +31,11 @@ import (
 
 // Redis key prefixes. Every key here is written by session-manager only.
 const (
-	keyBan     = "peer:ban:"
-	keyStrikes = "peer:strikes:"
-	keyAbuse   = "smtpd:abuse:ip:"
+	keyBan        = "peer:ban:"
+	keyStrikes    = "peer:strikes:"
+	keyAbuse      = "smtpd:abuse:ip:"
+	keyGood       = "peer:good:"
+	keySuppressed = "peer:suppressed:"
 )
 
 // strikeTTL is how long a released ban is remembered for the purpose of
@@ -93,12 +95,44 @@ type Config struct {
 	AbuseWindow time.Duration `toml:"-"`
 	// AbuseWindowStr is the TOML-friendly form of AbuseWindow.
 	AbuseWindowStr string `toml:"abuse_window"`
+
+	// KnownGood exempts addresses with a recent successful authentication from
+	// connection-level bans. Default on.
+	//
+	// The tradeoff is real and deliberate: a NAT or hosting address can carry
+	// both a legitimate user and hostile traffic, and this chooses the user.
+	// It is bounded two ways -- see RevokeAfter below, and note that it never
+	// exempts the authentication rate limiter, only the connection ban.
+	KnownGood *bool `toml:"known_good"`
+
+	// GoodTTL is how long a successful authentication marks an address as
+	// known-good. Default 720h (30 days), refreshed on each success.
+	//
+	// Generous on purpose. A banned address cannot authenticate -- the gate
+	// closes the connection first -- so known-good status can only ever be
+	// established *before* a ban. Too short a TTL means a real user who is
+	// away for a while loses the exemption exactly when a spray from a
+	// recycled address would need it.
+	GoodTTL time.Duration `toml:"-"`
+	// GoodTTLStr is the TOML-friendly form of GoodTTL.
+	GoodTTLStr string `toml:"good_ttl"`
+
+	// RevokeAfter is how many suppressed bans an address may accumulate before
+	// its known-good status is revoked and bans apply normally. Default 10;
+	// negative disables revocation, matching the max_tarpit convention.
+	//
+	// This is the bound that keeps one compromised credential from buying an
+	// indefinite bypass: an address that keeps earning bans stops being
+	// trusted, however many real logins it has. Disabling it is a deliberate
+	// choice to trust any address a real user has ever authenticated from.
+	RevokeAfter int `toml:"revoke_after"`
 }
 
 // Defaults returns the default policy. Deliberately conservative on
 // escalation and generous on the tarpit.
 func Defaults() Config {
 	enabled := true
+	knownGood := true
 	return Config{
 		Enabled:      &enabled,
 		Allowlist:    []string{"127.0.0.0/8", "::1/128"},
@@ -106,6 +140,9 @@ func Defaults() Config {
 		BanTTLRepeat: 7 * 24 * time.Hour,
 		AcceptTarpit: 30 * time.Second,
 		AbuseWindow:  time.Hour,
+		KnownGood:    &knownGood,
+		GoodTTL:      30 * 24 * time.Hour,
+		RevokeAfter:  10,
 	}
 }
 
@@ -113,6 +150,12 @@ func Defaults() Config {
 // enabled.
 func (c *Config) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
+}
+
+// KnownGoodEnabled reports whether the known-good exemption applies. Absent
+// configuration means enabled.
+func (c *Config) KnownGoodEnabled() bool {
+	return c.KnownGood == nil || *c.KnownGood
 }
 
 // Normalize parses the duration strings and fills zero values with defaults.
@@ -130,6 +173,7 @@ func (c *Config) Normalize() error {
 		{"ban_ttl_repeat", c.BanTTLRepeatStr, &c.BanTTLRepeat, d.BanTTLRepeat},
 		{"accept_tarpit", c.AcceptTarpitStr, &c.AcceptTarpit, d.AcceptTarpit},
 		{"abuse_window", c.AbuseWindowStr, &c.AbuseWindow, d.AbuseWindow},
+		{"good_ttl", c.GoodTTLStr, &c.GoodTTL, d.GoodTTL},
 	} {
 		if f.str != "" {
 			parsed, err := time.ParseDuration(f.str)
@@ -148,6 +192,9 @@ func (c *Config) Normalize() error {
 	// check on the string having been set.
 	if c.AcceptTarpitStr == "0" || c.AcceptTarpitStr == "0s" {
 		c.AcceptTarpit = 0
+	}
+	if c.RevokeAfter == 0 {
+		c.RevokeAfter = d.RevokeAfter
 	}
 	return nil
 }
@@ -241,7 +288,183 @@ func (f *Filter) Check(ctx context.Context, ip string) Verdict {
 	if n == 0 {
 		return Verdict{}
 	}
+
+	// Only a banned address pays for the known-good lookup. Checking it first
+	// would add a Redis round trip to every accepted connection, and the
+	// overwhelming majority are not banned.
+	if f.suppressBan(ctx, prefix) {
+		return Verdict{}
+	}
+
 	return Verdict{Banned: true, Tarpit: f.cfg.AcceptTarpit, Reason: ReasonBanned}
+}
+
+// suppressBan reports whether prefix's ban should be ignored because a real
+// user has authenticated successfully from it recently (#206).
+//
+// The exemption covers the *connection ban only*. It never touches the
+// authentication rate limiter, which lives in auth/domain and keys on the same
+// address: a stolen credential buys the attacker connectivity from that
+// address, not unlimited password guessing.
+//
+// Each suppression is counted. Past RevokeAfter the known-good marker is
+// dropped and bans apply normally, so an address that keeps earning bans stops
+// being trusted however many real logins it has -- the bound that keeps one
+// compromised credential from being an indefinite bypass.
+func (f *Filter) suppressBan(ctx context.Context, prefix string) bool {
+	if !f.cfg.KnownGoodEnabled() {
+		return false
+	}
+
+	good, err := f.client.Get(ctx, keyGood+prefix).Result()
+	switch {
+	case errors.Is(err, redis.Nil):
+		return false // not known-good; the common case for a banned address
+	case err != nil:
+		// Fail toward enforcing the ban. The address is banned on evidence;
+		// the exemption is a courtesy, and guessing at it during an outage
+		// would be the wrong way to fail.
+		f.logger.Error("known-good lookup failed, enforcing ban",
+			"error", err.Error(), "peer", prefix)
+		return false
+	}
+
+	suppressed, err := f.client.Incr(ctx, keySuppressed+prefix).Result()
+	if err != nil {
+		// Losing the count is not worth denying a known-good user, but it does
+		// mean revocation cannot progress -- worth a warning.
+		f.logger.Warn("suppression counter failed",
+			"error", err.Error(), "peer", prefix)
+		return true
+	}
+	if suppressed == 1 {
+		if err := f.client.Expire(ctx, keySuppressed+prefix, f.cfg.GoodTTL).Err(); err != nil {
+			f.logger.Warn("suppression counter TTL failed",
+				"error", err.Error(), "peer", prefix)
+		}
+	}
+
+	if f.cfg.RevokeAfter > 0 && suppressed > int64(f.cfg.RevokeAfter) {
+		if err := f.client.Del(ctx, keyGood+prefix).Err(); err != nil {
+			f.logger.Error("known-good revocation failed",
+				"error", err.Error(), "peer", prefix)
+		}
+		f.logger.Warn("known-good status revoked; ban now enforced",
+			"peer", prefix,
+			"suppressed", suppressed,
+			"revoke_after", f.cfg.RevokeAfter,
+			"successful_auths", good)
+		return false
+	}
+
+	// Warn, not info: this is the measurement that makes the tradeoff
+	// visible. An address appearing here repeatedly is carrying both a real
+	// user and hostile traffic, which is exactly the case worth reviewing.
+	f.logger.Warn("ban suppressed for known-good peer",
+		"peer", prefix,
+		"successful_auths", good,
+		"suppressed", suppressed)
+	return true
+}
+
+// RecordGood notes a successful authentication from ip, marking the address
+// known-good for GoodTTL and refreshing the window.
+//
+// Only real accounts reach this: it is called after session-manager has
+// authenticated a user and established a session. Inbound SMTP never
+// authenticates, so mail reception cannot mark an address good.
+//
+// Note the ordering constraint this lives under: a banned address cannot
+// authenticate, because the gate closes the connection before any protocol
+// runs. Known-good status is therefore only ever established *before* a ban,
+// never as a way out of one. Operator recovery for a wrongly banned address is
+// `userctl peer unban`.
+func (f *Filter) RecordGood(ctx context.Context, ip string) error {
+	if f == nil || !f.cfg.KnownGoodEnabled() {
+		return nil
+	}
+	if f.Allowed(ip) {
+		return nil // already exempt; nothing to record
+	}
+
+	prefix := NormalizePrefix(ip)
+	if prefix == "" {
+		return fmt.Errorf("unparseable peer address %q", ip)
+	}
+
+	n, err := f.client.Incr(ctx, keyGood+prefix).Result()
+	if err != nil {
+		return fmt.Errorf("record known-good peer: %w", err)
+	}
+	// Unconditional, unlike the abuse counters: this TTL is a sliding window
+	// of trust that every success should extend, not a fixed counting window.
+	if err := f.client.Expire(ctx, keyGood+prefix, f.cfg.GoodTTL).Err(); err != nil {
+		return fmt.Errorf("refresh known-good TTL: %w", err)
+	}
+	if n == 1 {
+		f.logger.Info("peer marked known-good", "peer", prefix)
+	}
+	return nil
+}
+
+// GoodEntry is one known-good address in a listing.
+type GoodEntry struct {
+	// Prefix is the address or IPv6 /64, as stored.
+	Prefix string
+	// SuccessfulAuths is how many successful authentications have come from it
+	// within the current window.
+	SuccessfulAuths int
+	// SuppressedBans is how many bans the exemption has waved through. A
+	// nonzero value means this address carries hostile traffic too.
+	SuppressedBans int
+	// TTL is how long the known-good status has left.
+	TTL time.Duration
+}
+
+// ListGood enumerates known-good addresses, so both halves of the tradeoff are
+// measurable: how many real users the exemption is protecting, and how much
+// hostile traffic it is letting through.
+func (f *Filter) ListGood(ctx context.Context) ([]GoodEntry, error) {
+	if f == nil {
+		return nil, nil
+	}
+
+	var (
+		entries []GoodEntry
+		cursor  uint64
+	)
+	for {
+		keys, next, err := f.client.Scan(ctx, cursor, keyGood+"*", 256).Result()
+		if err != nil {
+			return nil, fmt.Errorf("scan known-good peers: %w", err)
+		}
+		for _, key := range keys {
+			prefix := strings.TrimPrefix(key, keyGood)
+			entry := GoodEntry{Prefix: prefix}
+
+			if v, err := f.client.Get(ctx, key).Result(); err == nil {
+				if n, convErr := strconv.Atoi(v); convErr == nil {
+					entry.SuccessfulAuths = n
+				}
+			} else if !errors.Is(err, redis.Nil) {
+				return nil, fmt.Errorf("read known-good %q: %w", prefix, err)
+			}
+			if ttl, err := f.client.TTL(ctx, key).Result(); err == nil && ttl > 0 {
+				entry.TTL = ttl
+			}
+			if v, err := f.client.Get(ctx, keySuppressed+prefix).Result(); err == nil {
+				if n, convErr := strconv.Atoi(v); convErr == nil {
+					entry.SuppressedBans = n
+				}
+			}
+			entries = append(entries, entry)
+		}
+		if next == 0 {
+			break
+		}
+		cursor = next
+	}
+	return entries, nil
 }
 
 // Ban bans a peer. reason is recorded as the stored value for the operator's
@@ -347,7 +570,12 @@ func (f *Filter) Unban(ctx context.Context, ip string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("delete peer ban: %w", err)
 	}
-	if err := f.client.Del(ctx, keyStrikes+prefix).Err(); err != nil {
+	// Strikes and the suppression counter go too, for the same reason: an
+	// operator undoing a false positive should not leave the address one strike
+	// from a longer ban, nor one suppression from losing its known-good status.
+	// The known-good marker itself is left alone -- it records real logins,
+	// which an unban does not invalidate.
+	if err := f.client.Del(ctx, keyStrikes+prefix, keySuppressed+prefix).Err(); err != nil {
 		return removed > 0, fmt.Errorf("delete peer strikes: %w", err)
 	}
 	return removed > 0, nil

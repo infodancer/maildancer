@@ -101,6 +101,7 @@ func (b *Backend) NewSession(c *smtp.Conn) (smtp.Session, error) {
 	// Record connection opened
 	if b.collector != nil {
 		b.collector.ConnectionOpened()
+		recordTLSConnection(c, b.collector)
 	}
 
 	clientIP := extractIPFromConn(c.Conn())

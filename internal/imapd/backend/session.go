@@ -3,6 +3,7 @@ package backend
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -376,8 +377,36 @@ func (s *Session) Close() error {
 			s.logger.Warn("store close error", "error", err)
 		}
 	}
+	s.recordTLSConnection()
 	s.collector.ConnectionClosed()
 	return nil
+}
+
+// recordTLSConnection counts the connection's TLS session, if it had one,
+// exactly once (#207). Neither TLS path offers a hook of its own: implicit TLS
+// hands go-imap an already-wrapped conn, and STARTTLS is performed inside
+// go-imap. Session close is the one place both are observable exactly once --
+// go-imap creates the session before the greeting (so before the implicit
+// handshake has run) and keeps the same session across a STARTTLS upgrade,
+// which rules out counting at session creation. Conn.NetConn() returns the
+// current transport, which go-imap swaps for the *tls.Conn on upgrade.
+//
+// Counting at session end costs nothing: handler metrics only reach the
+// dispatcher over the report pipe at process exit anyway (#188), so an earlier
+// count would not surface the number any sooner.
+//
+// HandshakeComplete is required, not merely the presence of a *tls.Conn:
+// implicit TLS wraps the connection before the handshake runs, so counting on
+// the wrapper alone would credit failed handshakes as established TLS
+// sessions -- the failure mode of #199.
+func (s *Session) recordTLSConnection() {
+	if s.conn == nil {
+		return // unit-test sessions are built without a transport
+	}
+	tc, ok := s.conn.NetConn().(*tls.Conn)
+	if ok && tc.ConnectionState().HandshakeComplete {
+		s.collector.TLSConnectionEstablished()
+	}
 }
 
 // Subscribe is a no-op (subscription state not tracked).

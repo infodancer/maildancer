@@ -2,7 +2,7 @@ package domain
 
 import (
 	"context"
-	"sync"
+	"log/slog"
 	"time"
 )
 
@@ -27,6 +27,17 @@ func clientIPFromContext(ctx context.Context) string {
 	return ip
 }
 
+// Redis key prefixes for the authentication limiter. Counters and lockout
+// markers are separate keys so a lockout outlives the window that earned it.
+// The peer-ban keyspace (peer:*) belongs to session-manager and is not
+// written here.
+const (
+	keyFailIPUser = "auth:fail:ipuser:"
+	keyFailIP     = "auth:fail:ip:"
+	keyLockIPUser = "auth:lock:ipuser:"
+	keyLockIP     = "auth:lock:ip:"
+)
+
 // RateLimitConfig holds thresholds for authentication rate limiting.
 type RateLimitConfig struct {
 	// MaxFailuresPerIPUser is the max failed attempts for a single (IP, username)
@@ -37,11 +48,7 @@ type RateLimitConfig struct {
 	// usernames) within the window before lockout. Default: 20.
 	MaxFailuresPerIP int
 
-	// MaxFailuresPerUser is the max failed attempts for a single username (across
-	// all IPs) within the window before lockout. Default: 10.
-	MaxFailuresPerUser int
-
-	// Window is the sliding window for counting failures. Default: 5 minutes.
+	// Window is how long a failure counts toward a threshold. Default: 5 minutes.
 	Window time.Duration
 
 	// Lockout is how long to block after the threshold is exceeded. Default: 15 minutes.
@@ -53,162 +60,125 @@ func DefaultRateLimitConfig() RateLimitConfig {
 	return RateLimitConfig{
 		MaxFailuresPerIPUser: 5,
 		MaxFailuresPerIP:     20,
-		MaxFailuresPerUser:   10,
 		Window:               5 * time.Minute,
 		Lockout:              15 * time.Minute,
 	}
 }
 
-// authRateLimiter tracks failed authentication attempts across three dimensions:
-// (IP, username), per-IP, and per-username.
+// authRateLimiter tracks failed authentication attempts across two dimensions:
+// (IP, username) and per-IP.
+//
+// There is deliberately no per-username dimension. Locking an account across
+// all source addresses is a cheap denial of service against a real user: the
+// attack measured in #206 was distributed across 59 addresses, so an attacker
+// could lock any known account out for the price of a handful of requests.
+// Since every username in that traffic was nonexistent, a username-keyed
+// lockout would also have protected nothing. Aggregate per-username failure
+// counts are worth alerting on, but not enforcing.
+//
+// Consequently an empty client IP disables this limiter entirely -- there is
+// no dimension left to key on. Callers must set the IP with WithClientIP.
+//
+// This limiter covers wrong-password-on-a-real-account only: the graduated,
+// DoS-sensitive case. The nonexistent-account signal is handled by the
+// peer-ban path in session-manager, which bans on the first attempt rather
+// than counting.
 type authRateLimiter struct {
-	mu     sync.Mutex
-	cfg    RateLimitConfig
-	now    func() time.Time // for testing
-	ipUser map[string]*failureBucket
-	ip     map[string]*failureBucket
-	user   map[string]*failureBucket
+	cfg   RateLimitConfig
+	store limitStore
 }
 
-// failureBucket tracks failures within a sliding window and lockout state.
-type failureBucket struct {
-	failures  []time.Time
-	lockUntil time.Time
+func newAuthRateLimiter(cfg RateLimitConfig, store limitStore) *authRateLimiter {
+	return &authRateLimiter{cfg: cfg, store: store}
 }
 
-func newAuthRateLimiter(cfg RateLimitConfig) *authRateLimiter {
-	return &authRateLimiter{
-		cfg:    cfg,
-		now:    time.Now,
-		ipUser: make(map[string]*failureBucket),
-		ip:     make(map[string]*failureBucket),
-		user:   make(map[string]*failureBucket),
-	}
+// ipUserKey builds the (IP, username) key suffix. The separator cannot occur
+// in either component, so distinct pairs cannot collide.
+func ipUserKey(ip, username string) string {
+	return ip + "\x00" + username
 }
 
-// isLimited checks whether the given IP and username are currently rate-limited.
-func (rl *authRateLimiter) isLimited(ip, username string) bool {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := rl.now()
-
-	// Check (IP, username) pair.
-	if ip != "" && username != "" {
-		key := ip + "\x00" + username
-		if b := rl.ipUser[key]; b != nil {
-			if now.Before(b.lockUntil) {
-				return true
-			}
-		}
+// isLimited reports whether the given IP and username are currently locked out.
+//
+// It fails open on store errors: a Redis outage disables bruteforce protection,
+// which is bad, but failing closed would lock out every legitimate user for the
+// duration of the same outage, which is the outcome the attacker wants anyway.
+// Errors are logged at warn so the fail-open is visible rather than silent.
+func (rl *authRateLimiter) isLimited(ctx context.Context, ip, username string) bool {
+	if ip == "" {
+		return false
 	}
 
-	// Check per-IP.
-	if ip != "" {
-		if b := rl.ip[ip]; b != nil {
-			if now.Before(b.lockUntil) {
-				return true
-			}
-		}
-	}
-
-	// Check per-username.
+	keys := make([]string, 0, 2)
 	if username != "" {
-		if b := rl.user[username]; b != nil {
-			if now.Before(b.lockUntil) {
-				return true
-			}
+		keys = append(keys, keyLockIPUser+ipUserKey(ip, username))
+	}
+	keys = append(keys, keyLockIP+ip)
+
+	for _, key := range keys {
+		locked, err := rl.store.exists(ctx, key)
+		if err != nil {
+			slog.Warn("auth rate limit check failed, allowing attempt",
+				"error", err.Error(), "ip", ip)
+			return false
+		}
+		if locked {
+			return true
 		}
 	}
-
 	return false
 }
 
-// recordFailure records a failed authentication attempt and triggers lockout
-// if thresholds are exceeded.
-func (rl *authRateLimiter) recordFailure(ip, username string) {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := rl.now()
-	cutoff := now.Add(-rl.cfg.Window)
-
-	if ip != "" && username != "" {
-		key := ip + "\x00" + username
-		rl.record(rl.ipUser, key, now, cutoff, rl.cfg.MaxFailuresPerIPUser)
+// recordFailure records a failed authentication attempt and writes a lockout
+// marker if a threshold is reached. Store errors are logged and otherwise
+// ignored, for the same fail-open reason as isLimited.
+func (rl *authRateLimiter) recordFailure(ctx context.Context, ip, username string) {
+	if ip == "" {
+		return
 	}
-	if ip != "" {
-		rl.record(rl.ip, ip, now, cutoff, rl.cfg.MaxFailuresPerIP)
-	}
+
 	if username != "" {
-		rl.record(rl.user, username, now, cutoff, rl.cfg.MaxFailuresPerUser)
+		rl.count(ctx, keyFailIPUser+ipUserKey(ip, username),
+			keyLockIPUser+ipUserKey(ip, username), rl.cfg.MaxFailuresPerIPUser)
+	}
+	rl.count(ctx, keyFailIP+ip, keyLockIP+ip, rl.cfg.MaxFailuresPerIP)
+}
+
+// count increments the failure counter at counterKey and, once it reaches
+// maxFailures, writes the lockout marker at lockKey.
+func (rl *authRateLimiter) count(ctx context.Context, counterKey, lockKey string, maxFailures int) {
+	if maxFailures <= 0 {
+		return
+	}
+
+	n, err := rl.store.incr(ctx, counterKey, rl.cfg.Window)
+	if err != nil {
+		slog.Warn("auth failure counter increment failed",
+			"error", err.Error(), "key", counterKey)
+		return
+	}
+	if n < int64(maxFailures) {
+		return
+	}
+	if err := rl.store.set(ctx, lockKey, rl.cfg.Lockout); err != nil {
+		slog.Warn("auth lockout write failed",
+			"error", err.Error(), "key", lockKey)
 	}
 }
 
-// record adds a failure timestamp to the bucket and triggers lockout if needed.
-func (rl *authRateLimiter) record(m map[string]*failureBucket, key string, now, cutoff time.Time, maxFailures int) {
-	b := m[key]
-	if b == nil {
-		b = &failureBucket{}
-		m[key] = b
+// recordSuccess clears the (IP, username) failure counter and lockout, so a
+// successful login resets that pair.
+//
+// The per-IP counter is deliberately left alone: one account authenticating
+// successfully should not reset the limit for other accounts being attacked
+// from the same address.
+func (rl *authRateLimiter) recordSuccess(ctx context.Context, ip, username string) {
+	if ip == "" || username == "" {
+		return
 	}
-
-	// Prune old entries outside the window.
-	pruned := b.failures[:0]
-	for _, t := range b.failures {
-		if t.After(cutoff) {
-			pruned = append(pruned, t)
-		}
+	pair := ipUserKey(ip, username)
+	if err := rl.store.del(ctx, keyFailIPUser+pair, keyLockIPUser+pair); err != nil {
+		slog.Warn("auth failure counter reset failed",
+			"error", err.Error(), "ip", ip)
 	}
-	b.failures = append(pruned, now)
-
-	if len(b.failures) >= maxFailures {
-		b.lockUntil = now.Add(rl.cfg.Lockout)
-	}
-}
-
-// recordSuccess clears failure state for the given IP and username,
-// so a successful login resets the counters.
-func (rl *authRateLimiter) recordSuccess(ip, username string) {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	if ip != "" && username != "" {
-		delete(rl.ipUser, ip+"\x00"+username)
-	}
-	// Don't clear per-IP or per-user buckets on success -- a successful
-	// login for one account shouldn't reset limits for other accounts
-	// being attacked from the same IP.
-}
-
-// cleanup removes expired entries to prevent unbounded memory growth.
-// Should be called periodically (e.g., every few minutes).
-func (rl *authRateLimiter) cleanup() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	now := rl.now()
-	cutoff := now.Add(-rl.cfg.Window)
-
-	cleanMap := func(m map[string]*failureBucket) {
-		for key, b := range m {
-			if now.After(b.lockUntil) {
-				// Prune old failures.
-				pruned := b.failures[:0]
-				for _, t := range b.failures {
-					if t.After(cutoff) {
-						pruned = append(pruned, t)
-					}
-				}
-				b.failures = pruned
-				if len(b.failures) == 0 {
-					delete(m, key)
-				}
-			}
-		}
-	}
-
-	cleanMap(rl.ipUser)
-	cleanMap(rl.ip)
-	cleanMap(rl.user)
 }

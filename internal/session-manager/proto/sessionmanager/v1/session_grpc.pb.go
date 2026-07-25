@@ -22,6 +22,8 @@ const (
 	SessionService_Login_FullMethodName             = "/sessionmanager.v1.SessionService/Login"
 	SessionService_Logout_FullMethodName            = "/sessionmanager.v1.SessionService/Logout"
 	SessionService_ValidateRecipient_FullMethodName = "/sessionmanager.v1.SessionService/ValidateRecipient"
+	SessionService_CheckPeer_FullMethodName         = "/sessionmanager.v1.SessionService/CheckPeer"
+	SessionService_ReportPeer_FullMethodName        = "/sessionmanager.v1.SessionService/ReportPeer"
 )
 
 // SessionServiceClient is the client API for SessionService service.
@@ -45,6 +47,17 @@ type SessionServiceClient interface {
 	// Used by smtpd at RCPT TO time to determine if the domain is local
 	// and whether the user exists.
 	ValidateRecipient(ctx context.Context, in *ValidateRecipientRequest, opts ...grpc.CallOption) (*ValidateRecipientResponse, error)
+	// CheckPeer reports whether a peer address is currently banned. The protocol
+	// dispatchers call it at accept time, before any protocol or TLS work, so a
+	// banned peer costs no handler subprocess, no handshake, and no password
+	// hash. Ban policy, the Redis client, and the keyspace live here; the
+	// daemons only carry an address and obey the verdict.
+	CheckPeer(ctx context.Context, in *CheckPeerRequest, opts ...grpc.CallOption) (*CheckPeerResponse, error)
+	// ReportPeer records an abuse signal a protocol handler observed that
+	// session-manager cannot see on its own -- early talkers, malformed
+	// commands, aborted DATA. Authentication failures and recipient probes need
+	// no report: Login and ValidateRecipient already run here.
+	ReportPeer(ctx context.Context, in *ReportPeerRequest, opts ...grpc.CallOption) (*ReportPeerResponse, error)
 }
 
 type sessionServiceClient struct {
@@ -85,6 +98,26 @@ func (c *sessionServiceClient) ValidateRecipient(ctx context.Context, in *Valida
 	return out, nil
 }
 
+func (c *sessionServiceClient) CheckPeer(ctx context.Context, in *CheckPeerRequest, opts ...grpc.CallOption) (*CheckPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckPeerResponse)
+	err := c.cc.Invoke(ctx, SessionService_CheckPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sessionServiceClient) ReportPeer(ctx context.Context, in *ReportPeerRequest, opts ...grpc.CallOption) (*ReportPeerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportPeerResponse)
+	err := c.cc.Invoke(ctx, SessionService_ReportPeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SessionServiceServer is the server API for SessionService service.
 // All implementations must embed UnimplementedSessionServiceServer
 // for forward compatibility.
@@ -106,6 +139,17 @@ type SessionServiceServer interface {
 	// Used by smtpd at RCPT TO time to determine if the domain is local
 	// and whether the user exists.
 	ValidateRecipient(context.Context, *ValidateRecipientRequest) (*ValidateRecipientResponse, error)
+	// CheckPeer reports whether a peer address is currently banned. The protocol
+	// dispatchers call it at accept time, before any protocol or TLS work, so a
+	// banned peer costs no handler subprocess, no handshake, and no password
+	// hash. Ban policy, the Redis client, and the keyspace live here; the
+	// daemons only carry an address and obey the verdict.
+	CheckPeer(context.Context, *CheckPeerRequest) (*CheckPeerResponse, error)
+	// ReportPeer records an abuse signal a protocol handler observed that
+	// session-manager cannot see on its own -- early talkers, malformed
+	// commands, aborted DATA. Authentication failures and recipient probes need
+	// no report: Login and ValidateRecipient already run here.
+	ReportPeer(context.Context, *ReportPeerRequest) (*ReportPeerResponse, error)
 	mustEmbedUnimplementedSessionServiceServer()
 }
 
@@ -124,6 +168,12 @@ func (UnimplementedSessionServiceServer) Logout(context.Context, *LogoutRequest)
 }
 func (UnimplementedSessionServiceServer) ValidateRecipient(context.Context, *ValidateRecipientRequest) (*ValidateRecipientResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidateRecipient not implemented")
+}
+func (UnimplementedSessionServiceServer) CheckPeer(context.Context, *CheckPeerRequest) (*CheckPeerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckPeer not implemented")
+}
+func (UnimplementedSessionServiceServer) ReportPeer(context.Context, *ReportPeerRequest) (*ReportPeerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportPeer not implemented")
 }
 func (UnimplementedSessionServiceServer) mustEmbedUnimplementedSessionServiceServer() {}
 func (UnimplementedSessionServiceServer) testEmbeddedByValue()                        {}
@@ -200,6 +250,42 @@ func _SessionService_ValidateRecipient_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SessionService_CheckPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).CheckPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_CheckPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).CheckPeer(ctx, req.(*CheckPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SessionService_ReportPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportPeerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).ReportPeer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_ReportPeer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).ReportPeer(ctx, req.(*ReportPeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SessionService_ServiceDesc is the grpc.ServiceDesc for SessionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -218,6 +304,14 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateRecipient",
 			Handler:    _SessionService_ValidateRecipient_Handler,
+		},
+		{
+			MethodName: "CheckPeer",
+			Handler:    _SessionService_CheckPeer_Handler,
+		},
+		{
+			MethodName: "ReportPeer",
+			Handler:    _SessionService_ReportPeer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -16,6 +16,7 @@ import (
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
 	"github.com/infodancer/maildancer/internal/connfork"
+	"github.com/infodancer/maildancer/internal/peersignal"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 	"github.com/infodancer/maildancer/internal/smtpd/spamcheck"
@@ -268,7 +269,7 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 	// Validate recipient via session-manager
 	if s.backend.smDelivery != nil {
 		ctx := context.Background()
-		vr, err := s.backend.smDelivery.ValidateRecipient(ctx, to)
+		vr, err := s.backend.smDelivery.ValidateRecipient(ctx, to, s.clientIP)
 		if err != nil {
 			s.logger.Debug("recipient validation failed",
 				slog.String("recipient", to),
@@ -284,6 +285,11 @@ func (s *Session) Rcpt(to string, opts *smtp.RcptOptions) error {
 			// Domain is not local. Allow relay only for authenticated senders.
 			if s.authUser == "" {
 				s.logger.Debug("relay denied: unauthenticated", slog.String("domain", domainName))
+				// An unauthenticated client asking us to relay is probing for
+				// an open relay. Nothing legitimate does this: a real MTA
+				// delivering to us names one of our own domains, and a real
+				// submission client authenticates first (#206, rule 3).
+				s.backend.smDelivery.ReportPeer(ctx, s.clientIP, peersignal.RelayDenied)
 				return &smtp.SMTPError{
 					Code:         550,
 					EnhancedCode: smtp.EnhancedCode{5, 7, 1},
@@ -837,7 +843,7 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 	fwdHeaders := buildForwardReceivedHeader(s.backend.hostname, s.recipients[0], msgid, time.Now()) + received
 
 	for _, target := range redirect.Addresses {
-		vr, err := s.backend.smDelivery.ValidateRecipient(ctx, target)
+		vr, err := s.backend.smDelivery.ValidateRecipient(ctx, target, s.clientIP)
 		if err != nil {
 			s.logger.Error("forward target validation failed",
 				slog.String("target", target),

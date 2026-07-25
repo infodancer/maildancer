@@ -222,3 +222,56 @@ func TestRateLimitConfig_DomainConfig(t *testing.T) {
 		t.Errorf("DomainConfig lost values: %+v", dc)
 	}
 }
+
+func TestLoad_AuthFailDelay(t *testing.T) {
+	cfg := loadFromString(t, `
+[session-manager]
+socket = "/run/sm.sock"
+auth_fail_delay = "2s"
+`)
+	if cfg.AuthFailDelay != 2*time.Second {
+		t.Errorf("auth_fail_delay = %v, want 2s", cfg.AuthFailDelay)
+	}
+}
+
+// TestLoad_AuthFailDelayDefault pins the 5s decision: it must apply without
+// being configured, since an absent delay would leave the enumeration oracle
+// open by default.
+func TestLoad_AuthFailDelayDefault(t *testing.T) {
+	cfg := loadFromString(t, `
+[session-manager]
+socket = "/run/sm.sock"
+`)
+	if cfg.AuthFailDelay != DefaultAuthFailDelay {
+		t.Errorf("auth_fail_delay = %v, want the %v default", cfg.AuthFailDelay, DefaultAuthFailDelay)
+	}
+}
+
+// TestLoad_AuthFailDelayExplicitZero keeps an operator able to turn the delay
+// off. A zero must survive rather than being read as "unset" and defaulted.
+func TestLoad_AuthFailDelayExplicitZero(t *testing.T) {
+	cfg := loadFromString(t, `
+[session-manager]
+socket = "/run/sm.sock"
+auth_fail_delay = "0s"
+`)
+	if cfg.AuthFailDelay != 0 {
+		t.Errorf("auth_fail_delay = %v, want 0 when explicitly configured as 0s", cfg.AuthFailDelay)
+	}
+}
+
+func TestLoad_AuthFailDelayRejectsBadDuration(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := `
+[session-manager]
+socket = "/run/sm.sock"
+auth_fail_delay = "eventually"
+`
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Error("invalid auth_fail_delay accepted")
+	}
+}

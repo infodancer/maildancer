@@ -70,10 +70,28 @@ type Config struct {
 	// PeerFilter configures connection-level bans for hostile peers.
 	PeerFilter peerfilter.Config `toml:"peerfilter"`
 
+	// AuthFailDelay is how long every failed authentication takes to answer,
+	// measured from when the credentials arrived rather than added to the work
+	// (#206). Default 5s; zero disables the delay.
+	//
+	// Uniform across every failure cause, which is the point: the
+	// nonexistent-account path bans the peer and skips the password hash, so
+	// without a common deadline its response time would be an account-existence
+	// oracle. 5s rather than something longer because it must stay inside the
+	// response timeout of ordinary mail clients -- a real user who mistypes a
+	// password should see an authentication failure, not a connection timeout.
+	AuthFailDelay time.Duration `toml:"-"`
+	// AuthFailDelayStr is the TOML-friendly form of AuthFailDelay.
+	AuthFailDelayStr string `toml:"auth_fail_delay"`
+
 	// LogLevel sets the minimum log level (debug, info, warn, error).
 	// Default: info.
 	LogLevel string `toml:"log_level"`
 }
+
+// DefaultAuthFailDelay is the uniform response deadline for failed
+// authentications. See Config.AuthFailDelay.
+const DefaultAuthFailDelay = 5 * time.Second
 
 // RedisConfig holds the shared Redis connection settings.
 type RedisConfig struct {
@@ -314,6 +332,18 @@ func Load(path string) (*Config, error) {
 	// prefers an environment variable, matching smtpd.
 	if cfg.Redis.Password == "" {
 		cfg.Redis.Password = os.Getenv("REDIS_PASSWORD")
+	}
+
+	// A configured "0" means no delay and must survive; only an absent key
+	// takes the default.
+	if cfg.AuthFailDelayStr != "" {
+		d, err := time.ParseDuration(cfg.AuthFailDelayStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid auth_fail_delay %q: %w", cfg.AuthFailDelayStr, err)
+		}
+		cfg.AuthFailDelay = d
+	} else {
+		cfg.AuthFailDelay = DefaultAuthFailDelay
 	}
 
 	if err := cfg.RateLimit.Normalize(); err != nil {

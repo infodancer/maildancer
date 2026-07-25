@@ -52,8 +52,12 @@ const (
 // Config is the policy half of the peer filter. The dispatcher half
 // (MaxTarpit, GateTimeout, StrictGate) is read by the daemons in phase 3.
 type Config struct {
-	// Enabled turns the filter on. With Redis unconfigured it has no effect.
-	Enabled bool `toml:"enabled"`
+	// Enabled turns the filter on. Absent means enabled: this ships secure by
+	// default, and with Redis unconfigured the filter is off regardless, so
+	// the default cannot surprise a deployment that has no Redis. A pointer
+	// rather than a bool because an absent TOML key and an explicit
+	// `enabled = false` must be distinguishable.
+	Enabled *bool `toml:"enabled"`
 
 	// Allowlist holds CIDRs that are never banned and never checked. This is
 	// the escape hatch that keeps a policy bug from locking the operator out
@@ -94,14 +98,21 @@ type Config struct {
 // Defaults returns the default policy. Deliberately conservative on
 // escalation and generous on the tarpit.
 func Defaults() Config {
+	enabled := true
 	return Config{
-		Enabled:      true,
+		Enabled:      &enabled,
 		Allowlist:    []string{"127.0.0.0/8", "::1/128"},
 		BanTTL:       24 * time.Hour,
 		BanTTLRepeat: 7 * 24 * time.Hour,
 		AcceptTarpit: 30 * time.Second,
 		AbuseWindow:  time.Hour,
 	}
+}
+
+// IsEnabled reports whether the filter should run. Absent configuration means
+// enabled.
+func (c *Config) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // Normalize parses the duration strings and fills zero values with defaults.
@@ -164,7 +175,7 @@ type Filter struct {
 // Invalid allowlist entries are an error rather than a silent omission -- a
 // typo there would remove the operator's own escape hatch.
 func New(cfg Config, client *redis.Client, logger *slog.Logger) (*Filter, error) {
-	if !cfg.Enabled || client == nil {
+	if !cfg.IsEnabled() || client == nil {
 		return nil, nil
 	}
 	if logger == nil {

@@ -93,7 +93,8 @@ func openPeerFilter(configPath string) (*peerfilter.Filter, error) {
 	// operator inspecting or clearing bans should not have to enable
 	// enforcement first.
 	cfg := fc.SessionManager.PeerFilter
-	cfg.Enabled = true
+	enabled := true
+	cfg.Enabled = &enabled
 	return peerfilter.New(cfg, client, slog.Default())
 }
 

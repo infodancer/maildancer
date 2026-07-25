@@ -85,7 +85,8 @@ func TestNew_DisabledReturnsNilFilter(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 
 	cfg := Defaults()
-	cfg.Enabled = false
+	disabled := false
+	cfg.Enabled = &disabled
 	f, err := New(cfg, client, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -495,7 +496,7 @@ func TestCheck_UnparseableAddressIsAllowed(t *testing.T) {
 
 func TestConfig_Normalize(t *testing.T) {
 	cfg := Config{
-		Enabled:         true,
+		Enabled:         boolPtr(true),
 		BanTTLStr:       "12h",
 		BanTTLRepeatStr: "72h",
 		AcceptTarpitStr: "10s",
@@ -519,7 +520,7 @@ func TestConfig_Normalize(t *testing.T) {
 }
 
 func TestConfig_NormalizeFillsDefaults(t *testing.T) {
-	cfg := Config{Enabled: true}
+	cfg := Config{Enabled: boolPtr(true)}
 	if err := cfg.Normalize(); err != nil {
 		t.Fatalf("Normalize: %v", err)
 	}
@@ -533,7 +534,7 @@ func TestConfig_NormalizeFillsDefaults(t *testing.T) {
 // TestConfig_NormalizeAllowsZeroTarpit covers the one duration where zero is a
 // deliberate choice (close immediately) rather than "unset".
 func TestConfig_NormalizeAllowsZeroTarpit(t *testing.T) {
-	cfg := Config{Enabled: true, AcceptTarpitStr: "0s"}
+	cfg := Config{Enabled: boolPtr(true), AcceptTarpitStr: "0s"}
 	if err := cfg.Normalize(); err != nil {
 		t.Fatalf("Normalize: %v", err)
 	}
@@ -543,8 +544,11 @@ func TestConfig_NormalizeAllowsZeroTarpit(t *testing.T) {
 }
 
 func TestConfig_NormalizeRejectsBadDuration(t *testing.T) {
-	cfg := Config{Enabled: true, BanTTLStr: "forever"}
+	cfg := Config{Enabled: boolPtr(true), BanTTLStr: "forever"}
 	if err := cfg.Normalize(); err == nil {
 		t.Error("invalid duration accepted")
 	}
 }
+
+// boolPtr is a helper for the pointer-valued Enabled field.
+func boolPtr(b bool) *bool { return &b }

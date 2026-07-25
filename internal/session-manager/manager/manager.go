@@ -743,7 +743,7 @@ func SetupAuth(cfg *config.Config, redisClient *redis.Client) (*domain.AuthRoute
 	router := domain.NewAuthRouter(domainProvider, authAgent)
 
 	switch {
-	case !cfg.RateLimit.Enabled:
+	case !cfg.RateLimit.IsEnabled():
 		slog.Info("authentication rate limiting disabled")
 	case redisClient == nil:
 		// Loud, because the operator asked for rate limiting and is getting a

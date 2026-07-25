@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/infodancer/maildancer/internal/idrange"
+
+	"github.com/infodancer/maildancer/internal/peergate"
 )
 
 // ListenerMode defines the operational mode for a listener.
@@ -26,6 +28,7 @@ type FileConfig struct {
 	Server         ServerConfig         `toml:"server"`
 	SessionManager SessionManagerConfig `toml:"session-manager"`
 	Pop3d          Config               `toml:"pop3d"`
+	PeerGate       peergate.Config      `toml:"peergate"`
 }
 
 // SessionManagerConfig holds connection settings for the session-manager service.
@@ -74,10 +77,14 @@ type Config struct {
 	HandlerGID    uint32   `toml:"handler_gid"`
 	HandlerGroups []uint32 `toml:"handler_groups"`
 
-	Listeners      []ListenerConfig     `toml:"listeners"`
-	TLS            TLSConfig            `toml:"tls"`
-	Timeouts       TimeoutsConfig       `toml:"timeouts"`
-	Limits         LimitsConfig         `toml:"limits"`
+	Listeners []ListenerConfig `toml:"listeners"`
+	TLS       TLSConfig        `toml:"tls"`
+	Timeouts  TimeoutsConfig   `toml:"timeouts"`
+	Limits    LimitsConfig     `toml:"limits"`
+
+	// PeerGate is the accept-time peer ban gate, read from the shared
+	// top-level [peergate] section (#206). Populated by the loader.
+	PeerGate       peergate.Config      `toml:"-"`
 	Metrics        MetricsConfig        `toml:"metrics"`
 	SessionManager SessionManagerConfig `toml:"-"` // populated from [session-manager] top-level section
 }
@@ -144,6 +151,7 @@ func Default() Config {
 			Address: ":9101",
 			Path:    "/metrics",
 		},
+		PeerGate: peergate.Defaults(),
 	}
 }
 

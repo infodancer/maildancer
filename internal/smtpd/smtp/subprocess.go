@@ -2,12 +2,15 @@ package smtp
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"syscall"
 
 	"github.com/infodancer/maildancer/internal/connfork"
+	"github.com/infodancer/maildancer/internal/peergate"
+	"github.com/infodancer/maildancer/internal/smclient"
 	"github.com/infodancer/maildancer/internal/smtpd/config"
 	"github.com/infodancer/maildancer/internal/smtpd/metrics"
 )
@@ -28,6 +31,9 @@ import (
 //	SMTPD_LISTENER_MODE - listener mode (smtp/submission/smtps/alt)
 type SubprocessServer struct {
 	srv *connfork.Server
+	// gateClient owns the connection the peer gate borrows; nil when the gate
+	// is disabled.
+	gateClient *smclient.Client
 }
 
 // NewSubprocessServer creates a SubprocessServer from the listener's
@@ -36,7 +42,7 @@ type SubprocessServer struct {
 // configPath is passed to each subprocess as the --config flag value.
 // parentMetrics is the aggregation surface for per-connection metrics; pass nil
 // when metrics are disabled (no report pipe is created).
-func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentMetrics *metrics.ParentMetrics, logger *slog.Logger) *SubprocessServer {
+func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentMetrics *metrics.ParentMetrics, logger *slog.Logger) (*SubprocessServer, error) {
 	listeners := make([]connfork.Listener, 0, len(cfg.Listeners))
 	for _, lc := range cfg.Listeners {
 		listeners = append(listeners, connfork.Listener{Address: lc.Address, Mode: string(lc.Mode)})
@@ -44,30 +50,108 @@ func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentM
 
 	var onStart, onEnd func()
 	var reportSink func(io.Reader) error
+	var onGateVerdict func(string)
+	var onTarpitStart, onTarpitEnd, onTarpitRejected func()
+	var onCache func(bool)
 	if parentMetrics != nil {
 		pm := parentMetrics
 		onStart = pm.ConnectionOpened
 		onEnd = pm.ConnectionClosed
 		reportSink = pm.Sink()
+		onGateVerdict = pm.GateVerdict
+		onTarpitStart = pm.TarpitStarted
+		onTarpitEnd = pm.TarpitEnded
+		onTarpitRejected = pm.TarpitRejected
+		onCache = pm.GateCacheResult
 	}
 
-	return &SubprocessServer{srv: connfork.NewServer(connfork.Config{
-		Listeners: listeners,
-		ExecPath:  execPath,
-		Args:      []string{"protocol-handler", "--config", configPath},
-		Env: func(clientIP, mode string) []string {
-			return handlerEnv(cfg, clientIP, config.ListenerMode(mode))
-		},
-		SysProcAttr: handlerSysProcAttr(cfg),
-		OnConnStart: onStart,
-		OnConnEnd:   onEnd,
-		ReportSink:  reportSink,
-		Logger:      logger,
-	})}
+	// The accept-time peer gate (#206). The dispatcher opens its own
+	// session-manager connection: handlers are one-shot subprocesses, so a
+	// verdict cache only pays off in the long-lived parent, and the check has
+	// to happen before a handler exists at all. Most inbound connections never
+	// authenticate, so smtpd is where an auth-path-only check misses the most.
+	gate, gateClient, err := newPeerGate(cfg, onCache, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SubprocessServer{
+		gateClient: gateClient,
+		srv: connfork.NewServer(connfork.Config{
+			Listeners: listeners,
+			ExecPath:  execPath,
+			Args:      []string{"protocol-handler", "--config", configPath},
+			Env: func(clientIP, mode string) []string {
+				return handlerEnv(cfg, clientIP, config.ListenerMode(mode))
+			},
+			SysProcAttr:      handlerSysProcAttr(cfg),
+			OnConnStart:      onStart,
+			OnConnEnd:        onEnd,
+			ReportSink:       reportSink,
+			Gate:             gate,
+			GateTimeout:      gate.GateTimeout(),
+			MaxTarpit:        gate.MaxTarpit(),
+			StrictGate:       gate.StrictGate(),
+			OnGateVerdict:    onGateVerdict,
+			OnTarpitStart:    onTarpitStart,
+			OnTarpitEnd:      onTarpitEnd,
+			OnTarpitRejected: onTarpitRejected,
+			Logger:           logger,
+		}),
+	}, nil
+}
+
+// newPeerGate builds the accept-time gate, returning the session-manager client
+// whose connection it borrows so the dispatcher can close it on shutdown.
+// Returns (nil, nil, nil) when the gate is disabled.
+//
+// It dials through internal/smclient rather than reusing
+// SessionManagerDeliveryAgent: the delivery agent is the handler's tool and
+// logs itself as such, while this connection exists only to ask CheckPeer.
+func newPeerGate(cfg config.Config, onCache func(bool), logger *slog.Logger) (*peergate.Gate, *smclient.Client, error) {
+	if !cfg.PeerGate.IsEnabled() {
+		logger.Info("accept-time peer gate disabled")
+		return nil, nil, nil
+	}
+	if !cfg.SessionManager.IsEnabled() {
+		return nil, nil, nil
+	}
+
+	client, err := smclient.New(smclient.Config{
+		Socket:     cfg.SessionManager.Socket,
+		Address:    cfg.SessionManager.Address,
+		CACert:     cfg.SessionManager.CACert,
+		ClientCert: cfg.SessionManager.ClientCert,
+		ClientKey:  cfg.SessionManager.ClientKey,
+	}, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("peer gate session-manager client: %w", err)
+	}
+
+	gate, err := peergate.New(cfg.PeerGate, client.Conn(),
+		peergate.Metrics{OnCache: onCache}, logger)
+	if err != nil {
+		_ = client.Close()
+		return nil, nil, err
+	}
+
+	logger.Info("accept-time peer gate enabled",
+		slog.String("gate_timeout", gate.GateTimeout().String()),
+		slog.Int("max_tarpit", gate.MaxTarpit()),
+		slog.Bool("strict_gate", gate.StrictGate()),
+		slog.Any("allowlist", cfg.PeerGate.Allowlist))
+	return gate, client, nil
 }
 
 // Run starts accept loops on all configured ports and blocks until ctx is cancelled.
 func (s *SubprocessServer) Run(ctx context.Context) error {
+	defer func() {
+		if s.gateClient != nil {
+			if err := s.gateClient.Close(); err != nil {
+				slog.Debug("peer gate client close", "error", err)
+			}
+		}
+	}()
 	return s.srv.Run(ctx)
 }
 

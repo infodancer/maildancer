@@ -43,8 +43,11 @@ func TestSubprocessServer_ForksHandlerPerConnection(t *testing.T) {
 	cfg := config.Default()
 	cfg.Listeners = []config.ListenerConfig{{Address: addr, Mode: config.ModeSmtp}}
 
-	srv := NewSubprocessServer(cfg, helper, "unused-config-path", nil,
+	srv, err := NewSubprocessServer(cfg, helper, "unused-config-path", nil,
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewSubprocessServer: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

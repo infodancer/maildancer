@@ -58,7 +58,7 @@ data_abort = 6
 		t.Errorf("redis url = %q", cfg.Redis.URL)
 	}
 
-	if !cfg.RateLimit.Enabled {
+	if !cfg.RateLimit.IsEnabled() {
 		t.Error("ratelimit not enabled")
 	}
 	if cfg.RateLimit.MaxFailuresPerIPUser != 3 || cfg.RateLimit.MaxFailuresPerIP != 12 {
@@ -69,7 +69,7 @@ data_abort = 6
 		t.Errorf("durations = %v/%v, want 10m/30m", cfg.RateLimit.Window, cfg.RateLimit.Lockout)
 	}
 
-	if !cfg.PeerFilter.Enabled {
+	if !cfg.PeerFilter.IsEnabled() {
 		t.Error("peerfilter not enabled")
 	}
 	if len(cfg.PeerFilter.Allowlist) != 2 {
@@ -91,8 +91,9 @@ data_abort = 6
 }
 
 // TestLoad_DefaultsWhenSectionsAbsent covers the upgrade path: an existing
-// config file with none of the new sections must load, with both features off
-// and no zero-valued durations that would mean "expire immediately".
+// config file with none of the new sections must load with both features
+// enabled -- secure by default -- and with no zero-valued durations that would
+// mean "expire immediately".
 func TestLoad_DefaultsWhenSectionsAbsent(t *testing.T) {
 	cfg := loadFromString(t, `
 [server]
@@ -106,11 +107,16 @@ mail_session_cmd = "/usr/bin/mail-session"
 	if cfg.Redis.URL != "" {
 		t.Errorf("redis url = %q, want empty", cfg.Redis.URL)
 	}
-	if cfg.RateLimit.Enabled {
-		t.Error("ratelimit enabled by default; it changes live behavior and must be opt-in")
+	// Secure by default. Neither actually enforces anything without Redis --
+	// the filter is off entirely and the limiter falls back to per-process
+	// counters -- so defaulting on cannot surprise a deployment that has no
+	// Redis configured, while a deployment that does gets protection without
+	// having to opt in twice.
+	if !cfg.RateLimit.IsEnabled() {
+		t.Error("ratelimit disabled with no config section; must default on")
 	}
-	if cfg.PeerFilter.Enabled {
-		t.Error("peerfilter enabled by default; it changes live behavior and must be opt-in")
+	if !cfg.PeerFilter.IsEnabled() {
+		t.Error("peerfilter disabled with no config section; must default on")
 	}
 
 	// Durations still normalize, so enabling the feature later needs no

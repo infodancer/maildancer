@@ -12,6 +12,7 @@ import (
 	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
+	"github.com/infodancer/maildancer/internal/peergate"
 )
 
 // Environment variables the dispatcher sets for each handler subprocess.
@@ -44,6 +45,9 @@ type DispatcherConfig struct {
 // state.
 type Dispatcher struct {
 	srv *connfork.Server
+	// smClient owns the connection the peer gate borrows; nil when the gate
+	// is disabled.
+	smClient *SessionManagerClient
 }
 
 // NewDispatcher validates cfg and builds the dispatcher. imaps listeners
@@ -88,26 +92,85 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 
 	var onStart, onEnd func()
 	var reportSink func(io.Reader) error
+	var onGateVerdict func(string)
+	var onTarpitStart, onTarpitEnd, onTarpitRejected func()
+	var onCache func(bool)
 	if cfg.Metrics != nil {
 		pm := cfg.Metrics
 		onStart = pm.ConnectionOpened
 		onEnd = pm.ConnectionClosed
 		reportSink = pm.Sink()
+		onGateVerdict = pm.GateVerdict
+		onTarpitStart = pm.TarpitStarted
+		onTarpitEnd = pm.TarpitEnded
+		onTarpitRejected = pm.TarpitRejected
+		onCache = pm.GateCacheResult
+	}
+
+	// The accept-time peer gate (#206). The dispatcher opens its own
+	// session-manager connection: handlers are one-shot subprocesses, so a
+	// verdict cache only pays off in the long-lived parent, and the check has
+	// to happen before a handler exists at all.
+	gate, smClient, err := newPeerGate(cfg.Config, onCache, logger)
+	if err != nil {
+		return nil, err
 	}
 
 	srv := connfork.NewServer(connfork.Config{
-		Listeners:   listeners,
-		ExecPath:    cfg.ExecPath,
-		Args:        handlerArgs(cfg.ConfigPath, tlsCert, tlsKey),
-		Env:         handlerEnv,
-		SysProcAttr: handlerSysProcAttr(cfg.Config),
-		OnConnStart: onStart,
-		OnConnEnd:   onEnd,
-		ReportSink:  reportSink,
-		MaxConns:    cfg.Config.Limits.MaxConnections,
-		Logger:      logger,
+		Listeners:        listeners,
+		ExecPath:         cfg.ExecPath,
+		Args:             handlerArgs(cfg.ConfigPath, tlsCert, tlsKey),
+		Env:              handlerEnv,
+		SysProcAttr:      handlerSysProcAttr(cfg.Config),
+		OnConnStart:      onStart,
+		OnConnEnd:        onEnd,
+		ReportSink:       reportSink,
+		MaxConns:         cfg.Config.Limits.MaxConnections,
+		Gate:             gate,
+		GateTimeout:      gate.GateTimeout(),
+		MaxTarpit:        gate.MaxTarpit(),
+		StrictGate:       gate.StrictGate(),
+		OnGateVerdict:    onGateVerdict,
+		OnTarpitStart:    onTarpitStart,
+		OnTarpitEnd:      onTarpitEnd,
+		OnTarpitRejected: onTarpitRejected,
+		Logger:           logger,
 	})
-	return &Dispatcher{srv: srv}, nil
+	return &Dispatcher{srv: srv, smClient: smClient}, nil
+}
+
+// newPeerGate builds the accept-time gate, returning the session-manager client
+// whose connection it borrows so the dispatcher can close it on shutdown.
+// Returns (nil, nil, nil) when the gate is disabled.
+func newPeerGate(cfg config.Config, onCache func(bool), logger *slog.Logger) (*peergate.Gate, *SessionManagerClient, error) {
+	if !cfg.PeerGate.IsEnabled() {
+		logger.Info("accept-time peer gate disabled")
+		return nil, nil, nil
+	}
+	if !cfg.SessionManager.IsEnabled() {
+		// Not an error: the gate has nothing to ask. The daemon cannot run
+		// without session-manager anyway, and that is validated elsewhere.
+		return nil, nil, nil
+	}
+
+	smClient, err := NewSessionManagerClient(cfg.SessionManager, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("peer gate session-manager client: %w", err)
+	}
+
+	gate, err := peergate.New(cfg.PeerGate, smClient.Conn(),
+		peergate.Metrics{OnCache: onCache}, logger)
+	if err != nil {
+		_ = smClient.Close()
+		return nil, nil, err
+	}
+
+	logger.Info("accept-time peer gate enabled",
+		slog.String("gate_timeout", gate.GateTimeout().String()),
+		slog.Int("max_tarpit", gate.MaxTarpit()),
+		slog.Bool("strict_gate", gate.StrictGate()),
+		slog.Any("allowlist", cfg.PeerGate.Allowlist))
+	return gate, smClient, nil
 }
 
 // handlerSysProcAttr builds the SysProcAttr for handler subprocesses. When
@@ -131,6 +194,13 @@ func handlerSysProcAttr(cfg config.Config) *syscall.SysProcAttr {
 
 // Run accepts connections on all configured listeners until ctx is cancelled.
 func (d *Dispatcher) Run(ctx context.Context) error {
+	defer func() {
+		if d.smClient != nil {
+			if err := d.smClient.Close(); err != nil {
+				slog.Debug("peer gate client close", "error", err)
+			}
+		}
+	}()
 	return d.srv.Run(ctx)
 }
 

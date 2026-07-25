@@ -110,8 +110,12 @@ func (c RedisConfig) Client() (*redis.Client, error) {
 // all source addresses is a cheap denial of service against a real user, and
 // every username in the measured attack was nonexistent anyway (#206).
 type RateLimitConfig struct {
-	// Enabled turns authentication rate limiting on. Requires Redis.
-	Enabled bool `toml:"enabled"`
+	// Enabled turns authentication rate limiting on. Absent means enabled:
+	// this ships secure by default. Requires Redis to be shared across
+	// daemons; without it the in-process fallback still applies per process.
+	// A pointer so an absent TOML key is distinguishable from an explicit
+	// `enabled = false`.
+	Enabled *bool `toml:"enabled"`
 
 	// MaxFailuresPerIPUser is the failure budget for one (IP, username) pair
 	// within the window. Default 5.
@@ -130,6 +134,12 @@ type RateLimitConfig struct {
 	Lockout time.Duration `toml:"-"`
 	// LockoutStr is the TOML-friendly form of Lockout.
 	LockoutStr string `toml:"lockout"`
+}
+
+// IsEnabled reports whether rate limiting should run. Absent configuration
+// means enabled.
+func (c *RateLimitConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // Normalize parses duration strings and fills zero values with the defaults

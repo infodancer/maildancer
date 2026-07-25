@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/infodancer/maildancer/internal/idrange"
+
+	"github.com/infodancer/maildancer/internal/peergate"
 )
 
 // upstreamIdleSlop is the safety margin reserved below upstream_session_idle
@@ -46,6 +48,7 @@ type FileConfig struct {
 	Imapd          Config               `toml:"imapd"`
 	Redis          RedisConfig          `toml:"redis"`
 	SessionManager SessionManagerConfig `toml:"session-manager"`
+	PeerGate       peergate.Config      `toml:"peergate"`
 }
 
 // ServerConfig holds shared settings used by all mail services.
@@ -88,10 +91,14 @@ type Config struct {
 	HandlerGID    uint32   `toml:"handler_gid"`
 	HandlerGroups []uint32 `toml:"handler_groups"`
 
-	Listeners      []ListenerConfig     `toml:"listeners"`
-	TLS            TLSConfig            `toml:"tls"`
-	Timeouts       TimeoutsConfig       `toml:"timeouts"`
-	Limits         LimitsConfig         `toml:"limits"`
+	Listeners []ListenerConfig `toml:"listeners"`
+	TLS       TLSConfig        `toml:"tls"`
+	Timeouts  TimeoutsConfig   `toml:"timeouts"`
+	Limits    LimitsConfig     `toml:"limits"`
+
+	// PeerGate is the accept-time peer ban gate, read from the shared
+	// top-level [peergate] section (#206). Populated by the loader.
+	PeerGate       peergate.Config      `toml:"-"`
 	Metrics        MetricsConfig        `toml:"metrics"`
 	Rspamd         RspamdConfig         `toml:"rspamd"`
 	Redis          RedisConfig          `toml:"redis"`
@@ -173,6 +180,7 @@ func Default() Config {
 			Address: ":9102",
 			Path:    "/metrics",
 		},
+		PeerGate: peergate.Defaults(),
 	}
 }
 

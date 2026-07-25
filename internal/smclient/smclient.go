@@ -347,6 +347,16 @@ func (c *Client) RenameFolder(ctx context.Context, token, oldName, newName strin
 	return err
 }
 
+// Conn exposes the underlying gRPC connection so other session-manager
+// services can be reached over the same link -- the protocol dispatchers use it
+// for the accept-time peer gate (#206) rather than opening a second connection
+// or duplicating the dial and mTLS setup.
+//
+// The connection's lifecycle stays with the Client: callers must not close it.
+func (c *Client) Conn() grpc.ClientConnInterface {
+	return c.conn
+}
+
 // Close closes the underlying gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

@@ -111,7 +111,7 @@ func runServe() {
 			"ban_ttl_repeat", cfg.PeerFilter.BanTTLRepeat.String(),
 			"accept_tarpit", cfg.PeerFilter.AcceptTarpit.String(),
 			"allowlist", cfg.PeerFilter.Allowlist)
-	case cfg.PeerFilter.Enabled && redisClient == nil:
+	case cfg.PeerFilter.IsEnabled() && redisClient == nil:
 		// Worth a warning rather than silence: the operator asked for it, and
 		// an accept-time ban is meaningless without shared state.
 		slog.Warn("peer filter enabled in config but redis is not configured; filter is off")

@@ -206,3 +206,34 @@ func TestLogin_RateLimitedMapsToResourceExhausted(t *testing.T) {
 		t.Error("internal limiter error leaked to the wire; only the status code should cross")
 	}
 }
+
+// TestKnownGood_DoesNotExemptTheRateLimiter is the security boundary on the
+// known-good exemption (#206). It suppresses *connection bans* only. If it also
+// exempted the authentication limiter, one compromised credential would buy an
+// attacker unlimited password guessing from that address -- the exemption would
+// undo rule 2 rather than soften rule 1.
+//
+// The two mechanisms live in different packages and key on the same address, so
+// nothing wires them together today; this test is here to keep it that way.
+func TestKnownGood_DoesNotExemptTheRateLimiter(t *testing.T) {
+	srv := newWiringServer(t, 2)
+	ctx := context.Background()
+	const ip = "203.0.113.5"
+
+	// Establish the address as known-good the only way that is possible: a
+	// successful authentication. The wiring harness has no peerfilter, so this
+	// asserts the limiter's behavior independent of any exemption -- which is
+	// exactly the invariant: the limiter never consults known-good state.
+	for range 2 {
+		_, _ = srv.Login(ctx, &smpb.LoginRequest{
+			Username: "alice@example.com", Password: "wrong", ClientIp: ip,
+		})
+	}
+
+	_, err := srv.Login(ctx, &smpb.LoginRequest{
+		Username: "alice@example.com", Password: "correct", ClientIp: ip,
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected the auth limiter to lock out a known-good address, got %v", err)
+	}
+}

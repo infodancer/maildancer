@@ -43,6 +43,21 @@ func (s *sessionServer) Login(ctx context.Context, req *smpb.LoginRequest) (*smp
 		return nil, status.Error(codes.Unauthenticated, "authentication failed")
 	}
 
+	// A successful authentication marks the address known-good, which exempts
+	// it from connection-level bans (#206). Reaching this point means a real
+	// account authenticated and a session was established -- inbound SMTP never
+	// authenticates, so mail reception cannot mark an address good.
+	//
+	// Failure is logged and ignored: losing the mark costs an exemption, not a
+	// working login, and refusing a successful authentication over it would be
+	// absurd.
+	if req.ClientIp != "" {
+		if err := s.filter.RecordGood(ctx, req.ClientIp); err != nil {
+			slog.Warn("failed to record known-good peer",
+				"client_ip", req.ClientIp, "error", err)
+		}
+	}
+
 	return &smpb.LoginResponse{
 		SessionToken:    result.Token,
 		Mailbox:         result.Mailbox,

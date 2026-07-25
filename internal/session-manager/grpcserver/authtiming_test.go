@@ -317,3 +317,55 @@ func itoa(n int) string {
 	}
 	return string(buf)
 }
+
+// TestLogin_KnownGoodSurvivesRule1 is the interaction that makes rule 1 safe to
+// ship. Rule 1 bans on a single nonexistent-account attempt, which is what
+// catches the measured spray -- but a shared address carrying a real user would
+// otherwise be locked out by one hostile connection. The known-good exemption
+// suppresses the ban for an address a real user has authenticated from.
+//
+// The ban is still recorded; only its enforcement is suppressed, so the
+// operator can still see what policy decided.
+func TestLogin_KnownGoodSurvivesRule1(t *testing.T) {
+	srv, filter := newTimingServer(t, 0)
+	ctx := context.Background()
+	const ip = "203.0.113.5"
+
+	// Establish the address as known-good the only way possible: a real login.
+	if err := filter.RecordGood(ctx, ip); err != nil {
+		t.Fatalf("RecordGood: %v", err)
+	}
+
+	// Now a nonexistent-account attempt from the same address fires rule 1.
+	timeLogin(t, srv, "postmaster@example.com", "whatever", ip)
+
+	if v := filter.Check(ctx, ip); v.Banned {
+		t.Error("known-good address was banned by rule 1; a real user behind a " +
+			"shared address would be locked out")
+	}
+
+	// The ban exists on record even though it is not being enforced.
+	bans, err := filter.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(bans) != 1 {
+		t.Errorf("rule 1 did not record a ban (got %d); suppression should hide "+
+			"enforcement, not the decision", len(bans))
+	}
+}
+
+// TestLogin_UnknownAddressStillBannedByRule1 is the companion: the exemption
+// must not weaken rule 1 for addresses with no successful login behind them,
+// which is the overwhelming majority of the measured traffic.
+func TestLogin_UnknownAddressStillBannedByRule1(t *testing.T) {
+	srv, filter := newTimingServer(t, 0)
+	ctx := context.Background()
+	const ip = "198.51.100.9"
+
+	timeLogin(t, srv, "postmaster@example.com", "whatever", ip)
+
+	if v := filter.Check(ctx, ip); !v.Banned {
+		t.Error("address with no successful login was not banned by rule 1")
+	}
+}

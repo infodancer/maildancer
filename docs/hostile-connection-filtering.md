@@ -187,7 +187,58 @@ this is not a counter.
   the fallback if the strike counter proves noisy.
 - Unban: `userctl peer unban <ip|prefix>` plus `userctl peer list`. An operator
   path is mandatory, not optional -- rule 1 will eventually fire on something we
-  did not predict.
+  did not predict. See also the known-good exemption below, which is the
+  automatic half of the same concern.
+
+### The known-good exemption
+
+An address that has recently completed a **successful authentication by a real
+account** is exempt from connection-level bans.
+
+The purpose is to bound the denial-of-service exposure of rule 1. Rule 1 bans on
+a single attempt against a nonexistent account, which is what makes it effective
+against the measured spray -- but it also means one hostile connection from a
+shared address can lock out a legitimate user behind it. Recording who has
+actually authenticated gives the policy a reason to prefer the user.
+
+Only real accounts can produce this mark. A successful authentication *is* proof
+the account exists, and inbound SMTP never authenticates, so mail reception
+cannot mark an address good. Submission does, correctly -- that is a real user.
+
+Three bounds, because an exemption keyed on holding a valid credential is
+otherwise an attacker's asset:
+
+1. **It exempts the connection ban only, never the authentication rate
+   limiter.** A stolen credential buys connectivity from that address, not
+   unlimited password guessing: rule 2's counters still apply per (IP, user).
+   The two mechanisms live in different packages and nothing wires them
+   together; `TestKnownGood_DoesNotExemptTheRateLimiter` keeps it that way.
+2. **Revocation.** Each suppressed ban is counted, and past `revoke_after`
+   (default 10) the known-good marker is deleted and bans apply normally. An
+   address that keeps earning bans stops being trusted however many real logins
+   it has.
+3. **The ban itself is not deleted**, only ignored. It stays on record, keeps
+   its TTL, and still appears in `userctl peer list`, so what policy decided
+   stays visible even while the exemption overrides it.
+
+**Measurement is the point**, since the tradeoff cannot be settled from first
+principles. `userctl peer good` reports, per address, successful logins against
+bans suppressed. An address with a nonzero suppressed count is carrying both a
+real user and hostile traffic -- exactly the case that needs an operator's
+judgement rather than a default. Suppressions also log at warn.
+
+Two ordering properties worth knowing:
+
+- **A banned address can never become known-good.** The gate closes the
+  connection before any protocol runs, so it can never authenticate to prove
+  itself. Known-good status is only ever established *before* a ban, never as a
+  way out of one; operator recovery for a wrongly banned address is
+  `userctl peer unban`. This is also why `good_ttl` defaults to 30 days and
+  slides on every success -- a short window would expire the exemption exactly
+  when a spray from a recycled address needs it.
+- **The exemption lookup costs nothing on the happy path.** It runs only after
+  a ban has been found, so an unbanned peer still costs exactly one Redis
+  lookup.
 
 ### Rule 2: wrong password on a real account -> graduated counter
 
@@ -352,6 +403,10 @@ New, all domain- or IP-class-level, never per-user:
 - `peer_gate_cache_total{daemon,result}` -- hit/miss, to confirm the cache
   actually absorbs storms.
 - `peer_bans_total{rule}` -- bans created, by which rule fired.
+- Known-good suppressions are counted per address in Redis and surfaced by
+  `userctl peer good` rather than as a Prometheus series, because the useful
+  question is "which addresses" rather than "how many" -- a rate tells you
+  nothing about whether to intervene.
 - `peer_tarpit_active` -- gauge; watch it against `MaxTarpit`.
 - `peer_tarpit_rejected_total` -- denied connections closed immediately because
   the tarpit budget was full. Nonzero means `MaxTarpit` is undersized.
@@ -396,6 +451,9 @@ ban_ttl = "24h"
 ban_ttl_repeat = "168h"       # set equal to ban_ttl to disable escalation
 accept_tarpit = "30s"
 abuse_window = "1h"
+known_good = true             # exempt addresses with a recent successful login
+good_ttl = "720h"             # 30 days, refreshed on every success
+revoke_after = 10             # suppressed bans before trust is withdrawn; -1 never
 
 [session-manager.peerfilter.abuse_thresholds]
 # Signals with no entry here are counted but never ban on their own.

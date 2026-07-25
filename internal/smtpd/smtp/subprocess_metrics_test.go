@@ -60,8 +60,7 @@ func TestSubprocessMetricsEndToEnd(t *testing.T) {
 	// The reaper runs asynchronously. Poll until it has fully completed, which
 	// the active gauge returning to zero proves (it is decremented after Wait).
 	waitFor(t, 5*time.Second, func() bool {
-		return gaugeValue(t, reg, "smtpd_connections_active") == 0 &&
-			counterValue(t, reg, "smtpd_connections_total") == 1
+		return connectionSettled(t, reg, "smtpd")
 	})
 
 	// Parent-owned lifecycle series, maintained by the parent from spawn/reap.
@@ -136,6 +135,38 @@ func findFamily(t *testing.T, g prometheus.Gatherer, name string) *dto.MetricFam
 		}
 	}
 	return nil
+}
+
+// connectionSettled reports whether one connection has been fully handled --
+// spawned and reaped -- reading both series from a SINGLE gather.
+//
+// Two separate reads are not equivalent and were the cause of #215: an
+// `active == 0` sampled before the connection was accepted combines with a
+// `total == 1` sampled after the spawn, so the condition passes while the child
+// is still running. connfork drains the handler's report before OnConnEnd, so a
+// genuinely settled state is what makes the report assertions that follow
+// reliable; a spliced one is not.
+func connectionSettled(t *testing.T, g prometheus.Gatherer, namespace string) bool {
+	t.Helper()
+	mfs, err := g.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+
+	var active, total float64
+	for _, mf := range mfs {
+		metrics := mf.GetMetric()
+		if len(metrics) != 1 {
+			continue
+		}
+		switch mf.GetName() {
+		case namespace + "_connections_active":
+			active = metrics[0].GetGauge().GetValue()
+		case namespace + "_connections_total":
+			total = metrics[0].GetCounter().GetValue()
+		}
+	}
+	return active == 0 && total == 1
 }
 
 func counterValue(t *testing.T, g prometheus.Gatherer, name string) float64 {

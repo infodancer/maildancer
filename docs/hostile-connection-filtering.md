@@ -1,7 +1,7 @@
 # Hostile connection filtering
 
 Design for issue #206 (Redis-backed auth rate limiting and connection-level
-banning). Status: phases 1-3 implemented; phases 4-5 outstanding (see Phasing).
+banning). Status: phases 1-4 implemented; phase 5 outstanding (see Phasing).
 Read the issue and its first comment
 for the production data this is built on; the numbers are not repeated here
 beyond what the design turns on.
@@ -433,6 +433,9 @@ explicit `false` is distinguishable from an absent key.
 
 ```toml
 # Policy: what gets banned, and for how long.
+[session-manager]
+auth_fail_delay = "5s"         # uniform deadline for ALL auth failures; "0s" disables
+
 [session-manager.redis]
 url = "redis://redis:6379/1"   # required; without it neither feature enforces
 
@@ -477,8 +480,8 @@ before any RPC, so an allowlisted peer costs nothing; the
 both means neither a dispatcher bug nor a policy bug alone can lock an operator
 out. They should normally hold the same CIDRs.
 
-Still to come: `auth_fail_delay = "5s"` and `ban_on_password_failures` arrive
-with phase 4, which is where the auth-path timing work lands.
+`ban_on_password_failures` is the only knob still outstanding; see the residual
+oracle discussion.
 
 ## Test plan
 
@@ -490,9 +493,14 @@ that must not be skipped.
    and the response-time distributions statistically indistinguishable. Assert
    on the spread of both, not on a single sample -- a single measurement passes
    trivially and proves nothing. This is the test the issue asks for explicitly.
+   *(Done: `TestLogin_FailureTimingIsIndistinguishable`, with
+   `TestLogin_TimingLeaksWithoutTheDeadline` as its control, plus
+   `TestAuthenticate_UnknownUserCostsLikeWrongPassword` at the auth layer.)*
 2. **Rule 1 fires on N=1.** One nonexistent-account `Login` produces a ban; the
    next connection from that IP to a *different* daemon is denied at accept
    time. Cross-daemon is the point -- it is the whole argument for Redis.
+   *(Done: `TestLogin_NonexistentAccountBansOnFirstAttempt` for the ban,
+   `TestRedisLimitStore_LimiterEndToEnd` for the cross-process sharing.)*
 3. **Tarpit does not starve handlers.** Fill `MaxTarpit` with denied
    connections, then assert an allowed connection still gets a handler token
    promptly. This is the self-DoS regression test. *(Done:
@@ -531,7 +539,7 @@ Each phase is separately shippable and separately reviewable.
 3. `PeerGate` in connfork, with the token accounting, tarpit budget, allowlist,
    and parent cache. Wire all three dispatchers. **Done.**
 4. Rule 1 recording on the `Login` path plus the uniform failure deadline and
-   the decoy verify.
+   the decoy verify. **Done.**
 5. Rule 3 counters in smtpd, via `ValidateRecipient` and `ReportPeer`.
 
 Phase 3 lands the enforcement, so nothing before it changes what a client sees;
@@ -571,6 +579,27 @@ Two consequences for phase 2, both required before any of this does anything:
 Note that this makes phase 2 the first point where a real user can be locked
 out, which is worth remembering when picking the initial thresholds: they will
 be applied to production traffic that has never had them before.
+
+### Decided during phase 4
+
+- **The decoy verify lives in `auth/passwd`, not in the router.** The agent owns
+  the hash format and parameters, so it is the only place that can produce a
+  decoy costing exactly what a real verify costs. Measured gap being closed:
+  1.6us versus 26.6ms.
+- **The deadline lives in session-manager's `Login`, not in each daemon.** It is
+  the single funnel all three protocols pass through, and the daemons return as
+  soon as the RPC does, so the RPC duration is the client-visible duration.
+- **The deadline covers rate-limited responses too.** Not because a lockout
+  reveals account existence -- it does not -- but because one uniform rule is
+  easier to keep correct than a set of exceptions, and delaying a locked-out
+  attacker costs them rather than us.
+- **Rule 1 does not fire on a wrong password**, only on a nonexistent account.
+  Wrong-password-on-a-real-account is what a stale saved password looks like and
+  stays with rule 2, where a false positive costs a lockout rather than a ban.
+- **The timing test ships with a control.** A test that asserts two
+  distributions are close passes just as happily when neither has any signal in
+  it. `TestLogin_TimingLeaksWithoutTheDeadline` asserts the asymmetry *is*
+  observable with the deadline off, so the real test cannot rot into a no-op.
 
 ### Decided during phase 3
 

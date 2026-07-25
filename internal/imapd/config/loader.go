@@ -72,6 +72,14 @@ func Load(path string) (Config, error) {
 	// Merge top-level session-manager config
 	cfg = mergeSessionManagerConfig(cfg, fileConfig.SessionManager)
 
+	// Merge the shared top-level [peergate] section. Normalized here so an
+	// absent section still yields working defaults -- and so a bad duration is
+	// a startup error rather than a zero TTL discovered under attack (#206).
+	cfg.PeerGate = fileConfig.PeerGate
+	if err := cfg.PeerGate.Normalize(); err != nil {
+		return cfg, err
+	}
+
 	return cfg, nil
 }
 

@@ -45,7 +45,17 @@ type SubprocessServer struct {
 func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentMetrics *metrics.ParentMetrics, logger *slog.Logger) (*SubprocessServer, error) {
 	listeners := make([]connfork.Listener, 0, len(cfg.Listeners))
 	for _, lc := range cfg.Listeners {
-		listeners = append(listeners, connfork.Listener{Address: lc.Address, Mode: string(lc.Mode)})
+		// Submission (587) and SMTPS (465) exist to authenticate clients;
+		// plain SMTP (25) exists to receive mail from other MTAs and nobody
+		// authenticates there. Auth-derived bans are enforced only on the
+		// former, because refusing inbound mail on the strength of an
+		// authentication signal destroys a third party's message (#225).
+		authFacing := lc.Mode == config.ModeSubmission || lc.Mode == config.ModeSmtps
+		listeners = append(listeners, connfork.Listener{
+			Address:    lc.Address,
+			Mode:       string(lc.Mode),
+			AuthFacing: authFacing,
+		})
 	}
 
 	var onStart, onEnd func()

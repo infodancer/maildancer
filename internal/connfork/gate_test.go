@@ -21,7 +21,7 @@ type fakeGate struct {
 	block chan struct{}
 }
 
-func (g *fakeGate) CheckPeer(ctx context.Context, _ string) (Verdict, error) {
+func (g *fakeGate) CheckPeer(ctx context.Context, _ string, _ bool) (Verdict, error) {
 	g.mu.Lock()
 	g.calls++
 	block := g.block
@@ -473,10 +473,92 @@ func TestGate_EmptyClientIPSkipsGate(t *testing.T) {
 	gate := &fakeGate{verdict: Verdict{Banned: true}}
 	srv := NewServer(Config{Gate: gate})
 
-	if _, denied := srv.gateVerdict(context.Background(), ""); denied {
+	if _, denied := srv.gateVerdict(context.Background(), "", Listener{}); denied {
 		t.Error("empty client IP was denied")
 	}
 	if got := gate.callCount(); got != 0 {
 		t.Errorf("gate called %d times for an empty client IP", got)
 	}
+}
+
+// TestGate_ShadowBannedConnectionIsServed pins #225's whole point: a ban that is
+// out of scope for this listener must not stop the connection. The handler runs,
+// the verdict is counted as "shadow", and nothing is tarpitted.
+func TestGate_ShadowBannedConnectionIsServed(t *testing.T) {
+	gate := &fakeGate{verdict: Verdict{
+		ShadowBanned: true,
+		Reason:       "banned",
+		// A tarpit would be ignored, but set it to prove it is not applied.
+		Tarpit: 30 * time.Second,
+	}}
+	h := newGateHarness(t, func(c *Config) { c.Gate = gate })
+
+	conn, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	eventually(t, 5*time.Second, "handler spawn for a shadow-banned peer", func() bool {
+		return h.started.Load() >= 1
+	})
+	eventually(t, 5*time.Second, "shadow verdict", func() bool {
+		return h.verdictCount("shadow") >= 1
+	})
+	if got := h.verdictCount("deny"); got != 0 {
+		t.Errorf("%d deny verdicts for a shadow ban", got)
+	}
+	if got := h.tarpit.Load(); got != 0 {
+		t.Errorf("tarpit gauge = %d for a served connection", got)
+	}
+}
+
+// TestGate_AuthFacingReachesTheGate confirms the listener's role is what the
+// gate is asked about. Without it session-manager cannot scope anything.
+func TestGate_AuthFacingReachesTheGate(t *testing.T) {
+	gate := &recordingGate{}
+	h := newGateHarness(t, func(c *Config) {
+		c.Gate = gate
+		c.Listeners[0].AuthFacing = true
+	})
+
+	conn, err := net.Dial("tcp", h.addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	eventually(t, 5*time.Second, "gate consultation", func() bool {
+		return gate.calls() >= 1
+	})
+	if !gate.lastAuthFacing() {
+		t.Error("auth_facing=false reached the gate for an auth-facing listener")
+	}
+}
+
+// recordingGate captures what it was asked.
+type recordingGate struct {
+	mu         sync.Mutex
+	n          int
+	authFacing bool
+}
+
+func (g *recordingGate) CheckPeer(_ context.Context, _ string, authFacing bool) (Verdict, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.n++
+	g.authFacing = authFacing
+	return Verdict{}, nil
+}
+
+func (g *recordingGate) calls() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.n
+}
+
+func (g *recordingGate) lastAuthFacing() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.authFacing
 }

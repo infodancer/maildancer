@@ -37,7 +37,7 @@ func newPeerTestServer(t *testing.T, override func(*peerfilter.Config)) (*sessio
 func TestCheckPeer_AllowsUnbannedPeer(t *testing.T) {
 	srv, _, _ := newPeerTestServer(t, nil)
 
-	resp, err := srv.CheckPeer(context.Background(), &smpb.CheckPeerRequest{Ip: "203.0.113.5"})
+	resp, err := srv.CheckPeer(context.Background(), &smpb.CheckPeerRequest{Ip: "203.0.113.5", AuthFacing: true})
 	if err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestCheckPeer_DeniesBannedPeerWithTarpit(t *testing.T) {
 		t.Fatalf("Ban: %v", err)
 	}
 
-	resp, err := srv.CheckPeer(ctx, &smpb.CheckPeerRequest{Ip: "203.0.113.5"})
+	resp, err := srv.CheckPeer(ctx, &smpb.CheckPeerRequest{Ip: "203.0.113.5", AuthFacing: true})
 	if err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestCheckPeer_DeniesBannedPeerWithTarpit(t *testing.T) {
 func TestCheckPeer_EmptyIPIsAllowed(t *testing.T) {
 	srv, _, _ := newPeerTestServer(t, nil)
 
-	resp, err := srv.CheckPeer(context.Background(), &smpb.CheckPeerRequest{Ip: ""})
+	resp, err := srv.CheckPeer(context.Background(), &smpb.CheckPeerRequest{Ip: "", AuthFacing: true})
 	if err != nil {
 		t.Fatalf("CheckPeer with empty ip returned an error: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestCheckPeer_EmptyIPIsAllowed(t *testing.T) {
 func TestCheckPeer_NilFilterAllows(t *testing.T) {
 	srv := &sessionServer{}
 
-	resp, err := srv.CheckPeer(context.Background(), &smpb.CheckPeerRequest{Ip: "203.0.113.5"})
+	resp, err := srv.CheckPeer(context.Background(), &smpb.CheckPeerRequest{Ip: "203.0.113.5", AuthFacing: true})
 	if err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestReportPeer_BansAtThreshold(t *testing.T) {
 	if _, err := srv.ReportPeer(ctx, req); err != nil {
 		t.Fatalf("ReportPeer: %v", err)
 	}
-	resp, err := srv.CheckPeer(ctx, &smpb.CheckPeerRequest{Ip: "203.0.113.5"})
+	resp, err := srv.CheckPeer(ctx, &smpb.CheckPeerRequest{Ip: "203.0.113.5", AuthFacing: true})
 	if err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestReportPeer_BansAtThreshold(t *testing.T) {
 	if _, err := srv.ReportPeer(ctx, req); err != nil {
 		t.Fatalf("ReportPeer: %v", err)
 	}
-	resp, err = srv.CheckPeer(ctx, &smpb.CheckPeerRequest{Ip: "203.0.113.5"})
+	resp, err = srv.CheckPeer(ctx, &smpb.CheckPeerRequest{Ip: "203.0.113.5", AuthFacing: true})
 	if err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestCheckPeer_IPv6UsesPrefix(t *testing.T) {
 		t.Fatalf("Ban: %v", err)
 	}
 
-	resp, err := srv.CheckPeer(ctx, &smpb.CheckPeerRequest{Ip: "2001:db8:aa:bb:cafe::9"})
+	resp, err := srv.CheckPeer(ctx, &smpb.CheckPeerRequest{Ip: "2001:db8:aa:bb:cafe::9", AuthFacing: true})
 	if err != nil {
 		t.Fatalf("CheckPeer: %v", err)
 	}

@@ -303,7 +303,16 @@ type CheckPeerRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Peer IP address. IPv6 addresses are normalized to their /64 before
 	// lookup, since individual v6 addresses are free to an attacker.
-	Ip            string `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
+	Ip string `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
+	// True when the listener that accepted this connection is one where
+	// authentication is the point (imap, pop3, submission) rather than inbound
+	// mail reception (smtp on 25).
+	//
+	// The daemon classifies its own listener because connfork treats the mode
+	// string as opaque and each daemon owns its own vocabulary. Bans derived from
+	// authentication signals are enforced only on auth-facing listeners; on
+	// inbound SMTP they come back as shadow_banned instead (#225).
+	AuthFacing    bool `protobuf:"varint,2,opt,name=auth_facing,json=authFacing,proto3" json:"auth_facing,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -345,6 +354,13 @@ func (x *CheckPeerRequest) GetIp() string {
 	return ""
 }
 
+func (x *CheckPeerRequest) GetAuthFacing() bool {
+	if x != nil {
+		return x.AuthFacing
+	}
+	return false
+}
+
 type CheckPeerResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// True when the dispatcher must not serve this peer.
@@ -356,7 +372,12 @@ type CheckPeerResponse struct {
 	// Coarse policy label for the daemon's logs and metrics. Deliberately not
 	// the username, and not which signal fired -- it must not become a
 	// side channel.
-	Reason        string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	Reason string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	// True when a ban exists for this peer but is out of scope for the listener
+	// that asked. The connection must be served; the dispatcher records what it
+	// would have refused, so the cost of widening the ban can be measured before
+	// it is paid (#225). Never set together with banned.
+	ShadowBanned  bool `protobuf:"varint,4,opt,name=shadow_banned,json=shadowBanned,proto3" json:"shadow_banned,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -410,6 +431,13 @@ func (x *CheckPeerResponse) GetReason() string {
 		return x.Reason
 	}
 	return ""
+}
+
+func (x *CheckPeerResponse) GetShadowBanned() bool {
+	if x != nil {
+		return x.ShadowBanned
+	}
+	return false
 }
 
 type ReportPeerRequest struct {
@@ -587,13 +615,16 @@ const file_sessionmanager_v1_session_proto_rawDesc = "" +
 	"\x0eLogoutResponse\"Q\n" +
 	"\x18ValidateRecipientRequest\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x1b\n" +
-	"\tclient_ip\x18\x02 \x01(\tR\bclientIp\"\"\n" +
+	"\tclient_ip\x18\x02 \x01(\tR\bclientIp\"C\n" +
 	"\x10CheckPeerRequest\x12\x0e\n" +
-	"\x02ip\x18\x01 \x01(\tR\x02ip\"`\n" +
+	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x1f\n" +
+	"\vauth_facing\x18\x02 \x01(\bR\n" +
+	"authFacing\"\x85\x01\n" +
 	"\x11CheckPeerResponse\x12\x16\n" +
 	"\x06banned\x18\x01 \x01(\bR\x06banned\x12\x1b\n" +
 	"\ttarpit_ms\x18\x02 \x01(\x03R\btarpitMs\x12\x16\n" +
-	"\x06reason\x18\x03 \x01(\tR\x06reason\";\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12#\n" +
+	"\rshadow_banned\x18\x04 \x01(\bR\fshadowBanned\";\n" +
 	"\x11ReportPeerRequest\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x16\n" +
 	"\x06signal\x18\x02 \x01(\tR\x06signal\"\x14\n" +

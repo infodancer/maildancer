@@ -39,13 +39,13 @@ func TestValidateRecipient_InvalidRecipientBansAtThreshold(t *testing.T) {
 
 	for i := range 2 {
 		validate(t, srv, "nosuchuser@example.com", ip)
-		if v := srv.filter.Check(ctx, ip); v.Banned {
+		if v := srv.filter.Check(ctx, ip, true); v.Banned {
 			t.Fatalf("banned after %d invalid recipients, threshold is 3", i+1)
 		}
 	}
 
 	validate(t, srv, "nosuchuser@example.com", ip)
-	if v := srv.filter.Check(ctx, ip); !v.Banned {
+	if v := srv.filter.Check(ctx, ip, true); !v.Banned {
 		t.Error("not banned after reaching the invalid-recipient threshold")
 	}
 }
@@ -68,7 +68,7 @@ func TestValidateRecipient_ValidRecipientIsNotAbuse(t *testing.T) {
 		}
 	}
 
-	if v := srv.filter.Check(ctx, ip); v.Banned {
+	if v := srv.filter.Check(ctx, ip, true); v.Banned {
 		t.Error("valid recipients produced an abuse ban")
 	}
 }
@@ -91,7 +91,7 @@ func TestValidateRecipient_NonLocalDomainIsNotAbuse(t *testing.T) {
 		}
 	}
 
-	if v := srv.filter.Check(ctx, ip); v.Banned {
+	if v := srv.filter.Check(ctx, ip, true); v.Banned {
 		t.Error("recipients on a non-local domain produced an abuse ban")
 	}
 }
@@ -140,7 +140,7 @@ func TestReportPeer_RelayDeniedBansAtThreshold(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("ReportPeer %d: %v", i, err)
 		}
-		if v := srv.filter.Check(ctx, ip); v.Banned {
+		if v := srv.filter.Check(ctx, ip, true); v.Banned {
 			t.Fatalf("banned after %d relay attempts, threshold is 3", i+1)
 		}
 	}
@@ -150,7 +150,7 @@ func TestReportPeer_RelayDeniedBansAtThreshold(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ReportPeer: %v", err)
 	}
-	if v := srv.filter.Check(ctx, ip); !v.Banned {
+	if v := srv.filter.Check(ctx, ip, true); !v.Banned {
 		t.Error("not banned after reaching the relay-denied threshold")
 	}
 }
@@ -175,7 +175,7 @@ func TestRule3_SignalsCountSeparately(t *testing.T) {
 		t.Fatalf("ReportPeer: %v", err)
 	}
 
-	if v := srv.filter.Check(ctx, ip); v.Banned {
+	if v := srv.filter.Check(ctx, ip, true); v.Banned {
 		t.Error("one occurrence of each of two signals reached a threshold")
 	}
 }

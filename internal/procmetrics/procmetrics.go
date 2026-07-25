@@ -269,7 +269,7 @@ func NewParentMetrics(reg prometheus.Registerer, namespace string) *ParentMetric
 		}, []string{"reason"}),
 		gateChecks: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: namespace + "_peer_gate_checks_total",
-			Help: "Accept-time peer gate consultations by verdict (allow, deny, error).",
+			Help: "Accept-time peer gate consultations by verdict (allow, deny, error, shadow). shadow means a ban existed but was out of scope for the listener and the connection was served anyway.",
 		}, []string{"verdict"}),
 		gateCache: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: namespace + "_peer_gate_cache_total",
@@ -299,7 +299,7 @@ func NewParentMetrics(reg prometheus.Registerer, namespace string) *ParentMetric
 	// than appearing only on first use. An absent counter reads as "not
 	// instrumented" (see #207); a zero one reads as "nothing happened yet",
 	// which is what an alert rule needs.
-	for _, v := range []string{"allow", "deny", "error"} {
+	for _, v := range []string{"allow", "deny", "error", "shadow"} {
 		p.gateChecks.WithLabelValues(v)
 	}
 	for _, r := range []string{"hit", "miss"} {

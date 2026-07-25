@@ -200,13 +200,13 @@ func TestLogin_NonexistentAccountBansOnFirstAttempt(t *testing.T) {
 	ctx := context.Background()
 	const ip = "203.0.113.5"
 
-	if v := filter.Check(ctx, ip); v.Banned {
+	if v := filter.Check(ctx, ip, true); v.Banned {
 		t.Fatal("precondition: address should not start banned")
 	}
 
 	timeLogin(t, srv, "postmaster@example.com", "whatever", ip)
 
-	if v := filter.Check(ctx, ip); !v.Banned {
+	if v := filter.Check(ctx, ip, true); !v.Banned {
 		t.Error("one attempt against a nonexistent account did not ban the address")
 	}
 }
@@ -223,7 +223,7 @@ func TestLogin_WrongPasswordDoesNotBan(t *testing.T) {
 		timeLogin(t, srv, "alice@example.com", "wrong", ip)
 	}
 
-	if v := filter.Check(ctx, ip); v.Banned {
+	if v := filter.Check(ctx, ip, true); v.Banned {
 		t.Error("wrong password on a real account produced a connection ban")
 	}
 }
@@ -344,7 +344,7 @@ func TestLogin_KnownGoodSurvivesRule1(t *testing.T) {
 	// Now a nonexistent-account attempt from the same address fires rule 1.
 	timeLogin(t, srv, "postmaster@example.com", "whatever", ip)
 
-	if v := filter.Check(ctx, ip); v.Banned {
+	if v := filter.Check(ctx, ip, true); v.Banned {
 		t.Error("known-good address was banned by rule 1; a real user behind a " +
 			"shared address would be locked out")
 	}
@@ -370,7 +370,7 @@ func TestLogin_UnknownAddressStillBannedByRule1(t *testing.T) {
 
 	timeLogin(t, srv, "postmaster@example.com", "whatever", ip)
 
-	if v := filter.Check(ctx, ip); !v.Banned {
+	if v := filter.Check(ctx, ip, true); !v.Banned {
 		t.Error("address with no successful login was not banned by rule 1")
 	}
 }

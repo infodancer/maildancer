@@ -239,6 +239,13 @@ type ParentMetrics struct {
 	connectionsActive prometheus.Gauge
 	handlerFailures   *prometheus.CounterVec
 	agg               *aggregator
+
+	// Peer-gate series (#206). Parent-owned like the connection series: the
+	// gate runs in the dispatcher, before any handler exists.
+	gateChecks     *prometheus.CounterVec
+	gateCache      *prometheus.CounterVec
+	tarpitActive   prometheus.Gauge
+	tarpitRejected prometheus.Counter
 }
 
 // NewParentMetrics builds the parent metrics surface for the given metric
@@ -260,14 +267,71 @@ func NewParentMetrics(reg prometheus.Registerer, namespace string) *ParentMetric
 			Name: namespace + "_handler_failures_total",
 			Help: "Total number of protocol-handler subprocess metrics reports that could not be read or decoded.",
 		}, []string{"reason"}),
+		gateChecks: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: namespace + "_peer_gate_checks_total",
+			Help: "Accept-time peer gate consultations by verdict (allow, deny, error).",
+		}, []string{"verdict"}),
+		gateCache: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: namespace + "_peer_gate_cache_total",
+			Help: "Peer gate verdict cache lookups by result (hit, miss).",
+		}, []string{"result"}),
+		tarpitActive: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: namespace + "_peer_tarpit_active",
+			Help: "Denied connections currently held in the tarpit.",
+		}),
+		tarpitRejected: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: namespace + "_peer_tarpit_rejected_total",
+			Help: "Denied connections closed immediately because the tarpit budget was full. Nonzero means max_tarpit is undersized.",
+		}),
 		agg: newAggregator(map[string]struct{}{
-			namespace + "_connections_total":  {},
-			namespace + "_connections_active": {},
+			namespace + "_connections_total":          {},
+			namespace + "_connections_active":         {},
+			namespace + "_peer_gate_checks_total":     {},
+			namespace + "_peer_gate_cache_total":      {},
+			namespace + "_peer_tarpit_active":         {},
+			namespace + "_peer_tarpit_rejected_total": {},
 		}),
 	}
-	reg.MustRegister(p.connectionsTotal, p.connectionsActive, p.handlerFailures, p.agg)
+	reg.MustRegister(p.connectionsTotal, p.connectionsActive, p.handlerFailures,
+		p.gateChecks, p.gateCache, p.tarpitActive, p.tarpitRejected, p.agg)
+
+	// Pre-create the label combinations so the series exist at zero rather
+	// than appearing only on first use. An absent counter reads as "not
+	// instrumented" (see #207); a zero one reads as "nothing happened yet",
+	// which is what an alert rule needs.
+	for _, v := range []string{"allow", "deny", "error"} {
+		p.gateChecks.WithLabelValues(v)
+	}
+	for _, r := range []string{"hit", "miss"} {
+		p.gateCache.WithLabelValues(r)
+	}
 	return p
 }
+
+// GateVerdict counts one accept-time gate consultation. verdict is "allow",
+// "deny", or "error".
+func (p *ParentMetrics) GateVerdict(verdict string) {
+	p.gateChecks.WithLabelValues(verdict).Inc()
+}
+
+// GateCacheResult counts a verdict cache lookup.
+func (p *ParentMetrics) GateCacheResult(hit bool) {
+	result := "miss"
+	if hit {
+		result = "hit"
+	}
+	p.gateCache.WithLabelValues(result).Inc()
+}
+
+// TarpitStarted and TarpitEnded bracket a held connection.
+func (p *ParentMetrics) TarpitStarted() { p.tarpitActive.Inc() }
+
+// TarpitEnded records a held connection being released.
+func (p *ParentMetrics) TarpitEnded() { p.tarpitActive.Dec() }
+
+// TarpitRejected records a denied connection closed immediately because the
+// tarpit budget was full.
+func (p *ParentMetrics) TarpitRejected() { p.tarpitRejected.Inc() }
 
 // ConnectionOpened records a newly spawned protocol-handler.
 func (p *ParentMetrics) ConnectionOpened() {

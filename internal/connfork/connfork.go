@@ -186,6 +186,8 @@ func (s *Server) Run(ctx context.Context) error {
 		return errors.New("connfork: ExecPath is required")
 	}
 
+	s.checkFDHeadroom()
+
 	lns := make([]net.Listener, 0, len(s.cfg.Listeners))
 	for _, lc := range s.cfg.Listeners {
 		ln, err := net.Listen("tcp", lc.Address)
@@ -216,6 +218,43 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	s.wg.Wait()
 	return ctx.Err()
+}
+
+// checkFDHeadroom warns at startup when the configured connection and tarpit
+// budgets can exceed the process descriptor limit.
+//
+// Held tarpit connections are descriptors with no handler behind them, so the
+// real ceiling on MaxTarpit is RLIMIT_NOFILE -- and discovering that under
+// attack, as accept failures, is the worst time to find out.
+func (s *Server) checkFDHeadroom() {
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		s.cfg.Logger.Debug("cannot read RLIMIT_NOFILE", slog.String("error", err.Error()))
+		return
+	}
+
+	tarpit := 0
+	if s.tarpitTokens != nil {
+		tarpit = cap(s.tarpitTokens)
+	}
+	// Each live handler costs the parent a descriptor only transiently, but
+	// budget for it anyway; the listeners and the session-manager connection
+	// need a handful more.
+	const overhead = 32
+	needed := uint64(s.cfg.MaxConns + tarpit + overhead)
+
+	if needed > lim.Cur {
+		s.cfg.Logger.Warn("connection budgets exceed the descriptor limit",
+			slog.Int("max_conns", s.cfg.MaxConns),
+			slog.Int("max_tarpit", tarpit),
+			slog.Uint64("rlimit_nofile", lim.Cur),
+			slog.Uint64("needed", needed))
+		return
+	}
+	s.cfg.Logger.Debug("descriptor headroom",
+		slog.Int("max_conns", s.cfg.MaxConns),
+		slog.Int("max_tarpit", tarpit),
+		slog.Uint64("rlimit_nofile", lim.Cur))
 }
 
 func (s *Server) acceptLoop(ctx context.Context, ln net.Listener, lc Listener) {

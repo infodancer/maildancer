@@ -241,6 +241,60 @@ Two ordering properties worth knowing:
   a ban has been found, so an unbanned peer still costs exactly one Redis
   lookup.
 
+### Ban scope: where the evidence came from decides where it applies
+
+A ban is enforced on the listeners its evidence speaks to, not on every port
+(#225).
+
+Rule 1's justification is narrow and airtight: *no legitimate client
+authenticates as an account that does not exist.* Extending it to inbound SMTP
+requires a different and much weaker claim -- *no legitimate MTA sends from an
+address that once did* -- which nothing in the data supports. The costs are
+asymmetric in kind, not degree: refusing a sprayer's IMAP attempt costs nobody
+anything, while refusing inbound SMTP destroys a third party's message. And the
+measured spray came from DigitalOcean, Tencent, Scaleway and GoDaddy, which is
+exactly the shared infrastructure where a sprayer and a real sending MTA
+plausibly share an address.
+
+So:
+
+| Ban reason | auth-facing listeners (imap, pop3, submission, smtps) | inbound SMTP (25) |
+|---|---|---|
+| `nonexistent_account` (rule 1) | enforced | **shadow: served and recorded** |
+| `abuse:<signal>` (rule 3) | enforced | enforced |
+| `manual` (operator) | enforced | enforced |
+| anything unclassified | enforced | enforced |
+
+Rule 3 enforces everywhere because its evidence is SMTP-native -- the address
+demonstrated the behaviour on the port being refused -- and no legitimate IMAP
+client sits behind an address probing for an open relay. Operator bans enforce
+everywhere because someone meant it. An unclassified reason enforces everywhere
+so that adding a ban source cannot silently stop protecting something.
+
+**Shadow mode is a measurement, not a permanent state.** A shadow-banned
+connection is served, logged at warn with the address, and counted as
+`peer_gate_checks_total{verdict="shadow"}`, so the volume of would-be refusals
+can be cross-referenced against the mail that actually arrived. Set
+`auth_ban_scope = "all"` once the data says the refusals cost nothing.
+
+Two smaller points that argue the same way, and that shadow mode also defers:
+
+- **A silent close is a bad SMTP citizen.** The gate holds ~30s and closes with
+  no banner and no status code, which a legitimate MTA reads as a network fault:
+  it queues, retries for days, then bounces something confusing, and the
+  recipient never learns the message existed. Enforcing on 25 should probably
+  mean a `421` after the banner rather than a silent hold. Greylisting is this
+  same idea done properly, because it speaks SMTP.
+- **SMTP already has better-calibrated defences.** RBLs, greylisting, SPF/DKIM/
+  DMARC and rspamd are tuned with global visibility. A ban inferred from an IMAP
+  authentication attempt is a worse predictor of "this MTA sends spam" than
+  Spamhaus is, and the gate stacks it in front of all of them where nothing can
+  override it.
+
+There is also a small griefing vector: someone on shared hosting can spray
+authentication deliberately to get the shared address banned, denying mail
+service to innocent co-tenants' outbound. Our ban, their weapon.
+
 ### Rule 2: wrong password on a real account -> graduated counter
 
 The rare case in the data, and the only one where a false positive locks out a
@@ -411,6 +465,8 @@ New, all domain- or IP-class-level, never per-user:
 - `peer_tarpit_active` -- gauge; watch it against `MaxTarpit`.
 - `peer_tarpit_rejected_total` -- denied connections closed immediately because
   the tarpit budget was full. Nonzero means `MaxTarpit` is undersized.
+- `peer_gate_checks_total{verdict="shadow"}` -- would-be refusals on inbound
+  SMTP, the dataset for deciding whether to widen auth-derived bans (#225).
 - Gate errors are the `verdict="error"` label on `peer_gate_checks_total` rather
   than a separate family -- one series answers "how often is the gate
   consulted, and how does it come out", and the fail-open alarm is a nonzero
@@ -455,6 +511,7 @@ ban_ttl = "24h"
 ban_ttl_repeat = "168h"       # set equal to ban_ttl to disable escalation
 accept_tarpit = "30s"
 abuse_window = "1h"
+auth_ban_scope = "auth_listeners"  # "all" also refuses inbound SMTP on 25
 known_good = true             # exempt addresses with a recent successful login
 good_ttl = "720h"             # 30 days, refreshed on every success
 revoke_after = 10             # suppressed bans before trust is withdrawn; -1 never

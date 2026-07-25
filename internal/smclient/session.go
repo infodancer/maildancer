@@ -69,6 +69,7 @@ type Session struct {
 	token    string
 	username string
 	cred     []byte // retained credential; zeroed on Close/fatal
+	clientIP string // peer address, replayed on recovery re-login
 	mailbox  string
 
 	recoverMu sync.Mutex // single-flight recovery
@@ -99,8 +100,8 @@ func (s *Session) SetRecoveryMetric(f func(result string)) { s.onRecovery = f }
 // Login authenticates and retains the presented credential for the lifetime
 // of this session, enabling recovery. The credential lives only in this
 // process (a per-connection protocol handler) and is zeroed on Close.
-func (s *Session) Login(ctx context.Context, username, password string) (mailbox string, err error) {
-	token, mbox, err := s.client.Login(ctx, username, password)
+func (s *Session) Login(ctx context.Context, username, password, clientIP string) (mailbox string, err error) {
+	token, mbox, err := s.client.Login(ctx, username, password, clientIP)
 	if err != nil {
 		return "", err
 	}
@@ -109,6 +110,10 @@ func (s *Session) Login(ctx context.Context, username, password string) (mailbox
 	s.username = username
 	s.cred = []byte(password)
 	s.mailbox = mbox
+	// Retained alongside the credential so a transparent re-login is keyed to
+	// the same peer as the original: a recovery that arrived with no client IP
+	// would silently bypass rate limiting (#206).
+	s.clientIP = clientIP
 	s.mu.Unlock()
 	return mbox, nil
 }
@@ -178,6 +183,7 @@ func (s *Session) recover(ctx context.Context, failedToken string) error {
 	current := s.token
 	username := s.username
 	cred := string(s.cred)
+	clientIP := s.clientIP
 	s.mu.Unlock()
 
 	if current != failedToken {
@@ -187,7 +193,7 @@ func (s *Session) recover(ctx context.Context, failedToken string) error {
 		return ErrNotLoggedIn
 	}
 
-	token, mbox, err := s.client.Login(ctx, username, cred)
+	token, mbox, err := s.client.Login(ctx, username, cred, clientIP)
 	if err != nil {
 		if status.Code(err) == codes.Unauthenticated {
 			// The manager is up and refused the credential: password

@@ -135,7 +135,7 @@ func (s *Session) Auth(mech string) (sasl.Server, error) {
 		return sasl.NewPlainServer(func(identity, username, password string) error {
 			ctx := context.Background()
 
-			result, err := s.backend.smDelivery.Login(ctx, username, password)
+			result, err := s.backend.smDelivery.Login(ctx, username, password, s.clientIP)
 			if err != nil {
 				if s.backend.collector != nil {
 					domain := sessionExtractAuthDomain(username)

@@ -132,7 +132,7 @@ func TestSessionManagerClient_LoginLogout(t *testing.T) {
 
 	ctx := context.Background()
 
-	token, mailbox, err := client.Login(ctx, "alice@example.com", "secret")
+	token, mailbox, err := client.Login(ctx, "alice@example.com", "secret", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestSessionManagerClient_LoginFailure(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	_, _, err = client.Login(context.Background(), "alice@example.com", "wrong")
+	_, _, err = client.Login(context.Background(), "alice@example.com", "wrong", "10.0.0.1")
 	if err == nil {
 		t.Fatal("Login should have failed")
 	}
@@ -410,7 +410,7 @@ func TestNewSessionManagerClient_mTLSMissingCert(t *testing.T) {
 func newTestPop3Store(t *testing.T, client *SessionManagerClient) *sessionManagerStore {
 	t.Helper()
 	sess := smclient.NewSession(client, smclient.SessionConfig{}, nil)
-	if _, err := sess.Login(context.Background(), "user@example.com", "secret"); err != nil {
+	if _, err := sess.Login(context.Background(), "user@example.com", "secret", "10.0.0.1"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	return newSessionManagerStore(sess)

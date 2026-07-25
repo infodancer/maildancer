@@ -15,6 +15,7 @@ import (
 	imap "github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapserver"
 	"github.com/infodancer/logging"
+	"github.com/infodancer/maildancer/internal/connfork"
 	"github.com/infodancer/maildancer/internal/imapd/config"
 	"github.com/infodancer/maildancer/internal/imapd/metrics"
 	"github.com/infodancer/maildancer/internal/imapd/notify"
@@ -39,6 +40,7 @@ type Session struct {
 	username   string
 	mailbox    string // user's mailbox identifier from auth
 	userDomain string
+	clientIP   string // peer address, sent to session-manager for rate limiting
 	collector  metrics.Collector
 	logger     *slog.Logger
 
@@ -88,6 +90,7 @@ func NewSession(conn *imapserver.Conn, cfg *config.Config, smClient *SessionMana
 		learner:           learner,
 		subscriber:        subscriber,
 		collector:         collector,
+		clientIP:          connfork.RemoteIP(conn.NetConn()),
 		logger:            logging.WithConnection(logger, conn.NetConn().RemoteAddr().String()),
 		keepaliveInterval: cfg.Timeouts.SessionKeepaliveInterval(),
 		closed:            make(chan struct{}),
@@ -106,7 +109,7 @@ func (s *Session) Login(username, password string) error {
 	smSess.SetRecoveredHook(s.recoveredHook)
 	smSess.SetRecoveryMetric(s.collector.SessionRecovery)
 
-	mailbox, err := smSess.Login(ctx, username, password)
+	mailbox, err := smSess.Login(ctx, username, password, s.clientIP)
 	if err != nil {
 		s.logger.Info("login failed", "username", username, "error", err)
 		s.collector.AuthAttempt(extractDomain(username), false)

@@ -21,6 +21,7 @@ package keyseal
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 
 	"golang.org/x/crypto/argon2"
@@ -80,11 +81,27 @@ func Open(sealed []byte, password string) ([]byte, error) {
 }
 
 // isKeyring reports whether the blob is the JSON keyring envelope rather than
-// the legacy binary single-key layout. The legacy blob begins with 32 bytes of
-// random salt, so a leading '{' reliably distinguishes the two.
+// the legacy binary single-key layout.
+//
+// A leading '{' is necessary but NOT sufficient, which is what the original
+// version of this got wrong. The legacy blob begins with 32 bytes of random
+// salt, so roughly one legacy blob in 256 starts with 0x7b and was misrouted to
+// the keyring parser -- returning ErrInvalidKeyFormat for a perfectly good
+// sealed key, permanently, so that user could never decrypt their mail.
+//
+// Requiring the blob to actually parse as JSON makes the test definitive:
+// random salt bytes will not form a valid JSON document (matching braces, valid
+// syntax, valid UTF-8), and a real keyring envelope always will.
+//
+// The asymmetry is deliberate. A blob that starts with '{' but is not valid JSON
+// is far more likely to be a legacy blob with an unlucky salt -- a routine
+// event at 1-in-256 -- than a corrupted keyring, so it falls through to the
+// legacy path. A genuinely corrupt keyring then reports a decrypt failure
+// instead of a format error, which is an acceptable trade for not losing access
+// to 0.4% of legacy keys.
 func isKeyring(sealed []byte) bool {
 	t := bytes.TrimLeft(sealed, " \t\r\n")
-	return len(t) > 0 && t[0] == '{'
+	return len(t) > 0 && t[0] == '{' && json.Valid(t)
 }
 
 // sealLegacy produces the pre-keyring single-key blob. Retained so the

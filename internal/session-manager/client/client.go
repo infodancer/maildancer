@@ -53,10 +53,11 @@ func Dial(socketPath string) (*Client, error) {
 // Login authenticates a user and creates a mail session.
 // Returns the opaque session token and the authenticated mailbox identifier.
 // The token must be passed to NewMessageStore and to Logout.
-func (c *Client) Login(ctx context.Context, username, password string) (token, mailbox string, err error) {
+func (c *Client) Login(ctx context.Context, username, password, clientIP string) (token, mailbox string, err error) {
 	resp, err := c.session.Login(ctx, &smpb.LoginRequest{
 		Username: username,
 		Password: password,
+		ClientIp: clientIP,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("session-manager login: %w", err)

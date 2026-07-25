@@ -83,10 +83,11 @@ type LoginResult struct {
 }
 
 // Login authenticates a user via session-manager and returns the auth result.
-func (a *SessionManagerDeliveryAgent) Login(ctx context.Context, username, password string) (*LoginResult, error) {
+func (a *SessionManagerDeliveryAgent) Login(ctx context.Context, username, password, clientIP string) (*LoginResult, error) {
 	resp, err := a.session.Login(ctx, &smpb.LoginRequest{
 		Username: username,
 		Password: password,
+		ClientIp: clientIP,
 	})
 	if err != nil {
 		return nil, err

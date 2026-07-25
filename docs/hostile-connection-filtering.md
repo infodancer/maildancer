@@ -416,7 +416,7 @@ Each phase is separately shippable and separately reviewable.
    No behavior change for the daemons. **Done.**
 2. **Wire the limiter up at all** (see below), then `CheckPeer`/`ReportPeer` on
    `SessionService`; policy and Redis in session-manager; `userctl peer
-   list|unban`.
+   list|unban`. **Done.**
 3. `PeerGate` in connfork, with the token accounting, tarpit budget, allowlist,
    and parent cache. Wire all three dispatchers.
 4. Rule 1 recording on the `Login` path plus the uniform failure deadline and
@@ -427,6 +427,11 @@ Phase 3 lands the enforcement, so nothing before it changes what a client sees;
 phase 4 is where the timing test becomes mandatory.
 
 ### The limiter is not wired up, and phase 2 has to fix that first
+
+**Resolved in phase 2.** `LoginRequest` carries `client_ip`, every daemon sends
+it, session-manager calls `WithRedisRateLimit`, and
+`TestLogin_ClientIPReachesRateLimiter` asserts the whole chain. The rest of this
+section is kept as the record of what was wrong.
 
 Found while implementing phase 1. The issue describes the existing limiter as
 losing its state on restart, which is true but understates the situation:
@@ -456,9 +461,32 @@ Note that this makes phase 2 the first point where a real user can be locked
 out, which is worth remembering when picking the initial thresholds: they will
 be applied to production traffic that has never had them before.
 
+### Decided during phase 2
+
+- **Graduated ban TTL: implemented, and disableable.** A strike counter with a
+  30-day TTL (longer than the longest ban, so an address that serves a full ban
+  and returns is still recognized) selects `ban_ttl_repeat` over `ban_ttl`.
+  Setting the two equal turns escalation off without a separate flag.
+- **The peer filter requires Redis; the auth limiter does not.** The auth
+  limiter keeps its in-process fallback because a bruteforcer hammering one
+  connection is visible to whichever process holds it. An accept-time ban has no
+  per-process meaning at all -- separate daemons, one-shot handlers, and an
+  attack that sprays several daemons from the same addresses -- so with no Redis
+  the filter is off rather than pretending to work.
+- **Both features default to off.** They are the first authentication limits
+  this deployment has ever enforced, so enabling them is an explicit operator
+  decision rather than something an upgrade does silently.
+- **`userctl peer` also has `ban`.** `list` and `unban` were the requirement;
+  manual `ban` came free from the same policy object and gives an operator a way
+  to act on something they have spotted themselves.
+
 ## Left to decide
 
-- **Graduated ban TTL vs fixed.** Strike counters are a small amount of extra
-  state for a policy we have no data on yet.
 - Whether `ban_on_password_failures` ships as a knob in phase 4 or waits until
   the residual oracle is shown to matter.
+- **Initial production thresholds.** Nothing has ever been enforced here, so
+  there is no baseline for how often a real client fails a login. The defaults
+  (5 per pair, 20 per address, 5-minute window, 15-minute lockout) are inherited
+  guesses, not measurements. Worth watching the first week with
+  `peerfilter.enabled` on and the auth limiter's thresholds set high, then
+  tightening.

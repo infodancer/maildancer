@@ -23,6 +23,19 @@ service SessionService {
   // Used by smtpd at RCPT TO time to determine if the domain is local
   // and whether the user exists.
   rpc ValidateRecipient(ValidateRecipientRequest) returns (ValidateRecipientResponse);
+
+  // CheckPeer reports whether a peer address is currently banned. The protocol
+  // dispatchers call it at accept time, before any protocol or TLS work, so a
+  // banned peer costs no handler subprocess, no handshake, and no password
+  // hash. Ban policy, the Redis client, and the keyspace live here; the
+  // daemons only carry an address and obey the verdict.
+  rpc CheckPeer(CheckPeerRequest) returns (CheckPeerResponse);
+
+  // ReportPeer records an abuse signal a protocol handler observed that
+  // session-manager cannot see on its own -- early talkers, malformed
+  // commands, aborted DATA. Authentication failures and recipient probes need
+  // no report: Login and ValidateRecipient already run here.
+  rpc ReportPeer(ReportPeerRequest) returns (ReportPeerResponse);
 }
 
 message LoginRequest {
@@ -31,6 +44,13 @@ message LoginRequest {
 
   // Password (plaintext over the unix socket / mTLS channel).
   string password = 2;
+
+  // Client's IP address, as seen by the calling daemon. Required for
+  // authentication rate limiting: session-manager performs the credential
+  // check but has no other way to learn the peer address, and every limiter
+  // dimension is keyed on it. An empty value disables rate limiting for the
+  // attempt (#206).
+  string client_ip = 3;
 }
 
 message LoginResponse {
@@ -59,6 +79,38 @@ message ValidateRecipientRequest {
   // Fully-qualified recipient address (user@domain).
   string address = 1;
 }
+
+message CheckPeerRequest {
+  // Peer IP address. IPv6 addresses are normalized to their /64 before
+  // lookup, since individual v6 addresses are free to an attacker.
+  string ip = 1;
+}
+
+message CheckPeerResponse {
+  // True when the dispatcher must not serve this peer.
+  bool banned = 1;
+
+  // How long to hold a denied connection open before closing it, in
+  // milliseconds. Server-driven so the tarpit policy stays in one place.
+  // Zero closes immediately.
+  int64 tarpit_ms = 2;
+
+  // Coarse policy label for the daemon's logs and metrics. Deliberately not
+  // the username, and not which signal fired -- it must not become a
+  // side channel.
+  string reason = 3;
+}
+
+message ReportPeerRequest {
+  // Peer IP address.
+  string ip = 1;
+
+  // Abuse signal name, e.g. "early_talker", "malformed_command",
+  // "data_abort". Unknown signals are counted but never ban on their own.
+  string signal = 2;
+}
+
+message ReportPeerResponse {}
 
 message ValidateRecipientResponse {
   // True if this server handles the recipient's domain.

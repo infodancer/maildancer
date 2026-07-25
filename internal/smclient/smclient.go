@@ -92,10 +92,11 @@ func New(cfg Config, logger *slog.Logger) (*Client, error) {
 
 // Login authenticates a user via the session-manager and returns a session token
 // and the authenticated mailbox identifier.
-func (c *Client) Login(ctx context.Context, username, password string) (token, mailbox string, err error) {
+func (c *Client) Login(ctx context.Context, username, password, clientIP string) (token, mailbox string, err error) {
 	resp, err := c.session.Login(ctx, &smpb.LoginRequest{
 		Username: username,
 		Password: password,
+		ClientIp: clientIP,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("session-manager login: %w", err)

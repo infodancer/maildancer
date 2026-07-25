@@ -164,7 +164,7 @@ func newTestSession(t *testing.T, f *fakeSM, cfg SessionConfig) *Session {
 	t.Cleanup(func() { _ = client.Close() })
 
 	sess := NewSession(client, cfg, nil)
-	if _, err := sess.Login(context.Background(), "alice@test.local", "secret"); err != nil {
+	if _, err := sess.Login(context.Background(), "alice@test.local", "secret", "10.0.0.1"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	t.Cleanup(sess.Close)

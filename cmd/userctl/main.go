@@ -9,6 +9,7 @@
 //	userctl user    add|del|list|passwd|verify|key ... user lifecycle and keys
 //	userctl forward list|set|del ...                   domain forwards (1:1)
 //	userctl keys    list|rotate|revoke ...             auth-oidc signing keys
+//	userctl peer    list|unban|ban ...                 connection-level peer bans
 //	userctl migrate uids                               allocate missing gids/uids
 //
 // The legacy flat forms (add, del, list, verify) remain as aliases for the
@@ -76,6 +77,7 @@ func main() {
 	domainsFlag := fs.String("domains", "", "path to domains config directory")
 	dataFlag := fs.String("data", "", "path to domains data directory (maildirs, uid counter)")
 	dataDirFlag := fs.String("data-dir", "", "path to auth-oidc data dir (for keys subcommands)")
+	configFlag := fs.String("config", "", "path to the shared config file (for peer subcommands)")
 	verboseFlag := fs.Bool("verbose", true, "enable debug logging")
 	fs.Usage = usage
 
@@ -101,6 +103,12 @@ func main() {
 	// own data-dir resolution path.
 	if subcmd == "keys" {
 		exitOnErr(runKeysSubcommand(args[1:], *dataDirFlag))
+		return
+	}
+
+	// peer needs the shared config file (for Redis), not the domains tree.
+	if subcmd == "peer" {
+		exitOnErr(runPeerSubcommand(args[1:], *configFlag))
 		return
 	}
 
@@ -297,6 +305,11 @@ func usage() {
   Migration:
     userctl migrate uids                              allocate missing gids/uids
 
+  Peer bans (connection-level; requires session-manager.redis):
+    userctl [--config <path>] peer list                      active bans, longest remaining first
+    userctl [--config <path>] peer unban <ip> [<ip>...]      clear a ban and its strike history
+    userctl [--config <path>] peer ban   <ip> [<ip>...] [--reason <r>]
+
   Signing keys (auth-oidc operator):
     userctl [--data-dir <path>] keys list   <domain>
     userctl [--data-dir <path>] keys rotate <domain> [--algorithm=RS256|ES256|EdDSA]
@@ -307,6 +320,7 @@ Flags:
   --data       domains data directory   (flag > INFODANCER_DOMAINS_DATA_PATH >
                smtpd.domains_data_path > domains path)
   --data-dir   auth-oidc data dir       (flag > AUTH_OIDC_DATA_DIR > server.data_dir)
+  --config     shared config file       (flag > /etc/infodancer/config.toml; peer subcommands)
   --verbose    enable debug logging (default: true)
 
 Run 'userctl domain set' without arguments to list the editable config keys.

@@ -192,7 +192,7 @@ func (s *Server) spawnHandler(conn net.Conn, lc Listener) {
 		}
 	}()
 
-	clientIP := remoteIP(conn)
+	clientIP := RemoteIP(conn)
 
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok {
@@ -288,8 +288,12 @@ func (s *Server) spawnHandler(conn net.Conn, lc Listener) {
 	}()
 }
 
-// remoteIP extracts the bare IP from conn's remote address.
-func remoteIP(conn net.Conn) string {
+// RemoteIP extracts the bare IP from conn's remote address. Exported because
+// the protocol handlers need the peer address in exactly the form the
+// dispatcher used -- session-manager keys rate limits and peer bans on it
+// (#206), and two implementations of "the peer's address" would eventually
+// disagree.
+func RemoteIP(conn net.Conn) string {
 	addr := conn.RemoteAddr()
 	if addr == nil {
 		return ""

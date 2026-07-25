@@ -184,7 +184,7 @@ func TestSMClient_LoginLogout(t *testing.T) {
 	client, sessMock, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, mailbox, err := client.Login(ctx, "user@example.com", "secret")
+	token, mailbox, err := client.Login(ctx, "user@example.com", "secret", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestSMClient_LoginFailure(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	_, _, err := client.Login(ctx, "user@example.com", "wrong")
+	_, _, err := client.Login(ctx, "user@example.com", "wrong", "10.0.0.1")
 	if err == nil {
 		t.Fatal("expected login error, got nil")
 	}
@@ -217,7 +217,7 @@ func TestSMClient_SessionTokenInMetadata(t *testing.T) {
 	client, _, mboxMock, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, err := client.Login(ctx, "user@example.com", "secret")
+	token, _, err := client.Login(ctx, "user@example.com", "secret", "10.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestSMClient_ListMessages(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
+	token, _, _ := client.Login(ctx, "user@example.com", "secret", "10.0.0.1")
 	msgs, err := client.ListMessages(ctx, token, "INBOX")
 	if err != nil {
 		t.Fatal(err)
@@ -252,7 +252,7 @@ func TestSMClient_StatMailbox(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
+	token, _, _ := client.Login(ctx, "user@example.com", "secret", "10.0.0.1")
 	count, totalBytes, err := client.StatMailbox(ctx, token, "INBOX")
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func TestSMClient_FolderOperations(t *testing.T) {
 	client, _, _, folderMock := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
+	token, _, _ := client.Login(ctx, "user@example.com", "secret", "10.0.0.1")
 
 	// ListFolders
 	folders, err := client.ListFolders(ctx, token)
@@ -303,7 +303,7 @@ func TestSMClient_CopyAndMove(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
+	token, _, _ := client.Login(ctx, "user@example.com", "secret", "10.0.0.1")
 
 	newUID, err := client.CopyMessage(ctx, token, "INBOX", 1, "Sent")
 	if err != nil {
@@ -326,7 +326,7 @@ func TestSMClient_UIDValidity(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
+	token, _, _ := client.Login(ctx, "user@example.com", "secret", "10.0.0.1")
 	val, err := client.UIDValidity(ctx, token, "INBOX")
 	if err != nil {
 		t.Fatal(err)
@@ -340,7 +340,7 @@ func TestSMClient_ExpungeAndDelete(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
+	token, _, _ := client.Login(ctx, "user@example.com", "secret", "10.0.0.1")
 
 	if err := client.DeleteMessage(ctx, token, "INBOX", 1); err != nil {
 		t.Fatalf("DeleteMessage: %v", err)
@@ -355,7 +355,7 @@ func TestSMClient_Rescan(t *testing.T) {
 	client, _, _, _ := startTestServer(t)
 	ctx := context.Background()
 
-	token, _, _ := client.Login(ctx, "user@example.com", "secret")
+	token, _, _ := client.Login(ctx, "user@example.com", "secret", "10.0.0.1")
 	msgs, err := client.RescanFolder(ctx, token, "INBOX")
 	if err != nil {
 		t.Fatal(err)
@@ -439,7 +439,7 @@ func TestSessionManagerConfig_mTLSMissingCert(t *testing.T) {
 func newTestSMStore(t *testing.T, client *SessionManagerClient) *sessionManagerStore {
 	t.Helper()
 	sess := smclient.NewSession(client, smclient.SessionConfig{}, nil)
-	if _, err := sess.Login(context.Background(), "user@example.com", "secret"); err != nil {
+	if _, err := sess.Login(context.Background(), "user@example.com", "secret", "10.0.0.1"); err != nil {
 		t.Fatalf("Login: %v", err)
 	}
 	return newSessionManagerStore(sess)

@@ -133,7 +133,7 @@ func (p *passCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 	password := args[0]
 
-	mailbox, store, err := loginRecoveringSession(ctx, p.smClient, p.recoveryDeadline, p.collector, username, password)
+	mailbox, store, err := loginRecoveringSession(ctx, p.smClient, p.recoveryDeadline, p.collector, username, password, sess.ClientIP())
 	if err != nil {
 		conn.Logger().Info("authentication failed",
 			"username", username,
@@ -282,7 +282,7 @@ func (a *authCommand) Execute(ctx context.Context, sess *Session, conn Connectio
 
 // saslAuthenticate handles SASL PLAIN via session-manager.
 func (a *authCommand) saslAuthenticate(ctx context.Context, sess *Session, conn ConnectionLogger, mechanism, username, password string) error {
-	mailbox, store, err := loginRecoveringSession(ctx, a.smClient, a.recoveryDeadline, a.collector, username, password)
+	mailbox, store, err := loginRecoveringSession(ctx, a.smClient, a.recoveryDeadline, a.collector, username, password, sess.ClientIP())
 	if err != nil {
 		conn.Logger().Info("SASL authentication failed",
 			"mechanism", mechanism,
@@ -360,12 +360,12 @@ func (a *authCommand) ProcessSASLResponse(ctx context.Context, sess *Session, co
 // that retains the presented credential for the lifetime of this one
 // connection (zeroed on close), enabling transparent recovery across a
 // session-manager restart (#179, session-recovery-design.md).
-func loginRecoveringSession(ctx context.Context, client *SessionManagerClient, deadline time.Duration, collector metrics.Collector, username, password string) (string, *sessionManagerStore, error) {
+func loginRecoveringSession(ctx context.Context, client *SessionManagerClient, deadline time.Duration, collector metrics.Collector, username, password, clientIP string) (string, *sessionManagerStore, error) {
 	smSess := smclient.NewSession(client, smclient.SessionConfig{RecoveryDeadline: deadline}, nil)
 	if collector != nil {
 		smSess.SetRecoveryMetric(collector.SessionRecovery)
 	}
-	mailbox, err := smSess.Login(ctx, username, password)
+	mailbox, err := smSess.Login(ctx, username, password, clientIP)
 	if err != nil {
 		return "", nil, err
 	}

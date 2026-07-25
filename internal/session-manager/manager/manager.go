@@ -25,6 +25,7 @@ import (
 	"github.com/infodancer/maildancer/internal/session-manager/config"
 	"github.com/infodancer/maildancer/internal/session-manager/credentials"
 	"github.com/infodancer/maildancer/internal/session-manager/metrics"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -694,7 +695,13 @@ func (m *Manager) ResolveForward(ctx context.Context, recipient string) ([]strin
 
 // SetupAuth creates the domain provider and auth router from config.
 // Returns both so the caller can pass the domain provider to New().
-func SetupAuth(cfg *config.Config) (*domain.AuthRouter, domain.DomainProvider, error) {
+//
+// redisClient may be nil. When it is non-nil and rate limiting is enabled, the
+// router gets Redis-backed failure counters shared across every daemon and
+// surviving restarts (#206). Rate limiting deliberately requires Redis to be
+// requested explicitly: it had never been enabled at all before this, so
+// turning it on is a behavior change for live traffic.
+func SetupAuth(cfg *config.Config, redisClient *redis.Client) (*domain.AuthRouter, domain.DomainProvider, error) {
 	if cfg.DomainsPath == "" {
 		return nil, nil, fmt.Errorf("domains_path is required")
 	}
@@ -733,5 +740,25 @@ func SetupAuth(cfg *config.Config) (*domain.AuthRouter, domain.DomainProvider, e
 		return nil, nil, fmt.Errorf("open auth agent: %w", err)
 	}
 
-	return domain.NewAuthRouter(domainProvider, authAgent), domainProvider, nil
+	router := domain.NewAuthRouter(domainProvider, authAgent)
+
+	switch {
+	case !cfg.RateLimit.Enabled:
+		slog.Info("authentication rate limiting disabled")
+	case redisClient == nil:
+		// Loud, because the operator asked for rate limiting and is getting a
+		// weaker version of it: per-process counters that a restart wipes.
+		slog.Warn("authentication rate limiting enabled without redis; " +
+			"counters are per-process and lost on restart")
+		router = router.WithRateLimit(cfg.RateLimit.DomainConfig())
+	default:
+		router = router.WithRedisRateLimit(cfg.RateLimit.DomainConfig(), redisClient)
+		slog.Info("authentication rate limiting enabled (redis)",
+			"max_failures_per_ip_user", cfg.RateLimit.MaxFailuresPerIPUser,
+			"max_failures_per_ip", cfg.RateLimit.MaxFailuresPerIP,
+			"window", cfg.RateLimit.Window.String(),
+			"lockout", cfg.RateLimit.Lockout.String())
+	}
+
+	return router, domainProvider, nil
 }

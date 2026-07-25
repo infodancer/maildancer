@@ -26,7 +26,13 @@ type LoginRequest struct {
 	// Fully-qualified username (localpart@domain or localpart+ext@domain).
 	Username string `protobuf:"bytes,1,opt,name=username,proto3" json:"username,omitempty"`
 	// Password (plaintext over the unix socket / mTLS channel).
-	Password      string `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	Password string `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
+	// Client's IP address, as seen by the calling daemon. Required for
+	// authentication rate limiting: session-manager performs the credential
+	// check but has no other way to learn the peer address, and every limiter
+	// dimension is keyed on it. An empty value disables rate limiting for the
+	// attempt (#206).
+	ClientIp      string `protobuf:"bytes,3,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -71,6 +77,13 @@ func (x *LoginRequest) GetUsername() string {
 func (x *LoginRequest) GetPassword() string {
 	if x != nil {
 		return x.Password
+	}
+	return ""
+}
+
+func (x *LoginRequest) GetClientIp() string {
+	if x != nil {
+		return x.ClientIp
 	}
 	return ""
 }
@@ -274,6 +287,210 @@ func (x *ValidateRecipientRequest) GetAddress() string {
 	return ""
 }
 
+type CheckPeerRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Peer IP address. IPv6 addresses are normalized to their /64 before
+	// lookup, since individual v6 addresses are free to an attacker.
+	Ip            string `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckPeerRequest) Reset() {
+	*x = CheckPeerRequest{}
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckPeerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckPeerRequest) ProtoMessage() {}
+
+func (x *CheckPeerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckPeerRequest.ProtoReflect.Descriptor instead.
+func (*CheckPeerRequest) Descriptor() ([]byte, []int) {
+	return file_sessionmanager_v1_session_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CheckPeerRequest) GetIp() string {
+	if x != nil {
+		return x.Ip
+	}
+	return ""
+}
+
+type CheckPeerResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// True when the dispatcher must not serve this peer.
+	Banned bool `protobuf:"varint,1,opt,name=banned,proto3" json:"banned,omitempty"`
+	// How long to hold a denied connection open before closing it, in
+	// milliseconds. Server-driven so the tarpit policy stays in one place.
+	// Zero closes immediately.
+	TarpitMs int64 `protobuf:"varint,2,opt,name=tarpit_ms,json=tarpitMs,proto3" json:"tarpit_ms,omitempty"`
+	// Coarse policy label for the daemon's logs and metrics. Deliberately not
+	// the username, and not which signal fired -- it must not become a
+	// side channel.
+	Reason        string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckPeerResponse) Reset() {
+	*x = CheckPeerResponse{}
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckPeerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckPeerResponse) ProtoMessage() {}
+
+func (x *CheckPeerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckPeerResponse.ProtoReflect.Descriptor instead.
+func (*CheckPeerResponse) Descriptor() ([]byte, []int) {
+	return file_sessionmanager_v1_session_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *CheckPeerResponse) GetBanned() bool {
+	if x != nil {
+		return x.Banned
+	}
+	return false
+}
+
+func (x *CheckPeerResponse) GetTarpitMs() int64 {
+	if x != nil {
+		return x.TarpitMs
+	}
+	return 0
+}
+
+func (x *CheckPeerResponse) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+type ReportPeerRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Peer IP address.
+	Ip string `protobuf:"bytes,1,opt,name=ip,proto3" json:"ip,omitempty"`
+	// Abuse signal name, e.g. "early_talker", "malformed_command",
+	// "data_abort". Unknown signals are counted but never ban on their own.
+	Signal        string `protobuf:"bytes,2,opt,name=signal,proto3" json:"signal,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportPeerRequest) Reset() {
+	*x = ReportPeerRequest{}
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportPeerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportPeerRequest) ProtoMessage() {}
+
+func (x *ReportPeerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportPeerRequest.ProtoReflect.Descriptor instead.
+func (*ReportPeerRequest) Descriptor() ([]byte, []int) {
+	return file_sessionmanager_v1_session_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ReportPeerRequest) GetIp() string {
+	if x != nil {
+		return x.Ip
+	}
+	return ""
+}
+
+func (x *ReportPeerRequest) GetSignal() string {
+	if x != nil {
+		return x.Signal
+	}
+	return ""
+}
+
+type ReportPeerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReportPeerResponse) Reset() {
+	*x = ReportPeerResponse{}
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReportPeerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReportPeerResponse) ProtoMessage() {}
+
+func (x *ReportPeerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReportPeerResponse.ProtoReflect.Descriptor instead.
+func (*ReportPeerResponse) Descriptor() ([]byte, []int) {
+	return file_sessionmanager_v1_session_proto_rawDescGZIP(), []int{8}
+}
+
 type ValidateRecipientResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// True if this server handles the recipient's domain.
@@ -290,7 +507,7 @@ type ValidateRecipientResponse struct {
 
 func (x *ValidateRecipientResponse) Reset() {
 	*x = ValidateRecipientResponse{}
-	mi := &file_sessionmanager_v1_session_proto_msgTypes[5]
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -302,7 +519,7 @@ func (x *ValidateRecipientResponse) String() string {
 func (*ValidateRecipientResponse) ProtoMessage() {}
 
 func (x *ValidateRecipientResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sessionmanager_v1_session_proto_msgTypes[5]
+	mi := &file_sessionmanager_v1_session_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -315,7 +532,7 @@ func (x *ValidateRecipientResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateRecipientResponse.ProtoReflect.Descriptor instead.
 func (*ValidateRecipientResponse) Descriptor() ([]byte, []int) {
-	return file_sessionmanager_v1_session_proto_rawDescGZIP(), []int{5}
+	return file_sessionmanager_v1_session_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ValidateRecipientResponse) GetDomainIsLocal() bool {
@@ -343,10 +560,11 @@ var File_sessionmanager_v1_session_proto protoreflect.FileDescriptor
 
 const file_sessionmanager_v1_session_proto_rawDesc = "" +
 	"\n" +
-	"\x1fsessionmanager/v1/session.proto\x12\x11sessionmanager.v1\"F\n" +
+	"\x1fsessionmanager/v1/session.proto\x12\x11sessionmanager.v1\"c\n" +
 	"\fLoginRequest\x12\x1a\n" +
 	"\busername\x18\x01 \x01(\tR\busername\x12\x1a\n" +
-	"\bpassword\x18\x02 \x01(\tR\bpassword\"\x99\x01\n" +
+	"\bpassword\x18\x02 \x01(\tR\bpassword\x12\x1b\n" +
+	"\tclient_ip\x18\x03 \x01(\tR\bclientIp\"\x99\x01\n" +
 	"\rLoginResponse\x12#\n" +
 	"\rsession_token\x18\x01 \x01(\tR\fsessionToken\x12\x18\n" +
 	"\amailbox\x18\x02 \x01(\tR\amailbox\x12\x1c\n" +
@@ -356,16 +574,29 @@ const file_sessionmanager_v1_session_proto_rawDesc = "" +
 	"\rsession_token\x18\x01 \x01(\tR\fsessionToken\"\x10\n" +
 	"\x0eLogoutResponse\"4\n" +
 	"\x18ValidateRecipientRequest\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"\x8d\x01\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\"\"\n" +
+	"\x10CheckPeerRequest\x12\x0e\n" +
+	"\x02ip\x18\x01 \x01(\tR\x02ip\"`\n" +
+	"\x11CheckPeerResponse\x12\x16\n" +
+	"\x06banned\x18\x01 \x01(\bR\x06banned\x12\x1b\n" +
+	"\ttarpit_ms\x18\x02 \x01(\x03R\btarpitMs\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\";\n" +
+	"\x11ReportPeerRequest\x12\x0e\n" +
+	"\x02ip\x18\x01 \x01(\tR\x02ip\x12\x16\n" +
+	"\x06signal\x18\x02 \x01(\tR\x06signal\"\x14\n" +
+	"\x12ReportPeerResponse\"\x8d\x01\n" +
 	"\x19ValidateRecipientResponse\x12&\n" +
 	"\x0fdomain_is_local\x18\x01 \x01(\bR\rdomainIsLocal\x12\x1f\n" +
 	"\vuser_exists\x18\x02 \x01(\bR\n" +
 	"userExists\x12'\n" +
-	"\x0fdefer_rejection\x18\x03 \x01(\bR\x0edeferRejection2\x9b\x02\n" +
+	"\x0fdefer_rejection\x18\x03 \x01(\bR\x0edeferRejection2\xce\x03\n" +
 	"\x0eSessionService\x12J\n" +
 	"\x05Login\x12\x1f.sessionmanager.v1.LoginRequest\x1a .sessionmanager.v1.LoginResponse\x12M\n" +
 	"\x06Logout\x12 .sessionmanager.v1.LogoutRequest\x1a!.sessionmanager.v1.LogoutResponse\x12n\n" +
-	"\x11ValidateRecipient\x12+.sessionmanager.v1.ValidateRecipientRequest\x1a,.sessionmanager.v1.ValidateRecipientResponseBSZQgithub.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1b\x06proto3"
+	"\x11ValidateRecipient\x12+.sessionmanager.v1.ValidateRecipientRequest\x1a,.sessionmanager.v1.ValidateRecipientResponse\x12V\n" +
+	"\tCheckPeer\x12#.sessionmanager.v1.CheckPeerRequest\x1a$.sessionmanager.v1.CheckPeerResponse\x12Y\n" +
+	"\n" +
+	"ReportPeer\x12$.sessionmanager.v1.ReportPeerRequest\x1a%.sessionmanager.v1.ReportPeerResponseBSZQgithub.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1b\x06proto3"
 
 var (
 	file_sessionmanager_v1_session_proto_rawDescOnce sync.Once
@@ -379,24 +610,32 @@ func file_sessionmanager_v1_session_proto_rawDescGZIP() []byte {
 	return file_sessionmanager_v1_session_proto_rawDescData
 }
 
-var file_sessionmanager_v1_session_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_sessionmanager_v1_session_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_sessionmanager_v1_session_proto_goTypes = []any{
 	(*LoginRequest)(nil),              // 0: sessionmanager.v1.LoginRequest
 	(*LoginResponse)(nil),             // 1: sessionmanager.v1.LoginResponse
 	(*LogoutRequest)(nil),             // 2: sessionmanager.v1.LogoutRequest
 	(*LogoutResponse)(nil),            // 3: sessionmanager.v1.LogoutResponse
 	(*ValidateRecipientRequest)(nil),  // 4: sessionmanager.v1.ValidateRecipientRequest
-	(*ValidateRecipientResponse)(nil), // 5: sessionmanager.v1.ValidateRecipientResponse
+	(*CheckPeerRequest)(nil),          // 5: sessionmanager.v1.CheckPeerRequest
+	(*CheckPeerResponse)(nil),         // 6: sessionmanager.v1.CheckPeerResponse
+	(*ReportPeerRequest)(nil),         // 7: sessionmanager.v1.ReportPeerRequest
+	(*ReportPeerResponse)(nil),        // 8: sessionmanager.v1.ReportPeerResponse
+	(*ValidateRecipientResponse)(nil), // 9: sessionmanager.v1.ValidateRecipientResponse
 }
 var file_sessionmanager_v1_session_proto_depIdxs = []int32{
 	0, // 0: sessionmanager.v1.SessionService.Login:input_type -> sessionmanager.v1.LoginRequest
 	2, // 1: sessionmanager.v1.SessionService.Logout:input_type -> sessionmanager.v1.LogoutRequest
 	4, // 2: sessionmanager.v1.SessionService.ValidateRecipient:input_type -> sessionmanager.v1.ValidateRecipientRequest
-	1, // 3: sessionmanager.v1.SessionService.Login:output_type -> sessionmanager.v1.LoginResponse
-	3, // 4: sessionmanager.v1.SessionService.Logout:output_type -> sessionmanager.v1.LogoutResponse
-	5, // 5: sessionmanager.v1.SessionService.ValidateRecipient:output_type -> sessionmanager.v1.ValidateRecipientResponse
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	5, // 3: sessionmanager.v1.SessionService.CheckPeer:input_type -> sessionmanager.v1.CheckPeerRequest
+	7, // 4: sessionmanager.v1.SessionService.ReportPeer:input_type -> sessionmanager.v1.ReportPeerRequest
+	1, // 5: sessionmanager.v1.SessionService.Login:output_type -> sessionmanager.v1.LoginResponse
+	3, // 6: sessionmanager.v1.SessionService.Logout:output_type -> sessionmanager.v1.LogoutResponse
+	9, // 7: sessionmanager.v1.SessionService.ValidateRecipient:output_type -> sessionmanager.v1.ValidateRecipientResponse
+	6, // 8: sessionmanager.v1.SessionService.CheckPeer:output_type -> sessionmanager.v1.CheckPeerResponse
+	8, // 9: sessionmanager.v1.SessionService.ReportPeer:output_type -> sessionmanager.v1.ReportPeerResponse
+	5, // [5:10] is the sub-list for method output_type
+	0, // [0:5] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -413,7 +652,7 @@ func file_sessionmanager_v1_session_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sessionmanager_v1_session_proto_rawDesc), len(file_sessionmanager_v1_session_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

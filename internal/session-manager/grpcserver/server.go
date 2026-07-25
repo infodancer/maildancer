@@ -18,6 +18,7 @@ import (
 	"github.com/infodancer/maildancer/internal/session-manager/config"
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
 	"github.com/infodancer/maildancer/internal/session-manager/metrics"
+	"github.com/infodancer/maildancer/internal/session-manager/peerfilter"
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"github.com/infodancer/maildancer/internal/session-manager/queue"
 	"google.golang.org/grpc"
@@ -35,7 +36,10 @@ type Server struct {
 
 // New creates a new gRPC server with all services registered.
 // If TLS config is provided and complete, the server uses mTLS.
-func New(mgr *manager.Manager, cfg *config.Config, mc metrics.Collector) (*Server, error) {
+//
+// filter may be nil, in which case CheckPeer allows every peer -- a nil
+// *peerfilter.Filter is safe to call.
+func New(mgr *manager.Manager, cfg *config.Config, mc metrics.Collector, filter *peerfilter.Filter) (*Server, error) {
 	var opts []grpc.ServerOption
 
 	// Enable mTLS if TLS config is fully specified.
@@ -55,7 +59,7 @@ func New(mgr *manager.Manager, cfg *config.Config, mc metrics.Collector) (*Serve
 		gsrv: gsrv,
 	}
 
-	smpb.RegisterSessionServiceServer(gsrv, &sessionServer{mgr: mgr})
+	smpb.RegisterSessionServiceServer(gsrv, &sessionServer{mgr: mgr, filter: filter})
 	pb.RegisterMailboxServiceServer(gsrv, &mailboxProxy{mgr: mgr})
 	pb.RegisterFolderServiceServer(gsrv, &folderProxy{mgr: mgr})
 	pb.RegisterDeliveryServiceServer(gsrv, &deliveryProxy{mgr: mgr, metrics: mc})

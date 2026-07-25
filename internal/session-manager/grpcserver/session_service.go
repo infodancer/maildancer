@@ -8,6 +8,7 @@ import (
 
 	"github.com/infodancer/maildancer/auth/domain"
 	autherrors "github.com/infodancer/maildancer/auth/errors"
+	"github.com/infodancer/maildancer/internal/peersignal"
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
 	"github.com/infodancer/maildancer/internal/session-manager/peerfilter"
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
@@ -104,6 +105,22 @@ func (s *sessionServer) ValidateRecipient(ctx context.Context, req *smpb.Validat
 	if err != nil {
 		slog.Warn("validate recipient failed", "address", req.Address, "error", err)
 		return nil, status.Errorf(codes.Internal, "validate recipient: %v", err)
+	}
+
+	// Rule 3 (#206): a RCPT TO naming a nonexistent user on a domain we do host
+	// is the recipient dictionary attack. Recorded here because this is where
+	// existence is already known -- no report from the daemon required.
+	//
+	// Unlike a nonexistent *account* on the auth path, this is a counted rate
+	// rather than a first-attempt ban: legitimate senders write to addresses
+	// that have been retired, and a real MTA retries. A nonexistent domain is
+	// deliberately not counted either -- that is a misdirected message, not
+	// probing of our address space.
+	if domainIsLocal && !userExists && req.ClientIp != "" {
+		if rerr := s.filter.Report(ctx, req.ClientIp, peersignal.InvalidRecipient); rerr != nil {
+			slog.Warn("failed to record invalid-recipient signal",
+				"client_ip", req.ClientIp, "error", rerr)
+		}
 	}
 
 	return &smpb.ValidateRecipientResponse{

@@ -2,6 +2,7 @@ package procmetrics
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -312,4 +313,78 @@ func gatherValue(t *testing.T, g prometheus.Gatherer, name string) float64 {
 	}
 	t.Fatalf("%s: family not found", name)
 	return 0
+}
+
+// labeledFailureCount returns testd_handler_failures_total{reason=<reason>},
+// or 0 when the series does not exist yet.
+func labeledFailureCount(t *testing.T, g prometheus.Gatherer, reason string) float64 {
+	t.Helper()
+	mfs, err := g.Gather()
+	if err != nil {
+		t.Fatalf("gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "testd_handler_failures_total" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "reason" && lp.GetValue() == reason {
+					return m.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// TestIngestEmptyReportIsAnError pins the #191 diagnosis: a report stream
+// that hits EOF with zero decoded families means the handler died before
+// writing (or never had the report fd) -- a live child always gathers at
+// least its plain connection counters. Treating it as success made those
+// failures invisible.
+func TestIngestEmptyReportIsAnError(t *testing.T) {
+	pm, _ := newTestParent(t)
+	err := pm.Ingest(bytes.NewReader(nil))
+	if !errors.Is(err, ErrEmptyReport) {
+		t.Errorf("Ingest(empty) = %v, want ErrEmptyReport", err)
+	}
+}
+
+// TestSinkClassifiesFailures covers the shared report sink the dispatchers
+// hand to connfork: valid reports aggregate cleanly, an empty report counts
+// under reason=empty_report, garbage counts under reason=metrics_decode, and
+// both propagate the error for the dispatcher's debug log.
+func TestSinkClassifiesFailures(t *testing.T) {
+	pm, reg := newTestParent(t)
+	sink := pm.Sink()
+
+	if err := sink(bytes.NewReader(childReport(t, func(c *testCollector) {
+		c.commands.WithLabelValues("STAT").Inc()
+	}))); err != nil {
+		t.Fatalf("sink(valid report) = %v, want nil", err)
+	}
+	if got := labeledFailureCount(t, reg, "empty_report"); got != 0 {
+		t.Errorf("empty_report after valid ingest = %v, want 0", got)
+	}
+	if got := labeledFailureCount(t, reg, "metrics_decode"); got != 0 {
+		t.Errorf("metrics_decode after valid ingest = %v, want 0", got)
+	}
+
+	if err := sink(bytes.NewReader(nil)); !errors.Is(err, ErrEmptyReport) {
+		t.Errorf("sink(empty) = %v, want ErrEmptyReport", err)
+	}
+	if got := labeledFailureCount(t, reg, "empty_report"); got != 1 {
+		t.Errorf("empty_report after empty ingest = %v, want 1", got)
+	}
+
+	if err := sink(strings.NewReader("this is not a protobuf frame")); err == nil {
+		t.Error("sink(garbage) = nil, want decode error")
+	}
+	if got := labeledFailureCount(t, reg, "metrics_decode"); got != 1 {
+		t.Errorf("metrics_decode after garbage ingest = %v, want 1", got)
+	}
+	if got := labeledFailureCount(t, reg, "empty_report"); got != 1 {
+		t.Errorf("empty_report after garbage ingest = %v, want 1 (unchanged)", got)
+	}
 }

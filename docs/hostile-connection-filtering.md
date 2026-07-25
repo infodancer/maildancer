@@ -1,7 +1,8 @@
 # Hostile connection filtering
 
 Design for issue #206 (Redis-backed auth rate limiting and connection-level
-banning). Status: design, not implemented. Read the issue and its first comment
+banning). Status: phases 1-3 implemented; phases 4-5 outstanding (see Phasing).
+Read the issue and its first comment
 for the production data this is built on; the numbers are not repeated here
 beyond what the design turns on.
 
@@ -51,29 +52,32 @@ what makes the design cheap:
 
 ### The connfork hook
 
+As implemented:
+
 ```go
-// PeerGate decides whether an accepted connection may proceed to a handler.
-// Implementations must be safe for concurrent use and must not block
-// indefinitely; the dispatcher applies its own timeout.
+// PeerGate decides whether an accepted connection may reach a handler.
+// A returned error means no verdict could be reached; the dispatcher then
+// allows the connection unless Config.StrictGate is set.
 type PeerGate interface {
-    // CheckPeer reports the verdict for a freshly accepted peer.
-    CheckPeer(ctx context.Context, ip string) Verdict
+    CheckPeer(ctx context.Context, ip string) (Verdict, error)
 }
 
 type Verdict struct {
-    Allow bool
-    // Tarpit is how long to hold a denied connection open before closing it.
-    // Zero closes immediately.
-    Tarpit time.Duration
-    Reason string // for logs and metrics; never sent to the client
+    Banned bool          // denies the connection
+    Tarpit time.Duration // how long to hold it first; zero closes immediately
+    Reason string        // coarse policy label, for the dispatcher's logs only
 }
 ```
 
-`Config` gains `PeerGate PeerGate` (nil = allow everything, preserving current
-behavior and every existing test) plus `MaxTarpit int` and `GateTimeout
-time.Duration`.
+`Banned` rather than the originally sketched `Allow` so the zero value is
+"serve the connection": a gate that returns an empty verdict must not deny.
+The error return is what lets connfork own the fail-open decision instead of
+each implementation inventing its own.
 
-The check happens at the top of `spawnHandler`, before `tcpConn.File()`.
+`Config` gains `Gate` (nil = allow everything, preserving current behavior and
+every existing test), `GateTimeout`, `StrictGate`, `MaxTarpit`, and the metric
+callbacks. The check happens at the top of `spawnHandler`, before
+`tcpConn.File()`.
 
 ### Token accounting -- the self-DoS hazard
 
@@ -157,8 +161,9 @@ it matters, so:
   stale deny only over-punishes an IP that just earned a ban.
 - **`GateTimeout`** (default 2s) bounds the call. Timeout is a gate error, not a
   deny; see fail-open policy below.
-- The cache is bounded (LRU, default 8192 entries) so the cache itself is not a
-  memory-exhaustion vector under a spray from many source addresses.
+- The cache is bounded (default 8192 entries) so it is not itself a
+  memory-exhaustion vector under a spray from many source addresses. Eviction
+  ended up generational rather than LRU -- see the phase 3 decisions.
 
 An allowlist of CIDRs is checked in the dispatcher *before* the RPC: loopback,
 the monitoring network, and any operator-configured ranges are never gated and
@@ -293,7 +298,7 @@ Per rule, because the tradeoffs point in opposite directions:
 | smtpd abuse counters (rule 3) | **fail open** | Volumetric limits on inbound mail; blocking mail is worse. |
 
 Fail-open everywhere, but **loudly**: a counter
-(`peer_gate_errors_total{reason}`) and an error log on every gate failure, plus
+(`peer_gate_checks_total{verdict="error"}`) and an error log on every gate failure, plus
 an alert rule on a sustained nonzero rate. A silent fail-open is a protection
 mechanism that can be switched off by breaking Redis, and nobody would notice.
 
@@ -350,7 +355,10 @@ New, all domain- or IP-class-level, never per-user:
 - `peer_tarpit_active` -- gauge; watch it against `MaxTarpit`.
 - `peer_tarpit_rejected_total` -- denied connections closed immediately because
   the tarpit budget was full. Nonzero means `MaxTarpit` is undersized.
-- `peer_gate_errors_total{reason}` -- the fail-open alarm.
+- Gate errors are the `verdict="error"` label on `peer_gate_checks_total` rather
+  than a separate family -- one series answers "how often is the gate
+  consulted, and how does it come out", and the fail-open alarm is a nonzero
+  rate on that label.
 
 Fix #207 before relying on any of this. A registered-but-never-incremented
 metric reads as zero rather than as absent, and this design adds six more
@@ -358,23 +366,61 @@ places for that to happen.
 
 ## Configuration
 
+As implemented. The policy half lives under `[session-manager]`; the dispatcher
+half is one shared top-level `[peergate]` section that all three daemons read
+from a single struct definition, the same way they share `[redis]` and
+`[session-manager]`.
+
+**Everything below is the default.** An empty config file behaves exactly like
+this, so the block is documentation rather than something a deployment has to
+write. `enabled` is the only field with a tri-state: absent means on, and an
+explicit `false` is distinguishable from an absent key.
+
 ```toml
-[peerfilter]
+# Policy: what gets banned, and for how long.
+[session-manager.redis]
+url = "redis://redis:6379/1"   # required; without it neither feature enforces
+
+[session-manager.ratelimit]
 enabled = true
-allowlist = ["127.0.0.1/8", "::1/128", "10.0.0.0/8"]
+max_failures_per_ip_user = 5
+max_failures_per_ip = 20
+window = "5m"
+lockout = "15m"
+# No per-username threshold, deliberately: see rule 2.
+
+[session-manager.peerfilter]
+enabled = true
+allowlist = ["127.0.0.0/8", "::1/128"]
 ban_ttl = "24h"
-ban_ttl_repeat = "168h"
+ban_ttl_repeat = "168h"       # set equal to ban_ttl to disable escalation
 accept_tarpit = "30s"
-auth_fail_delay = "5s"     # D, uniform across all auth failure causes
-max_tarpit = 256
+abuse_window = "1h"
+
+[session-manager.peerfilter.abuse_thresholds]
+# Signals with no entry here are counted but never ban on their own.
+# Populated in phase 5, when smtpd starts reporting them.
+
+# Enforcement: how the dispatchers act on that policy.
+[peergate]
+enabled = true
+allowlist = ["127.0.0.0/8", "::1/128"]
 gate_timeout = "2s"
-strict_gate = false
-ban_on_password_failures = 0   # 0 = off; see "residual oracle"
+max_tarpit = 256              # negative: enforce bans, hold nothing
+strict_gate = false           # true: deny when the gate is unreachable
+allow_ttl = "10s"
+deny_ttl = "60s"
+cache_size = 8192
 ```
 
-Under `[session-manager]` for the policy half, with the dispatcher half
-(`accept_tarpit`, `max_tarpit`, `gate_timeout`, allowlist) readable by the
-daemons from the shared config file they already parse.
+Two allowlists, on purpose. The `[peergate]` one is checked in the dispatcher
+before any RPC, so an allowlisted peer costs nothing; the
+`[session-manager.peerfilter]` one is what refuses to *record* a ban. Keeping
+both means neither a dispatcher bug nor a policy bug alone can lock an operator
+out. They should normally hold the same CIDRs.
+
+Still to come: `auth_fail_delay = "5s"` and `ban_on_password_failures` arrive
+with phase 4, which is where the auth-path timing work lands.
 
 ## Test plan
 
@@ -391,19 +437,26 @@ that must not be skipped.
    time. Cross-daemon is the point -- it is the whole argument for Redis.
 3. **Tarpit does not starve handlers.** Fill `MaxTarpit` with denied
    connections, then assert an allowed connection still gets a handler token
-   promptly. This is the self-DoS regression test.
+   promptly. This is the self-DoS regression test. *(Done:
+   `TestGate_TarpitDoesNotStarveHandlers`.)*
 4. **Fail-open on gate error.** Kill Redis, kill session-manager: connections
-   still served, `peer_gate_errors_total` increments. Then with
-   `strict_gate = true`: connections refused.
-5. **Allowlist wins over an active ban**, and generates no RPC.
+   still served and the error verdict is counted. Then with
+   `strict_gate = true`: connections refused. *(Done:
+   `TestGate_ErrorFailsOpen`, `TestGate_ErrorFailsClosedWhenStrict`,
+   `TestGate_TimeoutIsAGateError`, `TestCheck_FailsOpenOnRedisError`. The
+   counter is `peer_gate_checks_total{verdict="error"}` rather than a separate
+   family.)*
+5. **Allowlist wins over an active ban**, and generates no RPC. *(Done:
+   `TestCheckPeer_AllowlistCostsNoRPC`, `TestAllowlist_NeverBannedNeverChecked`.)*
 6. **Cache TTL asymmetry**, using an injected clock: a deny is reused for 60s, an
-   allow re-checked after 10s.
+   allow re-checked after 10s. *(Done: `TestCheckPeer_CacheTTLAsymmetry`.)*
 7. **IPv6 /64 normalization** -- a ban earned by one address in a /64 denies a
    sibling address.
 8. **Unban** clears the ban and the strike counter, and takes effect within one
    cache TTL.
 9. **`PeerGate` nil** preserves current dispatcher behavior exactly (the
-   existing connfork suite, unmodified).
+   existing connfork suite, unmodified). *(Done: `TestGate_NilGateSpawnsHandler`,
+   plus the unmodified suite.)*
 10. Rule 2 lockout thresholds and window expiry against `memLimitStore` with an
     injected clock; rule 3 counters likewise.
 
@@ -418,7 +471,7 @@ Each phase is separately shippable and separately reviewable.
    `SessionService`; policy and Redis in session-manager; `userctl peer
    list|unban`. **Done.**
 3. `PeerGate` in connfork, with the token accounting, tarpit budget, allowlist,
-   and parent cache. Wire all three dispatchers.
+   and parent cache. Wire all three dispatchers. **Done.**
 4. Rule 1 recording on the `Login` path plus the uniform failure deadline and
    the decoy verify.
 5. Rule 3 counters in smtpd, via `ValidateRecipient` and `ReportPeer`.
@@ -460,6 +513,35 @@ Two consequences for phase 2, both required before any of this does anything:
 Note that this makes phase 2 the first point where a real user can be locked
 out, which is worth remembering when picking the initial thresholds: they will
 be applied to production traffic that has never had them before.
+
+### Decided during phase 3
+
+- **Secure by default, reversing phase 2's opt-in.** Absent configuration
+  enables the peer filter, the auth limiter, and the dispatcher gate.
+  `enabled` became `*bool` in each so an absent key stays distinguishable from
+  an explicit `false` -- with a plain bool the zero value is `false`, which is
+  backwards for a security control. Defaulting on is safe where it would
+  otherwise surprise: with no Redis the filter is off entirely and the limiter
+  falls back to per-process counters, so a deployment without Redis sees no
+  change.
+- **Cache eviction is generational, not LRU.** When the live map fills it
+  becomes the previous generation and a fresh map takes over: lookups check two
+  maps, inserts stay O(1), and the cache is bounded at twice its configured
+  size. Scanning for the oldest entry would be O(n) per insert exactly when the
+  cache is full, which under a spray is always. An entry survives one roll;
+  two may drop it, which costs an extra RPC rather than a wrong answer.
+- **Two allowlists, dispatcher and policy.** The dispatcher's is checked before
+  any RPC (so an allowlisted peer costs nothing); the policy one refuses to
+  record a ban. Neither a dispatcher bug nor a policy bug alone can lock the
+  operator out.
+- **The gate call holds a handler token while it runs.** `acceptLoop` acquires
+  before `Accept` by design, so a denied connection occupies a handler slot
+  until its check resolves -- bounded by `GateTimeout`, normally a cache hit.
+  Checking before acquiring would mean accepting connections with no slot for
+  them.
+- **smtpd gets no `MaxConns`.** It has never had a connection limit and
+  inventing one here would be an unrelated behavior change. The tarpit budget
+  is independent of it.
 
 ### Decided during phase 2
 

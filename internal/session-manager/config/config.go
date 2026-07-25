@@ -6,7 +6,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/infodancer/maildancer/auth/domain"
+	"github.com/infodancer/maildancer/internal/session-manager/peerfilter"
 	"github.com/pelletier/go-toml/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 // Config holds all session manager settings.
@@ -55,9 +58,122 @@ type Config struct {
 	// Metrics configures the Prometheus metrics endpoint.
 	Metrics MetricsConfig `toml:"metrics"`
 
+	// Redis is the shared Redis instance used for authentication rate limiting
+	// and peer bans. Empty disables both: counters and bans have to be shared
+	// across daemons and survive restarts to be worth anything (#206).
+	Redis RedisConfig `toml:"redis"`
+
+	// RateLimit configures authentication failure thresholds. Only enforced
+	// when Redis is configured.
+	RateLimit RateLimitConfig `toml:"ratelimit"`
+
+	// PeerFilter configures connection-level bans for hostile peers.
+	PeerFilter peerfilter.Config `toml:"peerfilter"`
+
 	// LogLevel sets the minimum log level (debug, info, warn, error).
 	// Default: info.
 	LogLevel string `toml:"log_level"`
+}
+
+// RedisConfig holds the shared Redis connection settings.
+type RedisConfig struct {
+	// URL is the Redis connection URL (e.g. "redis://redis:6379/1").
+	// Supports redis:// and rediss:// (TLS) schemes. Empty disables Redis.
+	URL string `toml:"url"`
+
+	// Password is the Redis AUTH password. Also settable via REDIS_PASSWORD.
+	Password string `toml:"password"`
+}
+
+// Client builds a Redis client from the configuration. Returns (nil, nil) when
+// no URL is set, which callers treat as "Redis-backed features are off" rather
+// than as an error. Defined here so session-manager and userctl connect the
+// same way to the same instance.
+func (c RedisConfig) Client() (*redis.Client, error) {
+	if c.URL == "" {
+		return nil, nil
+	}
+	opts, err := redis.ParseURL(c.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parse redis url: %w", err)
+	}
+	if c.Password != "" {
+		opts.Password = c.Password
+	}
+	return redis.NewClient(opts), nil
+}
+
+// RateLimitConfig holds authentication rate limit thresholds. It mirrors
+// auth/domain.RateLimitConfig with TOML-friendly duration strings.
+//
+// There is deliberately no per-username threshold: locking an account across
+// all source addresses is a cheap denial of service against a real user, and
+// every username in the measured attack was nonexistent anyway (#206).
+type RateLimitConfig struct {
+	// Enabled turns authentication rate limiting on. Requires Redis.
+	Enabled bool `toml:"enabled"`
+
+	// MaxFailuresPerIPUser is the failure budget for one (IP, username) pair
+	// within the window. Default 5.
+	MaxFailuresPerIPUser int `toml:"max_failures_per_ip_user"`
+
+	// MaxFailuresPerIP is the failure budget for one address across all
+	// usernames within the window. Default 20.
+	MaxFailuresPerIP int `toml:"max_failures_per_ip"`
+
+	// Window is how long a failure counts toward a threshold. Default 5m.
+	Window time.Duration `toml:"-"`
+	// WindowStr is the TOML-friendly form of Window.
+	WindowStr string `toml:"window"`
+
+	// Lockout is how long a lockout lasts once earned. Default 15m.
+	Lockout time.Duration `toml:"-"`
+	// LockoutStr is the TOML-friendly form of Lockout.
+	LockoutStr string `toml:"lockout"`
+}
+
+// Normalize parses duration strings and fills zero values with the defaults
+// from auth/domain.
+func (c *RateLimitConfig) Normalize() error {
+	d := domain.DefaultRateLimitConfig()
+
+	if c.MaxFailuresPerIPUser == 0 {
+		c.MaxFailuresPerIPUser = d.MaxFailuresPerIPUser
+	}
+	if c.MaxFailuresPerIP == 0 {
+		c.MaxFailuresPerIP = d.MaxFailuresPerIP
+	}
+	for _, f := range []struct {
+		name string
+		str  string
+		dst  *time.Duration
+		def  time.Duration
+	}{
+		{"window", c.WindowStr, &c.Window, d.Window},
+		{"lockout", c.LockoutStr, &c.Lockout, d.Lockout},
+	} {
+		if f.str != "" {
+			parsed, err := time.ParseDuration(f.str)
+			if err != nil {
+				return fmt.Errorf("invalid ratelimit %s %q: %w", f.name, f.str, err)
+			}
+			*f.dst = parsed
+		}
+		if *f.dst == 0 {
+			*f.dst = f.def
+		}
+	}
+	return nil
+}
+
+// DomainConfig converts to the form auth/domain expects.
+func (c *RateLimitConfig) DomainConfig() domain.RateLimitConfig {
+	return domain.RateLimitConfig{
+		MaxFailuresPerIPUser: c.MaxFailuresPerIPUser,
+		MaxFailuresPerIP:     c.MaxFailuresPerIP,
+		Window:               c.Window,
+		Lockout:              c.Lockout,
+	}
 }
 
 // QueueConfig holds outbound queue injection settings.
@@ -182,6 +298,19 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.IdleTimeout == 0 {
 		cfg.IdleTimeout = 5 * time.Minute
+	}
+
+	// Keep the Redis password out of the config file when the deployment
+	// prefers an environment variable, matching smtpd.
+	if cfg.Redis.Password == "" {
+		cfg.Redis.Password = os.Getenv("REDIS_PASSWORD")
+	}
+
+	if err := cfg.RateLimit.Normalize(); err != nil {
+		return nil, err
+	}
+	if err := cfg.PeerFilter.Normalize(); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil

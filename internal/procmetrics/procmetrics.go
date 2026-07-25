@@ -18,6 +18,7 @@
 package procmetrics
 
 import (
+	"errors"
 	"io"
 	"sort"
 	"strings"
@@ -40,6 +41,14 @@ const maxReportBytes = 1 << 16 // 64 KiB
 // Using expfmt keeps the encoding identical to what Prometheus itself speaks
 // and spares us a bespoke framing scheme.
 var reportFormat = expfmt.NewFormat(expfmt.TypeProtoDelim)
+
+// ErrEmptyReport is returned by Ingest when the report stream hit EOF with
+// zero decoded families. A live handler always gathers at least its plain
+// (non-vec) connection counters, so an empty report means the child died
+// before writing or was spawned without the report fd (connfork tolerates
+// os.Pipe failure by spawning without it). Both were silent before #191:
+// the child's exit status is logged at debug and an empty ingest succeeded.
+var ErrEmptyReport = errors.New("procmetrics: empty report (handler exited without writing one)")
 
 // WriteReport gathers g and writes its metric families to w as length-delimited
 // protobuf. It is called once, just before the protocol-handler subprocess
@@ -126,6 +135,9 @@ func (a *aggregator) ingest(r io.Reader) error {
 			return err
 		}
 		mfs = append(mfs, mf)
+	}
+	if len(mfs) == 0 {
+		return ErrEmptyReport
 	}
 
 	a.mu.Lock()
@@ -277,4 +289,22 @@ func (p *ParentMetrics) HandlerFailure(reason string) {
 // Ingest folds a child's metrics report (read from r) into the aggregate.
 func (p *ParentMetrics) Ingest(r io.Reader) error {
 	return p.agg.ingest(r)
+}
+
+// Sink returns the report sink the dispatchers hand to connfork: it ingests
+// the child's report and counts failures by kind -- empty_report for a child
+// that exited without writing one, metrics_decode for a malformed report.
+// The error is propagated so the caller's reaper can log it.
+func (p *ParentMetrics) Sink() func(io.Reader) error {
+	return func(r io.Reader) error {
+		err := p.Ingest(r)
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrEmptyReport):
+			p.HandlerFailure("empty_report")
+		default:
+			p.HandlerFailure("metrics_decode")
+		}
+		return err
+	}
 }

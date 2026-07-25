@@ -1,13 +1,14 @@
 package smtp
 
 import (
+	"bytes"
 	"context"
-	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func TestSubprocessMetricsEndToEnd(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.Listeners = []config.ListenerConfig{{Address: addr, Mode: config.ModeSmtp}}
-	srv := NewSubprocessServer(cfg, helper, "unused-config-path", pm, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv := NewSubprocessServer(cfg, helper, "unused-config-path", pm, dispatcherTestLogger(t))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -85,6 +86,9 @@ func TestSubprocessMetricsEndToEnd(t *testing.T) {
 	// No decode failures on the happy path.
 	if got := labeledCounter(t, reg, "smtpd_handler_failures_total", "reason", "metrics_decode"); got != 0 {
 		t.Errorf("smtpd_handler_failures_total{reason=metrics_decode} = %v, want 0", got)
+	}
+	if got := labeledCounter(t, reg, "smtpd_handler_failures_total", "reason", "empty_report"); got != 0 {
+		t.Errorf("smtpd_handler_failures_total{reason=empty_report} = %v, want 0 (handler exited without writing its report)", got)
 	}
 
 	// The child also recorded connection events (it reuses the full collector),
@@ -167,4 +171,40 @@ func labeledCounter(t *testing.T, g prometheus.Gatherer, name, label, value stri
 		}
 	}
 	return 0
+}
+
+// dispatcherTestLogger records dispatcher output (down to the Debug-level
+// reaper lines) and replays it if the test fails. The #191 flake was
+// undiagnosable with the logs discarded: the one line that says why a child
+// exited without a report is logged at Debug by the reaper.
+func dispatcherTestLogger(t *testing.T) *slog.Logger {
+	t.Helper()
+	buf := &lockedBuffer{}
+	t.Cleanup(func() {
+		if t.Failed() {
+			if out := buf.String(); out != "" {
+				t.Logf("dispatcher log:\n%s", out)
+			}
+		}
+	})
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// lockedBuffer makes the log buffer safe for the dispatcher's reaper
+// goroutines, which may still be writing at cleanup time.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

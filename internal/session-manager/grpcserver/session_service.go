@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/infodancer/maildancer/auth/domain"
 	autherrors "github.com/infodancer/maildancer/auth/errors"
@@ -18,9 +19,17 @@ type sessionServer struct {
 	smpb.UnimplementedSessionServiceServer
 	mgr    *manager.Manager
 	filter *peerfilter.Filter
+	// authFailDelay is the uniform response deadline for failed
+	// authentications. Zero disables it.
+	authFailDelay time.Duration
 }
 
 func (s *sessionServer) Login(ctx context.Context, req *smpb.LoginRequest) (*smpb.LoginResponse, error) {
+	// Taken before any work, so the failure deadline below is measured from
+	// when the credentials arrived rather than added to however long the
+	// attempt took.
+	received := time.Now()
+
 	if req.Username == "" || req.Password == "" {
 		return nil, status.Error(codes.InvalidArgument, "username and password required")
 	}
@@ -35,6 +44,26 @@ func (s *sessionServer) Login(ctx context.Context, req *smpb.LoginRequest) (*smp
 	if err != nil {
 		slog.Warn("login failed",
 			"username", req.Username, "client_ip", req.ClientIp, "error", err)
+
+		// Rule 1 (#206): an attempt against an account that does not exist is a
+		// first-attempt hostile signal. No legitimate client authenticates as a
+		// nonexistent account -- a real user's client has a real username
+		// configured in it -- so this bans on N=1 rather than counting. It is
+		// the only rule that catches the measured attack, where 41 of 59
+		// addresses made exactly one attempt.
+		if errors.Is(err, autherrors.ErrUserNotFound) && req.ClientIp != "" {
+			if berr := s.filter.Ban(ctx, req.ClientIp, "nonexistent_account"); berr != nil {
+				slog.Error("failed to ban peer for nonexistent-account attempt",
+					"client_ip", req.ClientIp, "error", berr)
+			}
+		}
+
+		// Hold every failure to a common deadline before answering. The paths
+		// above diverge sharply -- one bans the peer and skipped the password
+		// hash, the other did the full verify -- and that difference is exactly
+		// what must not be observable.
+		s.awaitFailDeadline(ctx, received)
+
 		if errors.Is(err, autherrors.ErrRateLimited) {
 			// ResourceExhausted is what the daemons already map to a
 			// protocol-level "too many attempts" response.
@@ -82,6 +111,38 @@ func (s *sessionServer) ValidateRecipient(ctx context.Context, req *smpb.Validat
 		UserExists:     userExists,
 		DeferRejection: deferRejection,
 	}, nil
+}
+
+// awaitFailDeadline blocks until authFailDelay has elapsed since received.
+//
+// An absolute deadline, not a sleep appended to the work. Sleeping for a fixed
+// duration after the attempt leaves the attempt's own cost visible in the
+// total, and the two failure paths cost very different amounts: a nonexistent
+// account skips the password hash (the decoy verify in auth/passwd narrows that
+// gap but does not close it, and a ban write adds Redis latency on one side
+// only). Releasing both at the same offset from a common start makes the
+// remaining difference unobservable.
+//
+// Returns early if the client goes away; there is nobody left to mislead, and
+// holding the goroutine would only help an attacker who hangs up on purpose.
+func (s *sessionServer) awaitFailDeadline(ctx context.Context, received time.Time) {
+	if s.authFailDelay <= 0 {
+		return
+	}
+	remaining := s.authFailDelay - time.Since(received)
+	if remaining <= 0 {
+		// The attempt already took longer than the deadline. Nothing to add --
+		// and nothing to subtract either, which is why the decoy verify matters:
+		// past the deadline, timing reflects the work itself.
+		return
+	}
+
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 // CheckPeer answers the dispatchers' accept-time ban check. It is the hot path

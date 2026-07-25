@@ -48,13 +48,7 @@ func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentM
 		pm := parentMetrics
 		onStart = pm.ConnectionOpened
 		onEnd = pm.ConnectionClosed
-		reportSink = func(r io.Reader) error {
-			if err := pm.Ingest(r); err != nil {
-				pm.HandlerFailure("metrics_decode")
-				return err
-			}
-			return nil
-		}
+		reportSink = pm.Sink()
 	}
 
 	return &SubprocessServer{srv: connfork.NewServer(connfork.Config{

@@ -92,13 +92,7 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 		pm := cfg.Metrics
 		onStart = pm.ConnectionOpened
 		onEnd = pm.ConnectionClosed
-		reportSink = func(r io.Reader) error {
-			if err := pm.Ingest(r); err != nil {
-				pm.HandlerFailure("metrics_decode")
-				return err
-			}
-			return nil
-		}
+		reportSink = pm.Sink()
 	}
 
 	srv := connfork.NewServer(connfork.Config{

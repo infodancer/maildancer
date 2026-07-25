@@ -16,6 +16,7 @@ import (
 	"github.com/infodancer/maildancer/internal/session-manager/grpcserver"
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
 	"github.com/infodancer/maildancer/internal/session-manager/metrics"
+	"github.com/infodancer/maildancer/internal/session-manager/peerfilter"
 
 	// Register the auth agents and storage drivers the daemon constructs at
 	// runtime. These are registry side-effects (init()) with no referenced
@@ -80,10 +81,42 @@ func runServe() {
 		os.Exit(2)
 	}
 
-	authRouter, domainProvider, err := manager.SetupAuth(cfg)
+	// Shared Redis: authentication failure counters and peer bans both live
+	// there, so they are visible to every daemon and survive restarts (#206).
+	redisClient, err := cfg.Redis.Client()
+	if err != nil {
+		slog.Error("configure redis", "error", err)
+		os.Exit(1)
+	}
+	if redisClient != nil {
+		defer func() { _ = redisClient.Close() }()
+		slog.Info("redis configured", "url", cfg.Redis.URL)
+	}
+
+	authRouter, domainProvider, err := manager.SetupAuth(cfg, redisClient)
 	if err != nil {
 		slog.Error("setup auth", "error", err)
 		os.Exit(1)
+	}
+
+	peerFilter, err := peerfilter.New(cfg.PeerFilter, redisClient, slog.Default())
+	if err != nil {
+		slog.Error("configure peer filter", "error", err)
+		os.Exit(1)
+	}
+	switch {
+	case peerFilter.Enabled():
+		slog.Info("peer filter enabled",
+			"ban_ttl", cfg.PeerFilter.BanTTL.String(),
+			"ban_ttl_repeat", cfg.PeerFilter.BanTTLRepeat.String(),
+			"accept_tarpit", cfg.PeerFilter.AcceptTarpit.String(),
+			"allowlist", cfg.PeerFilter.Allowlist)
+	case cfg.PeerFilter.Enabled && redisClient == nil:
+		// Worth a warning rather than silence: the operator asked for it, and
+		// an accept-time ban is meaningless without shared state.
+		slog.Warn("peer filter enabled in config but redis is not configured; filter is off")
+	default:
+		slog.Info("peer filter disabled")
 	}
 
 	mc, metricsSrv := metrics.New(metrics.Config{
@@ -95,7 +128,7 @@ func runServe() {
 	mgr := manager.New(cfg, authRouter, domainProvider, mc)
 	defer mgr.Close()
 
-	srv, err := grpcserver.New(mgr, cfg, mc)
+	srv, err := grpcserver.New(mgr, cfg, mc, peerFilter)
 	if err != nil {
 		slog.Error("create server", "error", err)
 		os.Exit(1)

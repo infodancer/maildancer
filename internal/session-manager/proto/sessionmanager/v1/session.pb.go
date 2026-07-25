@@ -245,7 +245,12 @@ func (*LogoutResponse) Descriptor() ([]byte, []int) {
 type ValidateRecipientRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Fully-qualified recipient address (user@domain).
-	Address       string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
+	Address string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
+	// Client's IP address, as seen by the calling daemon. Optional, but without
+	// it a recipient dictionary attack cannot be attributed to anyone: an
+	// invalid recipient on a local domain is counted as an abuse signal against
+	// this address (#206, rule 3).
+	ClientIp      string `protobuf:"bytes,2,opt,name=client_ip,json=clientIp,proto3" json:"client_ip,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -283,6 +288,13 @@ func (*ValidateRecipientRequest) Descriptor() ([]byte, []int) {
 func (x *ValidateRecipientRequest) GetAddress() string {
 	if x != nil {
 		return x.Address
+	}
+	return ""
+}
+
+func (x *ValidateRecipientRequest) GetClientIp() string {
+	if x != nil {
+		return x.ClientIp
 	}
 	return ""
 }
@@ -572,9 +584,10 @@ const file_sessionmanager_v1_session_proto_rawDesc = "" +
 	"\x12max_sends_per_hour\x18\x04 \x01(\x05R\x0fmaxSendsPerHour\"4\n" +
 	"\rLogoutRequest\x12#\n" +
 	"\rsession_token\x18\x01 \x01(\tR\fsessionToken\"\x10\n" +
-	"\x0eLogoutResponse\"4\n" +
+	"\x0eLogoutResponse\"Q\n" +
 	"\x18ValidateRecipientRequest\x12\x18\n" +
-	"\aaddress\x18\x01 \x01(\tR\aaddress\"\"\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\x12\x1b\n" +
+	"\tclient_ip\x18\x02 \x01(\tR\bclientIp\"\"\n" +
 	"\x10CheckPeerRequest\x12\x0e\n" +
 	"\x02ip\x18\x01 \x01(\tR\x02ip\"`\n" +
 	"\x11CheckPeerResponse\x12\x16\n" +

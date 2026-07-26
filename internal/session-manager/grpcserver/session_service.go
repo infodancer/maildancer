@@ -46,13 +46,31 @@ func (s *sessionServer) Login(ctx context.Context, req *smpb.LoginRequest) (*smp
 		slog.Warn("login failed",
 			"username", req.Username, "client_ip", req.ClientIp, "error", err)
 
-		// Rule 1 (#206): an attempt against an account that does not exist is a
-		// first-attempt hostile signal. No legitimate client authenticates as a
-		// nonexistent account -- a real user's client has a real username
-		// configured in it -- so this bans on N=1 rather than counting. It is
-		// the only rule that catches the measured attack, where 41 of 59
-		// addresses made exactly one attempt.
-		if errors.Is(err, autherrors.ErrUserNotFound) && req.ClientIp != "" {
+		// A switch, not two ifs: the two cases are mutually exclusive by
+		// construction (AuthRouter returns one error or the other, never both)
+		// and the order matters. An unhosted domain must not also reach rule 1,
+		// which is exactly the bug this replaces -- before #221 the attempt fell
+		// through to the fallback agent, came back ErrUserNotFound, and banned.
+		switch {
+		case errors.Is(err, autherrors.ErrDomainNotHosted) && req.ClientIp != "":
+			// Rule 3, not rule 1 (#221): the benign case here is a stale client
+			// still pointed at a domain that has been migrated or deprecated,
+			// and banning on the first attempt locks out precisely the former
+			// users a migration is trying not to break. Counted, like
+			// invalid_recipient, which is the same shape of evidence on the
+			// recipient side.
+			if rerr := s.filter.Report(ctx, req.ClientIp, peersignal.UnhostedDomain); rerr != nil {
+				slog.Warn("failed to record unhosted-domain signal",
+					"client_ip", req.ClientIp, "error", rerr)
+			}
+
+		case errors.Is(err, autherrors.ErrUserNotFound) && req.ClientIp != "":
+			// Rule 1 (#206): an attempt against an account that does not exist
+			// on a domain we do host is a first-attempt hostile signal. No
+			// legitimate client authenticates as a nonexistent account -- a real
+			// user's client has a real username configured in it -- so this bans
+			// on N=1 rather than counting. It is the only rule that catches the
+			// measured attack, where 41 of 59 addresses made exactly one attempt.
 			if berr := s.filter.Ban(ctx, req.ClientIp, peerfilter.ReasonNonexistentAccount); berr != nil {
 				slog.Error("failed to ban peer for nonexistent-account attempt",
 					"client_ip", req.ClientIp, "error", berr)

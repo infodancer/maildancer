@@ -327,3 +327,21 @@ func TestListAbuse_EmptyWhenNothingReported(t *testing.T) {
 		t.Errorf("got %+v, want no entries", entries)
 	}
 }
+
+// TestDefaults_OmitUnhostedDomain is an intent guard, not a tautology. The
+// unhosted-domain signal ships counted-and-never-banning on purpose (#221): the
+// benign case is a stale client left pointed at a migrated domain, and the
+// previous behaviour -- a first-attempt ban, reached accidentally through the
+// fallback agent -- locked out exactly those users. Adding a threshold here
+// restores that, so it should be a deliberate act with data behind it rather
+// than someone filling in a table.
+func TestDefaults_OmitUnhostedDomain(t *testing.T) {
+	cfg := Defaults()
+	if err := cfg.Normalize(); err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if n, ok := cfg.AbuseThresholds[peersignal.UnhostedDomain]; ok {
+		t.Errorf("unhosted_domain has a default threshold of %d; it must be "+
+			"counted only until production data says otherwise", n)
+	}
+}

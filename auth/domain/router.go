@@ -135,6 +135,15 @@ func (r *AuthRouter) AuthenticateWithDomain(ctx context.Context, username, passw
 	return result, nil
 }
 
+// hasDomains reports whether the provider hosts any domains at all.
+//
+// This distinguishes "we host domains, just not that one" from "this is an
+// unconfigured drop-in host", which are the two cases an unhosted domain can
+// mean and which need opposite handling.
+func (r *AuthRouter) hasDomains() bool {
+	return r.provider != nil && len(r.provider.Domains()) > 0
+}
+
 // authenticateInternal performs the actual credential check without rate limiting.
 func (r *AuthRouter) authenticateInternal(ctx context.Context, username, password string) (*AuthResult, error) {
 	localPart, domainName := SplitUsername(username)
@@ -151,6 +160,25 @@ func (r *AuthRouter) authenticateInternal(ctx context.Context, username, passwor
 				session.User.Mailbox = base + "@" + domainName
 			}
 			return &AuthResult{Session: session, Domain: d, Extension: extension}, nil
+		}
+		// The domain is not hosted here. On a server that hosts domains at all
+		// that is a distinct signal, and reporting it as such is what stops a
+		// migrated domain's stale clients from being banned on their first
+		// attempt (#221).
+		//
+		// Gated on there being domains configured, because the fallback agent
+		// exists for the legacy unqualified case -- old unix user@host, where
+		// the host is implied. A server with no domains configured is exactly
+		// that host and keeps its behaviour; a server with domains is not, so a
+		// qualified username naming an unhosted domain never reaches the
+		// fallback there.
+		//
+		// hasDomains costs a directory scan for the filesystem provider, so it
+		// is deliberately the last thing checked: only an attempt that has
+		// already named an unhosted domain pays for it, and that path is held
+		// for auth_fail_delay anyway.
+		if r.hasDomains() {
+			return nil, autherrors.ErrDomainNotHosted
 		}
 	}
 

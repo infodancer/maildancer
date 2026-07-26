@@ -11,6 +11,16 @@ var (
 	// ErrUserNotFound indicates the requested user does not exist.
 	ErrUserNotFound = errors.New("user not found")
 
+	// ErrDomainNotHosted indicates the username named a domain this server does
+	// not host, on a server that hosts domains at all.
+	//
+	// Distinguished from ErrUserNotFound deliberately. A stale client left
+	// pointed at a migrated or deprecated domain looks exactly like this, and it
+	// is a real and benign case, so callers should count it rather than treating
+	// it as the first-attempt hostile signal that a nonexistent account on a
+	// hosted domain is (#221).
+	ErrDomainNotHosted = errors.New("domain not hosted")
+
 	// ErrRateLimited indicates too many failed authentication attempts.
 	// Callers should return a temporary failure (e.g., SMTP 421) rather
 	// than a credentials-invalid response.

@@ -92,10 +92,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 	for _, strikes := range []string{"1", "2", "3+"} {
 		m.banStrikes.WithLabelValues(strikes)
 	}
-	for _, signal := range []string{
-		peersignal.InvalidRecipient, peersignal.RelayDenied,
-		peersignal.EarlyTalker, peersignal.MalformedCommand, peersignal.DataAbort,
-	} {
+	// From peersignal.All rather than a list repeated here: the copy that used
+	// to live at this line drifted the moment connection_rate and
+	// unhosted_domain were added, and those two are exactly the signals that
+	// need a zero series, since neither has a ban threshold.
+	for _, signal := range peersignal.All() {
 		m.abuseSignals.WithLabelValues(signal)
 	}
 
@@ -133,13 +134,12 @@ func strikeLabel(strikes int64) string {
 // signalLabel keeps an unrecognized signal name from growing the label set. A
 // daemon from a newer build can report anything.
 func signalLabel(signal string) string {
-	switch signal {
-	case peersignal.InvalidRecipient, peersignal.RelayDenied,
-		peersignal.EarlyTalker, peersignal.MalformedCommand, peersignal.DataAbort:
-		return signal
-	default:
-		return signalOther
+	for _, known := range peersignal.All() {
+		if signal == known {
+			return signal
+		}
 	}
+	return signalOther
 }
 
 // BanRecorded counts a created ban, by reason class and offense count.

@@ -336,16 +336,24 @@ func (s *Server) gateVerdict(ctx context.Context, clientIP string, lc Listener) 
 		s.cfg.Logger.Error("peer gate check failed",
 			slog.String("client_ip", clientIP),
 			slog.Bool("strict", s.cfg.StrictGate),
+			slog.String("listener", lc.Address),
+			slog.String("mode", lc.Mode),
 			slog.String("error", err.Error()))
 		if !s.cfg.StrictGate {
 			return Verdict{}, false
 		}
 		return Verdict{Banned: true, Reason: "gate_error"}, true
 	case verdict.Banned:
+		// listener and mode are here because smtpd serves 25, 465 and 587 from
+		// one process: a refusal that names only the client address cannot be
+		// attributed to the port it happened on, which is the question #225's
+		// ban-scope data exists to answer (#227).
 		s.reportVerdict("deny")
 		s.cfg.Logger.Info("connection denied by peer gate",
 			slog.String("client_ip", clientIP),
-			slog.String("reason", verdict.Reason))
+			slog.String("reason", verdict.Reason),
+			slog.String("listener", lc.Address),
+			slog.String("mode", lc.Mode))
 		return verdict, true
 	case verdict.ShadowBanned:
 		// Served, but recorded. Warn rather than info: this line is the whole

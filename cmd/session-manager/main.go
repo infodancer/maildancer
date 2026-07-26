@@ -17,6 +17,7 @@ import (
 	"github.com/infodancer/maildancer/internal/session-manager/manager"
 	"github.com/infodancer/maildancer/internal/session-manager/metrics"
 	"github.com/infodancer/maildancer/internal/session-manager/peerfilter"
+	"github.com/prometheus/client_golang/prometheus"
 
 	// Register the auth agents and storage drivers the daemon constructs at
 	// runtime. These are registry side-effects (init()) with no referenced
@@ -99,7 +100,15 @@ func runServe() {
 		os.Exit(1)
 	}
 
-	peerFilter, err := peerfilter.New(cfg.PeerFilter, redisClient, slog.Default())
+	// The ban-decision series go to the same registry metrics.New serves via
+	// promhttp below (#228). Nil when metrics are off, which skips them rather
+	// than registering series nothing will scrape.
+	var peerFilterReg prometheus.Registerer
+	if cfg.Metrics.Enabled {
+		peerFilterReg = prometheus.DefaultRegisterer
+	}
+
+	peerFilter, err := peerfilter.New(cfg.PeerFilter, redisClient, slog.Default(), peerFilterReg)
 	if err != nil {
 		slog.Error("configure peer filter", "error", err)
 		os.Exit(1)

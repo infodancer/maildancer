@@ -27,7 +27,7 @@ func newPeerTestServer(t *testing.T, override func(*peerfilter.Config)) (*sessio
 	if override != nil {
 		override(&cfg)
 	}
-	filter, err := peerfilter.New(cfg, client, nil)
+	filter, err := peerfilter.New(cfg, client, nil, nil)
 	if err != nil {
 		t.Fatalf("peerfilter.New: %v", err)
 	}

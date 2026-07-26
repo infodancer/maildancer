@@ -9,7 +9,7 @@
 //	userctl user    add|del|list|passwd|verify|key ... user lifecycle and keys
 //	userctl forward list|set|del ...                   domain forwards (1:1)
 //	userctl keys    list|rotate|revoke ...             auth-oidc signing keys
-//	userctl peer    list|good|unban|ban ...            connection-level peer bans
+//	userctl peer    list|good|abuse|unban|ban ...      connection-level peer bans
 //	userctl migrate uids                               allocate missing gids/uids
 //
 // The legacy flat forms (add, del, list, verify) remain as aliases for the

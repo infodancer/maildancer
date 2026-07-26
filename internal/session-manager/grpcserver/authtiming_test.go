@@ -68,7 +68,7 @@ func newTimingServer(t *testing.T, failDelay time.Duration) (*sessionServer, *pe
 	})
 	t.Cleanup(func() { _ = client.Close() })
 
-	filter, err := peerfilter.New(peerfilter.Defaults(), client, nil)
+	filter, err := peerfilter.New(peerfilter.Defaults(), client, nil, nil)
 	if err != nil {
 		t.Fatalf("peerfilter.New: %v", err)
 	}
@@ -387,7 +387,7 @@ func newFilterOverMiniredis(t *testing.T, cfg peerfilter.Config) (*peerfilter.Fi
 	})
 	t.Cleanup(func() { _ = client.Close() })
 
-	filter, err := peerfilter.New(cfg, client, nil)
+	filter, err := peerfilter.New(cfg, client, nil, nil)
 	if err != nil {
 		t.Fatalf("peerfilter.New: %v", err)
 	}

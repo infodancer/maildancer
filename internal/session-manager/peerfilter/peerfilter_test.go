@@ -6,12 +6,22 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 )
 
 // newTestFilter builds a Filter over an in-process miniredis with the default
-// policy, plus any config overrides the test needs.
+// policy, plus any config overrides the test needs. No metrics: most tests are
+// about policy, and a shared registry across tests would accumulate counts.
 func newTestFilter(t *testing.T, override func(*Config)) (*Filter, *miniredis.Miniredis) {
+	t.Helper()
+	return newTestFilterWithRegistry(t, nil, override)
+}
+
+// newTestFilterWithRegistry is newTestFilter with the ban-decision series
+// registered against reg, so a test can assert on them. Each test passes its
+// own registry; the default one would carry counts between tests.
+func newTestFilterWithRegistry(t *testing.T, reg prometheus.Registerer, override func(*Config)) (*Filter, *miniredis.Miniredis) {
 	t.Helper()
 	mr := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{
@@ -25,7 +35,7 @@ func newTestFilter(t *testing.T, override func(*Config)) (*Filter, *miniredis.Mi
 	if override != nil {
 		override(&cfg)
 	}
-	f, err := New(cfg, client, nil)
+	f, err := New(cfg, client, nil, reg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -87,7 +97,7 @@ func TestNew_DisabledReturnsNilFilter(t *testing.T) {
 	cfg := Defaults()
 	disabled := false
 	cfg.Enabled = &disabled
-	f, err := New(cfg, client, nil)
+	f, err := New(cfg, client, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -114,7 +124,7 @@ func TestNew_DisabledReturnsNilFilter(t *testing.T) {
 // authentication limiter, which falls back to an in-process store: an
 // accept-time ban is worthless per-process, so with no Redis the filter is off.
 func TestNew_NilClientDisables(t *testing.T) {
-	f, err := New(Defaults(), nil, nil)
+	f, err := New(Defaults(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -133,7 +143,7 @@ func TestNew_InvalidAllowlistIsAnError(t *testing.T) {
 
 	cfg := Defaults()
 	cfg.Allowlist = []string{"10.0.0.0/8", "not-a-cidr"}
-	if _, err := New(cfg, client, nil); err == nil {
+	if _, err := New(cfg, client, nil, nil); err == nil {
 		t.Error("invalid allowlist CIDR accepted")
 	}
 }

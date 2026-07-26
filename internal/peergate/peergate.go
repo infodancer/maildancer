@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/infodancer/maildancer/internal/connfork"
+	"github.com/infodancer/maildancer/internal/peersignal"
 	smpb "github.com/infodancer/maildancer/internal/session-manager/proto/sessionmanager/v1"
 	"google.golang.org/grpc"
 )
@@ -71,8 +72,27 @@ type Config struct {
 
 	// CacheSize bounds the verdict cache. Default 8192. The cache must be
 	// bounded or it becomes its own memory-exhaustion vector under a spray
-	// from many source addresses.
+	// from many source addresses. The connection-rate counter shares this
+	// bound: same threat, same magnitude, no reason for a second knob.
 	CacheSize int `toml:"cache_size"`
+
+	// ConnRateThreshold is how many accepts from one address, in one listener
+	// role, within ConnRateWindow, count as a connection storm. Default 60;
+	// negative disables detection, matching MaxTarpit.
+	//
+	// Crossing it reports a connection_rate abuse signal to session-manager,
+	// once per window per address. It does not ban: the signal ships with no
+	// configured threshold on the policy side, so it is counted and never
+	// enforced until production data says where a threshold belongs (#221). A
+	// connection-rate ban is the likeliest false positive in this design -- a
+	// legitimately busy sender is the one thing that trips it -- which is why
+	// it is measured first.
+	ConnRateThreshold int `toml:"connection_rate_threshold"`
+
+	// ConnRateWindow is the counting window for ConnRateThreshold. Default 1m.
+	ConnRateWindow time.Duration `toml:"-"`
+	// ConnRateWindowStr is the TOML-friendly form of ConnRateWindow.
+	ConnRateWindowStr string `toml:"connection_rate_window"`
 }
 
 // Dispatcher-side defaults.
@@ -82,6 +102,13 @@ const (
 	DefaultAllowTTL    = 10 * time.Second
 	DefaultDenyTTL     = 60 * time.Second
 	DefaultCacheSize   = 8192
+
+	// DefaultConnRateThreshold and DefaultConnRateWindow are deliberately
+	// generous. The signal never bans yet, so a low threshold would only add
+	// noise; the point of the first deployment is to learn what a real busy
+	// sender actually does.
+	DefaultConnRateThreshold = 60
+	DefaultConnRateWindow    = time.Minute
 )
 
 // IsEnabled reports whether the gate should run. Absent configuration means
@@ -113,6 +140,7 @@ func (c *Config) Normalize() error {
 		{"gate_timeout", c.GateTimeoutStr, &c.GateTimeout, DefaultGateTimeout},
 		{"allow_ttl", c.AllowTTLStr, &c.AllowTTL, DefaultAllowTTL},
 		{"deny_ttl", c.DenyTTLStr, &c.DenyTTL, DefaultDenyTTL},
+		{"connection_rate_window", c.ConnRateWindowStr, &c.ConnRateWindow, DefaultConnRateWindow},
 	} {
 		if f.str != "" {
 			parsed, err := time.ParseDuration(f.str)
@@ -131,6 +159,10 @@ func (c *Config) Normalize() error {
 	if c.CacheSize <= 0 {
 		c.CacheSize = DefaultCacheSize
 	}
+	// Zero takes the default; negative is preserved because it means disabled.
+	if c.ConnRateThreshold == 0 {
+		c.ConnRateThreshold = DefaultConnRateThreshold
+	}
 	return nil
 }
 
@@ -138,6 +170,10 @@ func (c *Config) Normalize() error {
 type Metrics struct {
 	// OnCache is called with true on a cache hit, false on a miss.
 	OnCache func(hit bool)
+	// OnConnRate is called when an address crosses the local connection-rate
+	// threshold, with "reported" when the signal was sent to session-manager or
+	// "suppressed_banned" when it was not because the peer is already denied.
+	OnConnRate func(result string)
 }
 
 // Gate answers connfork's accept-time check against session-manager.
@@ -146,6 +182,7 @@ type Gate struct {
 	client    smpb.SessionServiceClient
 	allowlist []*net.IPNet
 	cache     *verdictCache
+	connRate  *connRateCounter
 	metrics   Metrics
 	logger    *slog.Logger
 }
@@ -181,6 +218,7 @@ func New(cfg Config, conn grpc.ClientConnInterface, metrics Metrics, logger *slo
 		client:    smpb.NewSessionServiceClient(conn),
 		allowlist: nets,
 		cache:     newVerdictCache(cfg.CacheSize),
+		connRate:  newConnRateCounter(cfg.ConnRateThreshold, cfg.CacheSize, cfg.ConnRateWindow),
 		metrics:   metrics,
 		logger:    logger,
 	}, nil
@@ -247,7 +285,18 @@ func (g *Gate) CheckPeer(ctx context.Context, ip string, authFacing bool) (connf
 	// leak one role's verdict onto the other.
 	key := cacheKey(ip, authFacing)
 
+	// Counted before the cache lookup, deliberately: the cache is what hides a
+	// reconnect storm from session-manager, so a counter behind it would
+	// undercount a flood by exactly the factor that matters. Keyed the same way
+	// as the cache, because a submission storm and an inbound-25 storm are
+	// different phenomena with different legitimacy, and #225 already showed
+	// what unkeyed state shared across roles in one smtpd process does.
+	crossed := g.connRate.observe(key)
+
 	if verdict, ok := g.cache.get(key); ok {
+		if crossed {
+			g.reportConnRate(ip, authFacing, verdict)
+		}
 		if g.metrics.OnCache != nil {
 			g.metrics.OnCache(true)
 		}
@@ -283,7 +332,63 @@ func (g *Gate) CheckPeer(ctx context.Context, ip string, authFacing bool) (connf
 	}
 	g.cache.put(key, verdict, ttl)
 
+	if crossed {
+		g.reportConnRate(ip, authFacing, verdict)
+	}
 	return verdict, nil
+}
+
+// reportConnRate sends a connection_rate abuse signal for a peer that crossed
+// the local threshold.
+//
+// Not sent when the peer is already denied. The measurement is still taken --
+// the metric records the suppression -- but spending an RPC on an address whose
+// connections we are already refusing buys nothing, and once this signal does
+// have a ban threshold it would make the ban self-renewing: every ban window's
+// reconnect storm would re-cross the threshold and re-ban, turning a 24h ban
+// into a permanent one.
+//
+// Fire-and-forget on its own context. The caller's is cancelled by
+// connfork.gateVerdict the instant CheckPeer returns, so reusing it would
+// cancel the report before it left. Goroutine count is bounded by the
+// once-per-window dedup in the counter.
+func (g *Gate) reportConnRate(ip string, authFacing bool, verdict connfork.Verdict) {
+	if verdict.Banned || verdict.ShadowBanned {
+		if g.metrics.OnConnRate != nil {
+			g.metrics.OnConnRate("suppressed_banned")
+		}
+		return
+	}
+	if g.metrics.OnConnRate != nil {
+		g.metrics.OnConnRate("reported")
+	}
+
+	// Warn, not info: like the shadow-ban line, this is the entire dataset for
+	// deciding whether the signal should ever enforce. enforced=false is stated
+	// in the record so the log says which mode it is in without the reader
+	// having to know the config.
+	g.logger.Warn("peer crossed the local connection-rate threshold",
+		slog.String("client_ip", ip),
+		slog.Bool("auth_facing", authFacing),
+		slog.Int("threshold", g.cfg.ConnRateThreshold),
+		slog.String("window", g.cfg.ConnRateWindow.String()),
+		slog.String("signal", peersignal.ConnectionRate),
+		slog.Bool("enforced", false))
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), g.cfg.GateTimeout)
+		defer cancel()
+		if _, err := g.client.ReportPeer(ctx, &smpb.ReportPeerRequest{
+			Ip:     ip,
+			Signal: peersignal.ConnectionRate,
+		}); err != nil {
+			// Losing an abuse count is not worth escalating: the signal is
+			// volumetric and the next window will report again.
+			g.logger.Debug("connection-rate report failed",
+				slog.String("client_ip", ip),
+				slog.String("error", err.Error()))
+		}
+	}()
 }
 
 // cacheKey scopes a cached verdict to the listener role it was answered for.

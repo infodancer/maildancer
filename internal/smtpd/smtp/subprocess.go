@@ -63,6 +63,7 @@ func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentM
 	var onGateVerdict func(string)
 	var onTarpitStart, onTarpitEnd, onTarpitRejected func()
 	var onCache func(bool)
+	var onConnRate func(string)
 	if parentMetrics != nil {
 		pm := parentMetrics
 		onStart = pm.ConnectionOpened
@@ -73,6 +74,7 @@ func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentM
 		onTarpitEnd = pm.TarpitEnded
 		onTarpitRejected = pm.TarpitRejected
 		onCache = pm.GateCacheResult
+		onConnRate = pm.ConnRate
 	}
 
 	// The accept-time peer gate (#206). The dispatcher opens its own
@@ -80,7 +82,7 @@ func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentM
 	// verdict cache only pays off in the long-lived parent, and the check has
 	// to happen before a handler exists at all. Most inbound connections never
 	// authenticate, so smtpd is where an auth-path-only check misses the most.
-	gate, gateClient, err := newPeerGate(cfg, onCache, logger)
+	gate, gateClient, err := newPeerGate(cfg, onCache, onConnRate, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +120,7 @@ func NewSubprocessServer(cfg config.Config, execPath, configPath string, parentM
 // It dials through internal/smclient rather than reusing
 // SessionManagerDeliveryAgent: the delivery agent is the handler's tool and
 // logs itself as such, while this connection exists only to ask CheckPeer.
-func newPeerGate(cfg config.Config, onCache func(bool), logger *slog.Logger) (*peergate.Gate, *smclient.Client, error) {
+func newPeerGate(cfg config.Config, onCache func(bool), onConnRate func(string), logger *slog.Logger) (*peergate.Gate, *smclient.Client, error) {
 	if !cfg.PeerGate.IsEnabled() {
 		logger.Info("accept-time peer gate disabled")
 		return nil, nil, nil
@@ -139,7 +141,7 @@ func newPeerGate(cfg config.Config, onCache func(bool), logger *slog.Logger) (*p
 	}
 
 	gate, err := peergate.New(cfg.PeerGate, client.Conn(),
-		peergate.Metrics{OnCache: onCache}, logger)
+		peergate.Metrics{OnCache: onCache, OnConnRate: onConnRate}, logger)
 	if err != nil {
 		_ = client.Close()
 		return nil, nil, err
@@ -149,6 +151,8 @@ func newPeerGate(cfg config.Config, onCache func(bool), logger *slog.Logger) (*p
 		slog.String("gate_timeout", gate.GateTimeout().String()),
 		slog.Int("max_tarpit", gate.MaxTarpit()),
 		slog.Bool("strict_gate", gate.StrictGate()),
+		slog.Int("conn_rate_threshold", cfg.PeerGate.ConnRateThreshold),
+		slog.String("conn_rate_window", cfg.PeerGate.ConnRateWindow.String()),
 		slog.Any("allowlist", cfg.PeerGate.Allowlist))
 	return gate, client, nil
 }

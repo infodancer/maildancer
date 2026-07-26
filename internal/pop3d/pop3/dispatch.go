@@ -101,6 +101,7 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 	var onGateVerdict func(string)
 	var onTarpitStart, onTarpitEnd, onTarpitRejected func()
 	var onCache func(bool)
+	var onConnRate func(string)
 	if cfg.Metrics != nil {
 		pm := cfg.Metrics
 		onStart = pm.ConnectionOpened
@@ -111,13 +112,14 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 		onTarpitEnd = pm.TarpitEnded
 		onTarpitRejected = pm.TarpitRejected
 		onCache = pm.GateCacheResult
+		onConnRate = pm.ConnRate
 	}
 
 	// The accept-time peer gate (#206). The dispatcher opens its own
 	// session-manager connection: handlers are one-shot subprocesses, so a
 	// verdict cache only pays off in the long-lived parent, and the check has
 	// to happen before a handler exists at all.
-	gate, smClient, err := newPeerGate(cfg.Config, onCache, logger)
+	gate, smClient, err := newPeerGate(cfg.Config, onCache, onConnRate, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +150,7 @@ func NewDispatcher(cfg DispatcherConfig) (*Dispatcher, error) {
 // newPeerGate builds the accept-time gate, returning the session-manager client
 // whose connection it borrows so the dispatcher can close it on shutdown.
 // Returns (nil, nil, nil) when the gate is disabled.
-func newPeerGate(cfg config.Config, onCache func(bool), logger *slog.Logger) (*peergate.Gate, *SessionManagerClient, error) {
+func newPeerGate(cfg config.Config, onCache func(bool), onConnRate func(string), logger *slog.Logger) (*peergate.Gate, *SessionManagerClient, error) {
 	if !cfg.PeerGate.IsEnabled() {
 		logger.Info("accept-time peer gate disabled")
 		return nil, nil, nil
@@ -165,7 +167,7 @@ func newPeerGate(cfg config.Config, onCache func(bool), logger *slog.Logger) (*p
 	}
 
 	gate, err := peergate.New(cfg.PeerGate, smClient.Conn(),
-		peergate.Metrics{OnCache: onCache}, logger)
+		peergate.Metrics{OnCache: onCache, OnConnRate: onConnRate}, logger)
 	if err != nil {
 		_ = smClient.Close()
 		return nil, nil, err
@@ -175,6 +177,8 @@ func newPeerGate(cfg config.Config, onCache func(bool), logger *slog.Logger) (*p
 		slog.String("gate_timeout", gate.GateTimeout().String()),
 		slog.Int("max_tarpit", gate.MaxTarpit()),
 		slog.Bool("strict_gate", gate.StrictGate()),
+		slog.Int("conn_rate_threshold", cfg.PeerGate.ConnRateThreshold),
+		slog.String("conn_rate_window", cfg.PeerGate.ConnRateWindow.String()),
 		slog.Any("allowlist", cfg.PeerGate.Allowlist))
 	return gate, smClient, nil
 }

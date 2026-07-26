@@ -242,10 +242,11 @@ type ParentMetrics struct {
 
 	// Peer-gate series (#206). Parent-owned like the connection series: the
 	// gate runs in the dispatcher, before any handler exists.
-	gateChecks     *prometheus.CounterVec
-	gateCache      *prometheus.CounterVec
-	tarpitActive   prometheus.Gauge
-	tarpitRejected prometheus.Counter
+	gateChecks       *prometheus.CounterVec
+	gateCache        *prometheus.CounterVec
+	tarpitActive     prometheus.Gauge
+	tarpitRejected   prometheus.Counter
+	connRateExceeded *prometheus.CounterVec
 }
 
 // NewParentMetrics builds the parent metrics surface for the given metric
@@ -283,17 +284,23 @@ func NewParentMetrics(reg prometheus.Registerer, namespace string) *ParentMetric
 			Name: namespace + "_peer_tarpit_rejected_total",
 			Help: "Denied connections closed immediately because the tarpit budget was full. Nonzero means max_tarpit is undersized.",
 		}),
+		connRateExceeded: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: namespace + "_peer_conn_rate_exceeded_total",
+			Help: "Peers crossing the local connection-rate threshold, by whether the abuse signal was reported to session-manager or suppressed because the peer is already denied. Counted only -- the signal has no ban threshold by default (#221).",
+		}, []string{"result"}),
 		agg: newAggregator(map[string]struct{}{
-			namespace + "_connections_total":          {},
-			namespace + "_connections_active":         {},
-			namespace + "_peer_gate_checks_total":     {},
-			namespace + "_peer_gate_cache_total":      {},
-			namespace + "_peer_tarpit_active":         {},
-			namespace + "_peer_tarpit_rejected_total": {},
+			namespace + "_connections_total":             {},
+			namespace + "_connections_active":            {},
+			namespace + "_peer_gate_checks_total":        {},
+			namespace + "_peer_gate_cache_total":         {},
+			namespace + "_peer_tarpit_active":            {},
+			namespace + "_peer_tarpit_rejected_total":    {},
+			namespace + "_peer_conn_rate_exceeded_total": {},
 		}),
 	}
 	reg.MustRegister(p.connectionsTotal, p.connectionsActive, p.handlerFailures,
-		p.gateChecks, p.gateCache, p.tarpitActive, p.tarpitRejected, p.agg)
+		p.gateChecks, p.gateCache, p.tarpitActive, p.tarpitRejected,
+		p.connRateExceeded, p.agg)
 
 	// Pre-create the label combinations so the series exist at zero rather
 	// than appearing only on first use. An absent counter reads as "not
@@ -305,7 +312,16 @@ func NewParentMetrics(reg prometheus.Registerer, namespace string) *ParentMetric
 	for _, r := range []string{"hit", "miss"} {
 		p.gateCache.WithLabelValues(r)
 	}
+	for _, r := range []string{"reported", "suppressed_banned"} {
+		p.connRateExceeded.WithLabelValues(r)
+	}
 	return p
+}
+
+// ConnRate counts one crossing of the local connection-rate threshold. result is
+// "reported" or "suppressed_banned".
+func (p *ParentMetrics) ConnRate(result string) {
+	p.connRateExceeded.WithLabelValues(result).Inc()
 }
 
 // GateVerdict counts one accept-time gate consultation. verdict is "allow",

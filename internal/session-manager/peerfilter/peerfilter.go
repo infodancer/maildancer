@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/infodancer/maildancer/internal/peersignal"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -311,13 +312,18 @@ type Filter struct {
 	client    *redis.Client
 	allowlist []*net.IPNet
 	logger    *slog.Logger
+	metrics   *Metrics
 }
 
 // New builds a Filter. A nil client, or cfg.Enabled false, returns nil: a nil
 // *Filter is safe to use and allows every peer, so callers need no branch.
 // Invalid allowlist entries are an error rather than a silent omission -- a
 // typo there would remove the operator's own escape hatch.
-func New(cfg Config, client *redis.Client, logger *slog.Logger) (*Filter, error) {
+//
+// reg receives the ban-decision series (#228). A nil reg skips them entirely,
+// which is what userctl wants: it builds a Filter to run one command and has no
+// process metrics to contribute to.
+func New(cfg Config, client *redis.Client, logger *slog.Logger, reg prometheus.Registerer) (*Filter, error) {
 	if !cfg.IsEnabled() || client == nil {
 		return nil, nil
 	}
@@ -334,7 +340,13 @@ func New(cfg Config, client *redis.Client, logger *slog.Logger) (*Filter, error)
 		nets = append(nets, n)
 	}
 
-	return &Filter{cfg: cfg, client: client, allowlist: nets, logger: logger}, nil
+	return &Filter{
+		cfg:       cfg,
+		client:    client,
+		allowlist: nets,
+		logger:    logger,
+		metrics:   NewMetrics(reg),
+	}, nil
 }
 
 // Enabled reports whether f will do anything.
@@ -456,6 +468,7 @@ func (f *Filter) suppressBan(ctx context.Context, prefix string) bool {
 			f.logger.Error("known-good revocation failed",
 				"error", err.Error(), "peer", prefix)
 		}
+		f.metrics.KnownGoodRevoked()
 		f.logger.Warn("known-good status revoked; ban now enforced",
 			"peer", prefix,
 			"suppressed", suppressed,
@@ -467,6 +480,7 @@ func (f *Filter) suppressBan(ctx context.Context, prefix string) bool {
 	// Warn, not info: this is the measurement that makes the tradeoff
 	// visible. An address appearing here repeatedly is carrying both a real
 	// user and hostile traffic, which is exactly the case worth reviewing.
+	f.metrics.BanSuppressed()
 	f.logger.Warn("ban suppressed for known-good peer",
 		"peer", prefix,
 		"successful_auths", good,
@@ -509,6 +523,7 @@ func (f *Filter) RecordGood(ctx context.Context, ip string) error {
 		return fmt.Errorf("refresh known-good TTL: %w", err)
 	}
 	if n == 1 {
+		f.metrics.KnownGoodRecorded()
 		f.logger.Info("peer marked known-good", "peer", prefix)
 	}
 	return nil
@@ -574,6 +589,77 @@ func (f *Filter) ListGood(ctx context.Context) ([]GoodEntry, error) {
 	return entries, nil
 }
 
+// AbuseEntry is one rule-3 abuse counter in a listing.
+type AbuseEntry struct {
+	// Prefix is the address or IPv6 /64, as stored.
+	Prefix string
+	// Signal is the abuse signal name.
+	Signal string
+	// Count is the number of occurrences inside the current window.
+	Count int
+	// Threshold is the configured ban threshold for this signal, or 0 when the
+	// signal is counted only and can never ban on its own.
+	Threshold int
+	// TTL is how much of the counting window is left.
+	TTL time.Duration
+}
+
+// ListAbuse enumerates the rule-3 abuse counters.
+//
+// This is the only way to see a signal that is counted but has no configured
+// threshold. Such a signal never bans, so it appears in no ban listing and in no
+// log line -- without this it accrues in Redis where nothing reads it, and
+// "shadowed" becomes indistinguishable from "not running". Threshold is reported
+// alongside the count so the listing says which of the two a signal is.
+func (f *Filter) ListAbuse(ctx context.Context) ([]AbuseEntry, error) {
+	if f == nil {
+		return nil, nil
+	}
+
+	var (
+		entries []AbuseEntry
+		cursor  uint64
+	)
+	for {
+		keys, next, err := f.client.Scan(ctx, cursor, keyAbuse+"*", 256).Result()
+		if err != nil {
+			return nil, fmt.Errorf("scan abuse counters: %w", err)
+		}
+		for _, key := range keys {
+			// keyAbuse is "smtpd:abuse:ip:<prefix>:<signal>". The signal never
+			// contains a colon and an IPv6 prefix always does, so split from the
+			// right rather than the left.
+			rest := strings.TrimPrefix(key, keyAbuse)
+			idx := strings.LastIndex(rest, ":")
+			if idx < 0 {
+				continue
+			}
+			entry := AbuseEntry{
+				Prefix:    rest[:idx],
+				Signal:    rest[idx+1:],
+				Threshold: f.cfg.AbuseThresholds[rest[idx+1:]],
+			}
+
+			if v, err := f.client.Get(ctx, key).Result(); err == nil {
+				if n, convErr := strconv.Atoi(v); convErr == nil {
+					entry.Count = n
+				}
+			} else if !errors.Is(err, redis.Nil) {
+				return nil, fmt.Errorf("read abuse counter %q: %w", key, err)
+			}
+			if ttl, err := f.client.TTL(ctx, key).Result(); err == nil && ttl > 0 {
+				entry.TTL = ttl
+			}
+			entries = append(entries, entry)
+		}
+		if next == 0 {
+			break
+		}
+		cursor = next
+	}
+	return entries, nil
+}
+
 // Ban bans a peer. reason is recorded as the stored value for the operator's
 // benefit; it is not returned to daemons.
 //
@@ -615,6 +701,7 @@ func (f *Filter) Ban(ctx context.Context, ip, reason string) error {
 	if err := f.client.Set(ctx, keyBan+prefix, reason, ttl).Err(); err != nil {
 		return fmt.Errorf("write peer ban: %w", err)
 	}
+	f.metrics.BanRecorded(reason, strikes)
 	f.logger.Warn("peer banned",
 		"peer", prefix, "reason", reason, "ttl", ttl.String(), "strikes", strikes)
 	return nil
@@ -646,6 +733,10 @@ func (f *Filter) Report(ctx context.Context, ip, signal string) error {
 	if err != nil {
 		return fmt.Errorf("increment abuse counter: %w", err)
 	}
+	// Counted here rather than after the threshold check: a signal with no
+	// configured threshold never bans, and this counter is then the only
+	// evidence it fired at all (#228).
+	f.metrics.AbuseSignalRecorded(signal)
 	if n == 1 {
 		// Conditional, matching the auth counters: extending the TTL on every
 		// increment would hold the window open forever under a steady trickle.
@@ -676,6 +767,9 @@ func (f *Filter) Unban(ctx context.Context, ip string) (bool, error) {
 	removed, err := f.client.Del(ctx, keyBan+prefix).Result()
 	if err != nil {
 		return false, fmt.Errorf("delete peer ban: %w", err)
+	}
+	if removed > 0 {
+		f.metrics.UnbanRecorded()
 	}
 	// Strikes and the suppression counter go too, for the same reason: an
 	// operator undoing a false positive should not leave the address one strike

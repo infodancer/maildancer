@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"sort"
 	"text/tabwriter"
@@ -27,14 +28,14 @@ type peerFilterConfig struct {
 	} `toml:"session-manager"`
 }
 
-// runPeerSubcommand handles `userctl peer list|unban|ban`.
+// runPeerSubcommand handles `userctl peer list|good|abuse|unban|ban`.
 //
 // The unban path is not optional garnish: the ban rules are deliberately
 // aggressive (a single attempt against a nonexistent account is enough), so an
 // operator needs a way to undo a false positive without editing Redis by hand.
 func runPeerSubcommand(args []string, configPath string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("peer: expected `peer list|unban|ban`")
+		return fmt.Errorf("peer: expected `peer list|good|abuse|unban|ban`")
 	}
 
 	filter, err := openPeerFilter(configPath)
@@ -53,13 +54,84 @@ func runPeerSubcommand(args []string, configPath string) error {
 		return runPeerList(ctx, filter, os.Stdout)
 	case "good":
 		return runPeerGood(ctx, filter, os.Stdout)
+	case "abuse":
+		return runPeerAbuse(ctx, filter, os.Stdout)
 	case "unban":
 		return runPeerUnban(ctx, filter, args[1:])
 	case "ban":
 		return runPeerBan(ctx, filter, args[1:])
 	default:
-		return fmt.Errorf("peer: unknown action %q (expected list|good|unban|ban)", args[0])
+		return fmt.Errorf("peer: unknown action %q (expected list|good|abuse|unban|ban)", args[0])
 	}
+}
+
+// runPeerAbuse lists the rule-3 abuse counters and, for each, whether a
+// threshold is configured.
+//
+// A signal with no threshold is counted and can never ban: it appears in no ban
+// listing and produces no log line, so this is the only place it is visible at
+// all. That distinction is the point of the THRESHOLD column -- a counter
+// climbing with "none" beside it is a signal being measured before anyone
+// decides to enforce it, which is not the same thing as a signal that is broken.
+func runPeerAbuse(ctx context.Context, filter *peerfilter.Filter, out io.Writer) error {
+	entries, err := filter.ListAbuse(ctx)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(out, "No abuse counters.")
+		return nil
+	}
+
+	// Closest to its threshold first, then by raw count: those are the addresses
+	// about to be banned, or the signals about to need a decision.
+	sort.Slice(entries, func(i, j int) bool {
+		li, lj := remainingToThreshold(entries[i]), remainingToThreshold(entries[j])
+		if li != lj {
+			return li < lj
+		}
+		if entries[i].Count != entries[j].Count {
+			return entries[i].Count > entries[j].Count
+		}
+		return entries[i].Prefix < entries[j].Prefix
+	})
+
+	tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "PEER\tSIGNAL\tCOUNT\tTHRESHOLD\tWINDOW LEFT")
+	var counted int
+	for _, e := range entries {
+		threshold := "none"
+		if e.Threshold > 0 {
+			threshold = fmt.Sprintf("%d", e.Threshold)
+		}
+		if e.Threshold <= 0 {
+			counted++
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\t%s\n",
+			e.Prefix, e.Signal, e.Count, threshold, formatTTL(e.TTL))
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "\n%d abuse counter(s).\n", len(entries))
+	if counted > 0 {
+		fmt.Fprintf(out, "%d have no configured threshold: those signals are "+
+			"counted only and never ban on their own.\n", counted)
+	}
+	return nil
+}
+
+// remainingToThreshold reports how many more occurrences would ban this peer.
+// A signal with no threshold never bans, so it sorts last rather than first.
+func remainingToThreshold(e peerfilter.AbuseEntry) int {
+	if e.Threshold <= 0 {
+		return math.MaxInt
+	}
+	if remaining := e.Threshold - e.Count; remaining > 0 {
+		return remaining
+	}
+	return 0
 }
 
 // runPeerGood lists known-good addresses with both sides of the exemption's
@@ -141,7 +213,7 @@ func openPeerFilter(configPath string) (*peerfilter.Filter, error) {
 	cfg := fc.SessionManager.PeerFilter
 	enabled := true
 	cfg.Enabled = &enabled
-	return peerfilter.New(cfg, client, slog.Default())
+	return peerfilter.New(cfg, client, slog.Default(), nil)
 }
 
 func runPeerList(ctx context.Context, filter *peerfilter.Filter, out io.Writer) error {

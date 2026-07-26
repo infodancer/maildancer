@@ -452,16 +452,37 @@ configured. `MaxFailuresPerUser` and the `user` map are deleted (see rule 2).
 
 ## Metrics
 
-New, all domain- or IP-class-level, never per-user:
+New, all domain- or IP-class-level, never per-user. Two families: the
+dispatcher-owned `<daemon>_peer_*` series record what was *done* with a verdict,
+and the `session_manager_peer_*` series record what was *decided*.
 
-- `peer_gate_checks_total{daemon,verdict}` -- verdict in allow/deny/error.
-- `peer_gate_cache_total{daemon,result}` -- hit/miss, to confirm the cache
-  actually absorbs storms.
-- `peer_bans_total{rule}` -- bans created, by which rule fired.
-- Known-good suppressions are counted per address in Redis and surfaced by
-  `userctl peer good` rather than as a Prometheus series, because the useful
-  question is "which addresses" rather than "how many" -- a rate tells you
-  nothing about whether to intervene.
+- `<daemon>_peer_gate_checks_total{verdict}` -- verdict in allow/deny/error.
+- `<daemon>_peer_gate_cache_total{result}` -- hit/miss. Note this is not a
+  load-shedding measure: the cache exists so the three daemons agree on a shared
+  ban, and a low hit rate against spray traffic is expected rather than a fault.
+- `session_manager_peer_bans_total{reason}` -- bans created, by reason class.
+  Rule-3 bans are stored as `abuse:<signal>` and collapse to `abuse` here,
+  because the stored reason is unbounded as a label value; the per-signal
+  breakdown is `peer_abuse_signals_total`. An unrecognized reason lands in
+  `other` rather than growing the label set (#228).
+- `session_manager_peer_ban_strikes_total{strikes}` -- bans by offense count on
+  record, bucketed `1`/`2`/`3+`. Anything at 2 or above served the escalated TTL,
+  so this is how to tell whether the escalation is doing anything.
+- `session_manager_peer_abuse_signals_total{signal}` -- every rule-3 signal
+  recorded, whether or not it reached a threshold. This is the only place a
+  *shadowed* signal is visible: one with no configured threshold never bans, so
+  it appears in no ban listing and logs nothing. Without it, "never fired" and
+  "never ran" are the same observation.
+- `session_manager_peer_known_good_total`, `..._peer_ban_suppressed_total`,
+  `..._peer_known_good_revoked_total`, `..._peer_unbans_total` -- the known-good
+  exemption's rates and operator unbans.
+- Deliberately **no** counter for `Check` verdicts on the session-manager side.
+  Every dispatcher already reports one, and a second family counting the same
+  event would be two numbers that disagree the moment either has a bug.
+- Known-good suppressions and abuse counts are *also* held per address in Redis
+  and surfaced by `userctl peer good` and `userctl peer abuse`, because the
+  useful question there is "which addresses" rather than "how many" -- a rate
+  tells you nothing about whether to intervene.
 - `peer_tarpit_active` -- gauge; watch it against `MaxTarpit`.
 - `peer_tarpit_rejected_total` -- denied connections closed immediately because
   the tarpit budget was full. Nonzero means `MaxTarpit` is undersized.
@@ -753,6 +774,10 @@ be applied to production traffic that has never had them before.
 
   The instrumentation to watch, in order of what would show a false positive
   first: `userctl peer list` (what is being banned and why),
+  `userctl peer abuse` (rule-3 counters per address and signal, with the
+  configured threshold beside each count -- a counter climbing against a
+  threshold of `none` is a signal being measured before anyone decided to
+  enforce it, which is not the same as a signal that is broken),
   `userctl peer good` (addresses carrying both a real user and hostile traffic
   -- a nonzero suppressed count is the exemption earning its keep),
   `<daemon>_peer_gate_checks_total{verdict="deny"}` (how much is being refused

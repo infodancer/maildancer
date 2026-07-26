@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -551,3 +552,182 @@ func TestAuthRouterMailbox_AddressContract(t *testing.T) {
 
 // Verify AuthRouter implements auth.AuthenticationAgent at compile time.
 var _ auth.AuthenticationAgent = (*AuthRouter)(nil)
+
+// TestAuthRouterAuthenticate_UnhostedDomain covers the case where the username
+// names a domain this server does not host.
+//
+// Before #221 there was no way to tell that apart from any other failure, and
+// what happened depended on deployment accident: with a fallback agent
+// configured (which production has) the attempt reached the fallback, missed,
+// and came back ErrUserNotFound -- so session-manager's rule 1 banned the
+// address on the first attempt. With no fallback it came back ErrAuthFailed and
+// nothing happened at all. Production and every test fixture disagreed about
+// what this case even was.
+//
+// The live cost of that: a domain migrated off this server gets its former
+// users' addresses banned on attempt one, because their stale clients keep
+// authenticating here.
+//
+// The discriminator is whether any domains are configured at all. A server with
+// domains configured is not the legacy unqualified-address host that fallback
+// authentication exists for, so an unhosted domain there is a real signal. A
+// server with no domains is exactly that host, and its behaviour is unchanged.
+func TestAuthRouterAuthenticate_UnhostedDomain(t *testing.T) {
+	// knowsCarol authenticates one fully-qualified legacy user and nothing else,
+	// which is a supported passwd-file configuration: auth/passwd keys its user
+	// map on the exact string from the file, including any domain part.
+	knowsCarol := func() *mockAuthAgent {
+		return &mockAuthAgent{
+			authenticateFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
+				if username == "carol@unknown.com" && password == "pass" {
+					return &auth.AuthSession{User: &auth.User{Username: username}}, nil
+				}
+				if username == "carol@unknown.com" {
+					return nil, autherrors.ErrAuthFailed // real user, wrong password
+				}
+				return nil, autherrors.ErrUserNotFound
+			},
+		}
+	}
+
+	hosted := map[string]*Domain{
+		"example.com": {Name: "example.com", AuthAgent: &mockAuthAgent{
+			authenticateFn: func(_ context.Context, username, _ string) (*auth.AuthSession, error) {
+				if username == "alice" {
+					return &auth.AuthSession{User: &auth.User{Username: username}}, nil
+				}
+				return nil, autherrors.ErrUserNotFound
+			},
+		}},
+	}
+
+	tests := []struct {
+		name     string
+		domains  map[string]*Domain
+		fallback auth.AuthenticationAgent
+		username string
+		password string
+		wantErr  error
+		wantOK   bool
+	}{
+		{
+			name:     "domains configured, unhosted domain, no fallback",
+			domains:  hosted,
+			username: "dave@notours.test",
+			password: "pass",
+			wantErr:  autherrors.ErrDomainNotHosted,
+		},
+		{
+			name:     "domains configured, unhosted domain, fallback present",
+			domains:  hosted,
+			fallback: knowsCarol(),
+			username: "dave@notours.test",
+			password: "pass",
+			// The fallback is never consulted: a configured server is not the
+			// legacy host that fallback authentication is for.
+			wantErr: autherrors.ErrDomainNotHosted,
+		},
+		{
+			name:     "no domains configured, unhosted domain, fallback knows the user",
+			domains:  map[string]*Domain{},
+			fallback: knowsCarol(),
+			username: "carol@unknown.com",
+			password: "pass",
+			// The legacy drop-in case: user@host where the host is implied.
+			// Unchanged, and TestAuthRouterAuthenticateUnknownDomainFallback
+			// pins the same behaviour.
+			wantOK: true,
+		},
+		{
+			name:     "no domains configured, unhosted domain, fallback misses",
+			domains:  map[string]*Domain{},
+			fallback: knowsCarol(),
+			username: "nobody@unknown.com",
+			password: "pass",
+			// Still ErrUserNotFound, not the new sentinel: with no domains
+			// configured this server cannot claim a domain is "not hosted".
+			wantErr: autherrors.ErrUserNotFound,
+		},
+		{
+			name:     "bare username with no domain part",
+			domains:  hosted,
+			fallback: knowsCarol(),
+			username: "carol",
+			password: "pass",
+			// No domain was named, so there is no domain to call unhosted. The
+			// fallback decides, exactly as before.
+			wantErr: autherrors.ErrUserNotFound,
+		},
+		{
+			name:     "hosted domain, missing user, still rule 1",
+			domains:  hosted,
+			username: "nosuchuser@example.com",
+			password: "pass",
+			wantErr:  autherrors.ErrUserNotFound,
+		},
+		{
+			name:     "hosted domain, real user",
+			domains:  hosted,
+			username: "alice@example.com",
+			password: "pass",
+			wantOK:   true,
+		},
+		{
+			name:     "nil provider cannot claim anything about domains",
+			domains:  nil,
+			username: "dave@notours.test",
+			password: "pass",
+			wantErr:  autherrors.ErrAuthFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var provider DomainProvider
+			if tt.domains != nil {
+				provider = &mockDomainProvider{domains: tt.domains}
+			}
+			router := NewAuthRouter(provider, tt.fallback)
+			t.Cleanup(func() { _ = router.Close() })
+
+			_, err := router.AuthenticateWithDomain(context.Background(), tt.username, tt.password)
+			if tt.wantOK {
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("got error %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestAuthRouterAuthenticate_UnhostedDomainWrongPassword is carved out because
+// getting it wrong turns a real user into a counted abuse signal. A fallback
+// user who exists and typed the wrong password must stay ErrAuthFailed: that is
+// somebody with a stale saved password, not somebody probing for domains.
+func TestAuthRouterAuthenticate_UnhostedDomainWrongPassword(t *testing.T) {
+	fallback := &mockAuthAgent{
+		authenticateFn: func(_ context.Context, username, password string) (*auth.AuthSession, error) {
+			switch {
+			case username == "carol@unknown.com" && password == "right":
+				return &auth.AuthSession{User: &auth.User{Username: username}}, nil
+			case username == "carol@unknown.com":
+				return nil, autherrors.ErrAuthFailed
+			default:
+				return nil, autherrors.ErrUserNotFound
+			}
+		},
+	}
+
+	router := NewAuthRouter(&mockDomainProvider{domains: map[string]*Domain{}}, fallback)
+	t.Cleanup(func() { _ = router.Close() })
+
+	_, err := router.AuthenticateWithDomain(context.Background(), "carol@unknown.com", "wrong")
+	if !errors.Is(err, autherrors.ErrAuthFailed) {
+		t.Errorf("got %v, want ErrAuthFailed: a real user with a stale password "+
+			"must not be reclassified as a domain probe", err)
+	}
+}

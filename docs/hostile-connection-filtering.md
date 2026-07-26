@@ -326,6 +326,59 @@ different keyspace and thresholds. Exceeding a rule-3 threshold produces a ban
 (feeding rule 1's keyspace) rather than a per-signal lockout, because the
 enforcement point is the same accept-time gate.
 
+A signal with no entry in `abuse_thresholds` is counted and never bans. That is
+not a degenerate case, it is how a new signal ships: counted first, enforced only
+once production data says where the threshold belongs. `userctl peer abuse` is
+where those counts are read, and it prints the configured threshold beside each
+one so "measured, not yet enforced" is distinguishable from "broken".
+
+#### `unhosted_domain`: an auth attempt for a domain we do not host
+
+The authentication-side twin of `invalid_recipient`, and counted for the same
+reason. Added in #221 to fix a live false positive rather than to add coverage.
+
+Before it, this case had no representation at all, and what happened depended on
+deployment accident. `AuthRouter.authenticateInternal` found no hosted domain and
+fell through to the fallback agent; production configures one
+(`manager.SetupAuth`), the fallback missed, and the attempt came back
+`ErrUserNotFound` -- indistinguishable from rule 1's real case, so the address was
+banned on the first attempt. Every test fixture passed a nil fallback, where the
+same attempt returned `ErrAuthFailed` and nothing happened. Production and the
+tests disagreed about what the case was, which is why nothing caught it.
+
+The cost was not hypothetical: a domain migrated off this server would have had
+its former users' addresses banned as their stale clients retried. That is
+precisely the population a migration is trying not to break, which is why this
+counts rather than bans, and why it ships with **no default threshold**.
+
+`auth/errors.ErrDomainNotHosted` now carries the distinction, returned when
+`GetDomain` misses **and the provider hosts domains at all**. The second
+condition matters: the fallback agent exists for the legacy unqualified case --
+old unix `user@host`, where the host is implied -- so a server with no domains
+configured is exactly that host and keeps its behaviour unchanged, while a server
+with domains is not, and a qualified username naming an unhosted domain never
+reaches its fallback. `auth/passwd` keys its user map on the exact string from
+the passwd file, so a literal `user@legacy.example` entry is a real supported
+configuration on such a host; short-circuiting before the fallback
+unconditionally would have broken it.
+
+Two consequences worth stating rather than discovering later:
+
+- `hasDomains()` costs a directory scan for the filesystem provider, so it is
+  checked last -- only an attempt that has already named an unhosted domain pays
+  for it, and that path is held for `auth_fail_delay` regardless.
+- Reclassifying before the fallback means this path skips `auth/passwd`'s decoy
+  argon2id verify and returns in microseconds. The absolute `auth_fail_delay`
+  deadline is what hides that, and with `auth_fail_delay = "0s"` the asymmetry is
+  exposed. See the residual-oracle discussion.
+
+RFC note, since it looks adjacent and is not: RFC 5321 §2.3.5 does require
+accepting `RCPT TO:<Postmaster>` **without domain qualification**. That is a
+recipient-path mandate, not an authentication one -- RFC 4954 and RFC 4422 leave
+the SASL authorization identity opaque and application-specific, so nothing
+requires authenticating an unqualified or unhosted username. The RCPT side is
+tracked separately in #230.
+
 ## Response timing and the enumeration oracle
 
 The daemons already log `authentication failed: user not found` server-side
@@ -543,6 +596,10 @@ revoke_after = 10             # suppressed bans before trust is withdrawn; -1 ne
 # signal is how you turn it off.
 invalid_recipient = 10        # a dictionary, not a typo
 relay_denied = 5              # nothing legitimate probes for an open relay
+# unhosted_domain has deliberately no entry: a stale client left pointed at a
+# migrated domain looks exactly like this, so it is counted and never bans until
+# production data says where a threshold belongs. Read the counts with
+# `userctl peer abuse` (#221).
 
 # Enforcement: how the dispatchers act on that policy.
 [peergate]

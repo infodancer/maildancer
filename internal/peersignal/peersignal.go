@@ -43,4 +43,16 @@ const (
 	// not a first-attempt ban: legitimate senders do write to addresses that
 	// have been retired, and a real MTA retries. It is a counted rate.
 	InvalidRecipient = "invalid_recipient"
+
+	// UnhostedDomain is an authentication attempt naming a domain this server
+	// does not host. The authentication-side twin of InvalidRecipient, and
+	// counted for the same reason: the benign case is specific and real, namely
+	// a stale client still pointed at a domain that has been migrated or
+	// deprecated. Banning those on the first attempt -- which is what happened
+	// before #221, as a side effect of the attempt reaching the fallback agent
+	// and coming back "user not found" -- locks out precisely the former users a
+	// migration is trying not to break.
+	//
+	// Derived in Login from auth/errors.ErrDomainNotHosted; no daemon report.
+	UnhostedDomain = "unhosted_domain"
 )

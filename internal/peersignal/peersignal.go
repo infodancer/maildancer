@@ -30,6 +30,22 @@ const (
 
 	// DataAbort is a transaction dropped mid-DATA. Reserved.
 	DataAbort = "data_abort"
+
+	// ConnectionRate is one address opening connections faster than a
+	// configured local rate.
+	//
+	// Detected in the dispatcher's gate, which sees every accept, and reported
+	// only when the local rate is crossed -- once per window per address, not
+	// once per connection. Counting it centrally is impossible: the verdict
+	// cache means session-manager sees roughly one check per address per
+	// AllowTTL, so a count derived there would undercount a flood by exactly
+	// the factor that matters.
+	//
+	// Ships with no entry in peerfilter.Defaults().AbuseThresholds, so it is
+	// counted and never bans. This is the likeliest false positive in the whole
+	// design -- a legitimately busy sender is the one thing that trips it -- so
+	// it is measured before it is enforced (#221).
+	ConnectionRate = "connection_rate"
 )
 
 // Signals session-manager derives from RPCs it already serves, with no report

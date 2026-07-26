@@ -319,6 +319,13 @@ attempt: invalid-recipient rate, connection and reconnect rate, early talkers,
 malformed commands, aborted DATA, and per-IP message/recipient volume (distinct
 from the existing per-*sender* limiter in `internal/smtpd/smtp/ratelimit.go`).
 
+Implemented so far: `invalid_recipient` and `relay_denied` (phase 5, enforcing),
+`connection_rate` and `unhosted_domain` (#221, counted only). Still unbuilt:
+`early_talker`, `malformed_command` and `data_abort`, all three blocked on a
+go-smtp hook or an MSG_PEEK prototype rather than on a call site -- they keep
+reserved names in `internal/peersignal` so a threshold configured for them is not
+silently orphaned.
+
 Per-IP thresholds are the right model *here*, unlike rule 1: a real inbound
 peer's traffic is attributable to its IP, and legitimate MTAs do not probe
 recipients. Greylisting is the precedent -- same Redis, same abstraction,
@@ -331,6 +338,69 @@ not a degenerate case, it is how a new signal ships: counted first, enforced onl
 once production data says where the threshold belongs. `userctl peer abuse` is
 where those counts are read, and it prints the configured threshold beside each
 one so "measured, not yet enforced" is distinguishable from "broken".
+
+#### `connection_rate`: reconnect storms
+
+The highest-value signal the original design listed and phase 5 could not build,
+because it needs a mechanism rather than a call site. Shipped in #221 counted
+only.
+
+The measured data is what motivates it: **446 smtpd connections against 64 auth
+attempts, and 2165 imapd connections against 619 auth attempts** in 24h. Most
+abusive connections never authenticate and never reach RCPT, so neither
+`invalid_recipient` nor `relay_denied` ever sees them.
+
+**Where it is counted, and why not elsewhere.** In `peergate.Gate.CheckPeer`,
+after the allowlist and *before* the verdict cache lookup. Three facts pin that
+placement:
+
+- `CheckPeer` is called once per accepted connection by `connfork.spawnHandler`,
+  and the 10s/60s verdict cache sits *inside* it. So the cache hides accepts from
+  session-manager but not from here. A counter behind the cache -- or any count
+  derived from `CheckPeer` RPCs arriving at session-manager -- undercounts a flood
+  by exactly the factor that matters.
+- The allowlist lives in `peergate` and only there. A counter in `connfork` could
+  not skip the operator's own networks without duplicating it, and a monitoring
+  check hammering the management network is exactly what a storm looks like.
+- `connfork` is deliberately policy-agnostic (`Mode` is opaque to it), while this
+  package's stated job is already "how cheaply is the question answered". A local
+  rate detector is the same class of thing as the verdict cache.
+
+Keyed by `(address, listener role)`, reusing `cacheKey`. A submission storm and an
+inbound-25 storm are different phenomena with different legitimacy, and smtpd
+serves both from one process -- #225 already showed what unkeyed state shared
+across roles does there.
+
+**Reporting is once per window per key.** A sustained flood is one `ReportPeer`
+per window, not one per accept past the threshold, or the signal becomes the load
+it exists to describe. An already-denied peer is counted but **not** reported: no
+RPC is worth spending on an address whose connections are already being refused,
+and once the signal does have a ban threshold, reporting there would make the ban
+self-renewing -- each ban window's reconnect storm would re-cross and re-ban,
+turning a 24h ban into a permanent one. The suppression is visible as
+`peer_conn_rate_exceeded_total{result="suppressed_banned"}`, so the traffic is
+never invisible.
+
+**Two semantics to state before anyone sets a threshold**, because both are
+surprising:
+
+- The Redis counter counts *local crossings*, not connections. A future
+  `connection_rate = 5` means five local-window crossings inside `abuse_window`,
+  which is roughly `5 x connection_rate_threshold` connections, not five.
+- All three daemons report the same signal name into one per-address key, so a
+  threshold is met by the **sum** across smtpd, imapd and pop3d, and across roles
+  within smtpd. That is arguably right -- the measured attack sprayed several
+  daemons -- but the effective per-daemon rate is a fraction of the number written
+  in the config.
+
+**Blocker on enforcement, recorded here rather than discovered later.** `Report`
+bans with reason `abuse:<signal>`, and `isAuthDerived` is a plain map lookup on
+the stored reason where unknown reasons fail toward strict. So an
+`abuse:connection_rate` ban would be enforced on port 25 -- refusing a legitimate
+busy MTA's mail, which is precisely the harm `auth_ban_scope` exists to prevent.
+Unreachable while the signal has no threshold; **mandatory to fix before giving it
+one**, and it needs `isAuthDerived` to understand the `abuse:` prefix rather than
+matching whole strings.
 
 #### `unhosted_domain`: an auth attempt for a domain we do not host
 
@@ -536,6 +606,10 @@ and the `session_manager_peer_*` series record what was *decided*.
   and surfaced by `userctl peer good` and `userctl peer abuse`, because the
   useful question there is "which addresses" rather than "how many" -- a rate
   tells you nothing about whether to intervene.
+- `<daemon>_peer_conn_rate_exceeded_total{result}` -- local connection-rate
+  threshold crossings, `reported` or `suppressed_banned`. With the signal
+  unenforced this and `peer_abuse_signals_total{signal="connection_rate"}` are the
+  whole dataset for deciding whether it ever should be.
 - `peer_tarpit_active` -- gauge; watch it against `MaxTarpit`.
 - `peer_tarpit_rejected_total` -- denied connections closed immediately because
   the tarpit budget was full. Nonzero means `MaxTarpit` is undersized.
@@ -611,6 +685,11 @@ strict_gate = false           # true: deny when the gate is unreachable
 allow_ttl = "10s"
 deny_ttl = "60s"
 cache_size = 8192
+connection_rate_threshold = 60  # accepts per window per (address, listener role);
+                                # negative disables. Crossing it reports the
+                                # connection_rate signal, which has no ban
+                                # threshold, so nothing is refused (#221).
+connection_rate_window = "1m"
 ```
 
 Two allowlists, on purpose. The `[peergate]` one is checked in the dispatcher

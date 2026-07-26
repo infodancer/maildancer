@@ -72,3 +72,24 @@ const (
 	// Derived in Login from auth/errors.ErrDomainNotHosted; no daemon report.
 	UnhostedDomain = "unhosted_domain"
 )
+
+// All returns every signal name this build knows about.
+//
+// It exists so metric label combinations can be pre-created from one list
+// instead of a hand-maintained copy. That copy already drifted once: the
+// connection_rate and unhosted_domain constants were added after
+// peerfilter.NewMetrics enumerated its labels, so both shipped without a
+// pre-created series -- and both are counted-only signals, where an absent
+// series and a signal that never fired are the same observation (#207). Adding
+// a constant above without adding it here would reintroduce exactly that.
+func All() []string {
+	return []string{
+		InvalidRecipient,
+		RelayDenied,
+		ConnectionRate,
+		UnhostedDomain,
+		EarlyTalker,
+		MalformedCommand,
+		DataAbort,
+	}
+}

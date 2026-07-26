@@ -66,7 +66,7 @@ func TestMetrics_SeriesExistBeforeAnyEvent(t *testing.T) {
 	}{
 		{name: "session_manager_peer_bans_total", want: 4, which: "one per reason bucket"},
 		{name: "session_manager_peer_ban_strikes_total", want: 3, which: "one per strike bucket"},
-		{name: "session_manager_peer_abuse_signals_total", want: 5, which: "one per peersignal name"},
+		{name: "session_manager_peer_abuse_signals_total", want: len(peersignal.All()), which: "one per peersignal name"},
 		{name: "session_manager_peer_known_good_total", want: 1, which: "unlabelled counter"},
 		{name: "session_manager_peer_ban_suppressed_total", want: 1, which: "unlabelled counter"},
 		{name: "session_manager_peer_known_good_revoked_total", want: 1, which: "unlabelled counter"},
@@ -343,5 +343,48 @@ func TestDefaults_OmitUnhostedDomain(t *testing.T) {
 	if n, ok := cfg.AbuseThresholds[peersignal.UnhostedDomain]; ok {
 		t.Errorf("unhosted_domain has a default threshold of %d; it must be "+
 			"counted only until production data says otherwise", n)
+	}
+}
+
+// TestMetrics_EveryKnownSignalHasAZeroSeries is the regression guard for a bug
+// that reached production. NewMetrics enumerated its signal labels by hand, and
+// the list drifted the moment connection_rate and unhosted_domain were added --
+// so both shipped with no series until they first fired.
+//
+// That is the worst case for exactly those two: neither has a ban threshold, so
+// they are counted-only, and an absent series is indistinguishable from a signal
+// that has never fired, which is the only question anyone will ask of them.
+//
+// Asserting against peersignal.All rather than a number means adding a constant
+// without adding it to All fails here rather than in production.
+func TestMetrics_EveryKnownSignalHasAZeroSeries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	NewMetrics(reg)
+
+	for _, signal := range peersignal.All() {
+		t.Run(signal, func(t *testing.T) {
+			if _, ok := seriesValue(t, reg, "session_manager_peer_abuse_signals_total",
+				map[string]string{"signal": signal}); !ok {
+				t.Errorf("no zero series for %q; a signal that never fired would be "+
+					"indistinguishable from one that is broken", signal)
+			}
+		})
+	}
+}
+
+// TestMetrics_SignalLabelAcceptsEveryKnownSignal keeps the bucketing in step
+// with the same list: a known signal must keep its own label, not be swept into
+// "other", or the series pre-created above would stay at zero forever while the
+// real traffic landed elsewhere.
+func TestMetrics_SignalLabelAcceptsEveryKnownSignal(t *testing.T) {
+	for _, signal := range peersignal.All() {
+		t.Run(signal, func(t *testing.T) {
+			if got := signalLabel(signal); got != signal {
+				t.Errorf("signalLabel(%q) = %q, want it preserved", signal, got)
+			}
+		})
+	}
+	if got := signalLabel("signal_from_the_future"); got != signalOther {
+		t.Errorf("unknown signal = %q, want %q", got, signalOther)
 	}
 }

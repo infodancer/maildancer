@@ -104,6 +104,46 @@ there *later* is the score as forensic metadata on a quarantined message -- not
 for filing. Relaying/forwarding still carries the `X-Spam-*` headers in the
 message body as before.
 
+## Reaching the verdict from Sieve (issue [#244])
+
+Carrying the verdict out of band keeps it unforgeable, but it also puts it out
+of reach of a Sieve script, which sees only the message and envelope. Without a
+channel to it, users could tighten policy only by testing the advisory
+`X-Spam-*` headers -- the in-band labels this design declines to trust.
+
+Sieve's **environment** extension (RFC 5183) is that channel: items come from
+the runtime, not the message, so they carry the same provenance guarantee as the
+verdict. mail-session supplies an `interp.Env` in `runSieve`:
+
+| Item | Value |
+|---|---|
+| `vnd.maildancer.spam-value` | RFC 5235 0..10 integer, from the verdict's `X-Spam-Value` |
+| `vnd.maildancer.spam-flag` | `YES`/`NO` from `IsSpam` |
+| `vnd.maildancer.spam-score` | the raw score, two decimals |
+| `name`, `location`, `phase`, `host`, `version` | RFC 5183 section 4.1, as far as they can be answered |
+
+```sieve
+require ["fileinto", "environment", "relational", "comparator-i;ascii-numeric"];
+if environment :value "ge" :comparator "i;ascii-numeric" "vnd.maildancer.spam-value" "5" {
+    fileinto "Junk";
+}
+```
+
+Threshold rules must use `spam-value`, not `spam-score`: `i;ascii-numeric`
+(RFC 4790) is defined over non-negative integers, so it reads `12.80` as `12`
+and a negative ham score has no defined ordering.
+
+**nil vs clean survives into Sieve.** When no scan ran, the spam items report
+*unsupported* rather than empty, and RFC 5183 section 4 makes a test against an
+unsupported item fail unconditionally. So a threshold rule does not fire on
+unscanned mail instead of comparing against an invented zero. The direction that
+matters is the clean side: a rule keying on a *low* value would otherwise sort
+unexamined mail as though a scanner had vouched for it.
+
+Items mail-session cannot answer -- `remote-host`, `remote-ip`, `domain` --
+report unsupported too. It runs privilege-dropped after the SMTP conversation
+has ended and never saw the client.
+
 ## Best practices retained (for the delivery-side phase)
 
 - **The MTA marks; the MDA files.** rspamd/smtpd only decide a verdict; the

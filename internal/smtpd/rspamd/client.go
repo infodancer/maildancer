@@ -168,8 +168,6 @@ func (c *Checker) convertResult(r *RspamdResult, opts spamcheck.CheckOptions) *s
 	result := &spamcheck.CheckResult{
 		CheckerName: "rspamd",
 		Score:       r.Score,
-		IsSpam:      r.IsSpam,
-		Headers:     c.buildHeaders(r),
 		AuthResults: buildAuthResults(r, opts),
 		Details: map[string]interface{}{
 			"required_score": r.RequiredScore,
@@ -191,16 +189,34 @@ func (c *Checker) convertResult(r *RspamdResult, opts spamcheck.CheckOptions) *s
 		result.Action = spamcheck.ActionAccept
 	}
 
+	// rspamd's /checkv2 response carries no is_spam key, so r.IsSpam decoded
+	// from it is always false however the message scored -- which silently made
+	// X-Spam-Flag read NO on every message, and left the delivery-channel
+	// verdict and the Sieve environment item saying the same (#250).
+	//
+	// The action is the judgement, and is what rspamc derives its own
+	// "Spam: true" line from. Flagged and rejected are spam; a deferral is not a
+	// verdict at all -- greylisting in particular fires on plenty of mail that
+	// turns out clean. An explicit is_spam is still honored, so a future
+	// version or the /checkv3 migration (#124) can supply one.
+	result.IsSpam = r.IsSpam ||
+		result.Action == spamcheck.ActionFlag ||
+		result.Action == spamcheck.ActionReject
+
+	// Headers are built last: they read IsSpam, so they must see the resolved
+	// value rather than the raw wire field.
+	result.Headers = c.buildHeaders(r, result.IsSpam)
+
 	return result
 }
 
 // buildHeaders creates X-Spam-* headers from rspamd result.
-func (c *Checker) buildHeaders(r *RspamdResult) map[string]string {
+func (c *Checker) buildHeaders(r *RspamdResult, isSpam bool) map[string]string {
 	headers := make(map[string]string)
 
 	// X-Spam-Status
 	status := "No"
-	if r.IsSpam {
+	if isSpam {
 		status = "Yes"
 	}
 	headers["X-Spam-Status"] = fmt.Sprintf("%s, score=%.2f required=%.2f", status, r.Score, r.RequiredScore)
@@ -213,7 +229,7 @@ func (c *Checker) buildHeaders(r *RspamdResult) map[string]string {
 	headers["X-Spam-Value"] = strconv.Itoa(spamValue(r.Score, r.RequiredScore))
 
 	// X-Spam-Flag
-	if r.IsSpam {
+	if isSpam {
 		headers["X-Spam-Flag"] = "YES"
 	} else {
 		headers["X-Spam-Flag"] = "NO"

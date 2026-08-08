@@ -369,7 +369,7 @@ func TestChecker_BuildHeaders(t *testing.T) {
 			IsSpam:        true,
 		}
 
-		headers := checker.buildHeaders(result)
+		headers := checker.buildHeaders(result, true)
 
 		if headers["X-Spam-Status"] != "Yes, score=15.50 required=15.00" {
 			t.Errorf("unexpected X-Spam-Status: %s", headers["X-Spam-Status"])
@@ -393,7 +393,7 @@ func TestChecker_BuildHeaders(t *testing.T) {
 			IsSpam:        false,
 		}
 
-		headers := checker.buildHeaders(result)
+		headers := checker.buildHeaders(result, false)
 
 		if headers["X-Spam-Status"] != "No, score=2.50 required=15.00" {
 			t.Errorf("unexpected X-Spam-Status: %s", headers["X-Spam-Status"])

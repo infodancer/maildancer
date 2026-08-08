@@ -706,7 +706,8 @@ func (s *Session) Data(r io.Reader) error {
 		// rules are resolved by the mail-session delivery path, which signals a
 		// configured forward by returning a *RedirectError.
 		deliveredFolder, deliverErr := s.backend.smDelivery.Deliver(ctx,
-			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, s.messageBody(received+authResults+spamHeaders, tmp))
+			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, checkResult,
+			s.messageBody(received+authResults+spamHeaders, tmp))
 
 		var redirectErr *RedirectError
 		redirected := errors.As(deliverErr, &redirectErr)
@@ -714,7 +715,7 @@ func (s *Session) Data(r io.Reader) error {
 			// A configured forward. Re-route each target as a fresh recipient
 			// (local Deliver with Forwarded=true, or remote Enqueue). This is
 			// the only delivery path that can reach external forward targets.
-			deliverErr = s.followRedirect(ctx, redirectErr, tmp, msgid, received, authResults)
+			deliverErr = s.followRedirect(ctx, redirectErr, tmp, msgid, received, authResults, checkResult)
 		}
 
 		if deliverErr != nil {
@@ -843,7 +844,7 @@ func (s *Session) Data(r io.Reader) error {
 // temp-failed -- smtpd follows at most one redirect.
 //
 // Returns nil on success, or an error that the caller maps to a 451.
-func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer, msgid, received, authResults string) error {
+func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, tmp tempBuffer, msgid, received, authResults string, spamVerdict *spamcheck.CheckResult) error {
 	if len(redirect.Addresses) == 0 {
 		s.logger.Error("forward resolved to no targets",
 			slog.String("from", s.from),
@@ -887,7 +888,8 @@ func (s *Session) followRedirect(ctx context.Context, redirect *RedirectError, t
 		// here is a configuration error.
 		now := time.Now()
 		_, err = s.backend.smDelivery.Deliver(ctx,
-			s.from, target, s.clientIP, s.helo, now, true, msgid, s.messageBody(fwdHeaders+authResults, tmp))
+			s.from, target, s.clientIP, s.helo, now, true, msgid, spamVerdict,
+			s.messageBody(fwdHeaders+authResults, tmp))
 
 		var nested *RedirectError
 		if errors.As(err, &nested) {

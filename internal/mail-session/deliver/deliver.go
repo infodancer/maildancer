@@ -64,6 +64,29 @@ type DeliverRequest struct {
 	// MsgID is the correlation id minted at smtpd ingress, threaded through for
 	// log traceability (no content). May be empty for callers that do not set it.
 	MsgID string
+
+	// Spam carries the upstream scanner's verdict (rspamd, via smtpd) out of
+	// band, so delivery-side policy can key on a provenance-trusted signal
+	// rather than the message's own forgeable X-Spam-* headers. Nil when no
+	// spam check ran. Not yet acted on -- carried for the delivery-side policy
+	// still to come (maildancer#133).
+	Spam *SpamVerdict
+}
+
+// SpamVerdict is the upstream spam-scan result for a message, mirroring the
+// SpamVerdict proto on the delivery channel. A nil *SpamVerdict means no scan
+// ran; a non-nil value with IsSpam=false means the message was scanned and
+// judged clean.
+type SpamVerdict struct {
+	// IsSpam is whether the scanner classified the message as spam.
+	IsSpam bool
+
+	// Score is the numeric spam score the scanner assigned.
+	Score float64
+
+	// Headers are the X-Spam-* fields the scanner produced (name -> value),
+	// the same set smtpd stamps onto the message for client-side use.
+	Headers map[string]string
 }
 
 // Deliverer runs the delivery pipeline for a single message.

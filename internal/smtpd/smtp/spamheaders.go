@@ -7,20 +7,21 @@ import (
 
 // Spam-verdict headers on ingress.
 //
-// The scan happens in smtpd, but the decision about what to do with a
-// non-rejected verdict does not belong here: where borderline mail goes is
-// per-user policy, expressed in Sieve at delivery time (maildancer#133). These
-// headers are the only channel between the two -- a Sieve script sees the
-// message bytes and nothing else -- so what is stamped here is an interface,
-// not a diagnostic.
+// These are **advisory**. They exist for the recipient's own client-side filters
+// and for human inspection; they are deliberately not the input to any
+// server-side policy. Server-side filing acts on the verdict carried out of band
+// on the delivery channel, whose provenance we control, because an in-band label
+// rides in on data the sender chose and cannot be trusted for that
+// (docs/spam-verdict-and-filing.md, maildancer#133).
 //
-// That makes them worth the same care as Authentication-Results: a verdict is
-// only worth anything if it cannot be forged, so inbound X-Spam-* fields are
-// removed before ours are added (see stripStampedHeaders).
-
-// spamHeaderPrefix is the field-name prefix we own on a delivered message,
-// lowercased for direct comparison against a line prefix.
-const spamHeaderPrefix = "x-spam-"
+// A consequence worth stating plainly, since it looks like an oversight: an
+// inbound message may already carry its own X-Spam-* fields, and they are left
+// in place. Ours are prepended above them, so a reader taking the topmost field
+// gets our verdict, but a client-side rule matching on any field with that name
+// can still see the sender's. Stripping them would mean rewriting a message we
+// are about to store, which interacts badly with ARC, S/MIME and PGP
+// protected-headers -- and it would only paper over the forgeability rather than
+// fix it. The out-of-band verdict is the fix; these stay advisory.
 
 // leadingSpamHeaders are rendered first, in this order, so the block reads the
 // same way on every message. The most useful field for a hand-written Sieve
@@ -124,13 +125,4 @@ func sanitizeFieldValue(value string) string {
 		b.WriteRune(r)
 	}
 	return strings.TrimSpace(b.String())
-}
-
-// isSpamHeaderLine reports whether a header line starts a field we stamp
-// ourselves, and whose inbound copy must therefore be removed.
-func isSpamHeaderLine(line []byte) bool {
-	if len(line) < len(spamHeaderPrefix) {
-		return false
-	}
-	return strings.EqualFold(string(line[:len(spamHeaderPrefix)]), spamHeaderPrefix)
 }

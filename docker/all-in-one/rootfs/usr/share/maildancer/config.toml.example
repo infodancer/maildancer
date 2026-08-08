@@ -164,19 +164,18 @@ hostname = "mail.example.com"
 [spamcheck]
 enabled = true
 
-# Stamp the verdict so delivery-time filtering can act on it. This is the only
-# channel between the scan and a Sieve script, which sees the message bytes and
-# nothing else -- with it off, a flagged message is indistinguishable from ham
-# on arrival and no rule, server- or client-side, can file it.
+# Stamp the verdict on accepted messages as X-Spam-Flag (YES/NO), X-Spam-Value,
+# X-Spam-Score, X-Spam-Status and X-Spam-Checker.
 #
-# Stamps X-Spam-Flag (YES/NO), X-Spam-Value, X-Spam-Score, X-Spam-Status and
-# X-Spam-Checker, and removes any inbound X-Spam-* so a sender cannot forge a
-# verdict past a rule. Left off, inbound X-Spam-* headers are passed through
-# untouched, for a deployment sitting behind another filter that sets them.
+# These are ADVISORY -- for the recipient's own client-side filters and for
+# reading by eye. Server-side filing does not use them: it acts on the verdict
+# carried out of band on the delivery channel, because a header rides in on data
+# the sender chose. An inbound message keeps any X-Spam-* it arrived with, ours
+# goes above it, and nothing is rewritten.
 #
-# Write threshold rules against X-Spam-Value, not X-Spam-Score: it is the
-# RFC 5235 0..10 integer, and Sieve's only numeric comparator
-# (i;ascii-numeric) cannot compare a decimal.
+# Client-side rules comparing a threshold want X-Spam-Value, not X-Spam-Score:
+# it is the RFC 5235 0..10 integer, and a decimal cannot be compared by
+# Sieve's only numeric comparator (i;ascii-numeric, RFC 4790).
 add_headers = true
 
 [[spamcheck.checkers]]

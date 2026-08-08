@@ -674,10 +674,10 @@ func (s *Session) Data(r io.Reader) error {
 		authResults = buildAuthResultsHeader(checkResult.AuthResults)
 	}
 
-	// The spam verdict, for the benefit of delivery-time filtering. smtpd
-	// rejects what the checker is confident about and stops there; where a
-	// flagged-but-accepted message goes is per-user policy, decided by Sieve at
-	// delivery (maildancer#133). These headers are the only channel to it.
+	// The spam verdict, as advisory headers for the recipient's own client-side
+	// filters. Server-side filing does not read these -- it acts on the verdict
+	// carried out of band on the delivery channel, since an in-band label rides
+	// in on data the sender chose (docs/spam-verdict-and-filing.md).
 	//
 	// checkResult is nil when the check failed under fail_mode = open. Nothing
 	// is stamped then: "X-Spam-Flag: NO" would assert a clean verdict that was

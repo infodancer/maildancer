@@ -29,43 +29,11 @@ const authResultsFieldName = "authentication-results:"
 const authResultsChunk = 8 << 10
 
 // messageBody returns the accepted message with the given trace headers
-// prepended and the inbound copies of any header we stamp ourselves removed.
-// Every delivery path builds its body through here so the strip cannot be
-// forgotten on one of them.
+// prepended and any inbound Authentication-Results claiming our own authserv-id
+// removed. Every delivery path builds its body through here so the strip cannot
+// be forgotten on one of them.
 func (s *Session) messageBody(headers string, tmp tempBuffer) io.Reader {
-	return withHeaders(headers, s.stripStampedHeaders(tmp.reader()))
-}
-
-// stripStampedHeaders removes inbound header fields that would be confused with
-// the ones this MTA stamps:
-//
-//   - Authentication-Results bearing our own authserv-id, always. RFC 8601
-//     section 7.1; another ADMD's is left alone, being theirs to assert.
-//   - X-Spam-*, but only when spam-header stamping is enabled. There is no
-//     authserv-id equivalent on these fields, so ours cannot be told from an
-//     upstream's -- the only way to guarantee a Sieve rule reads our verdict is
-//     to be the sole source of them. When stamping is off there is nothing of
-//     ours to confuse them with, and an upstream filter's headers are real data
-//     a user may be matching on deliberately, so they are left in place.
-func (s *Session) stripStampedHeaders(msg io.Reader) io.Reader {
-	authserv := strings.ToLower(s.backend.hostname)
-	stripSpam := s.backend.spamConfig.AddHeaders
-
-	if authserv == "" && !stripSpam {
-		return msg
-	}
-
-	return &headerFilter{
-		br:        bufio.NewReaderSize(msg, authResultsChunk),
-		inHeaders: true,
-		lineStart: true,
-		drop: func(line []byte) bool {
-			if stripSpam && isSpamHeaderLine(line) {
-				return true
-			}
-			return authserv != "" && isOwnAuthResults(line, authserv)
-		},
-	}
+	return withHeaders(headers, stripAuthResults(tmp.reader(), s.backend.hostname))
 }
 
 // buildAuthResultsHeader renders a complete Authentication-Results header field,
@@ -82,35 +50,27 @@ func buildAuthResultsHeader(value string) string {
 const authResultsHeaderName = "Authentication-Results"
 
 // stripAuthResults returns a reader over msg with every Authentication-Results
-// header field whose authserv-id equals authservID removed. It is the
-// Authentication-Results-only case of stripStampedHeaders, kept separate so the
-// RFC 8601 behaviour can be exercised without building a Session.
+// header field whose authserv-id equals authservID removed, including its folded
+// continuation lines. Only the header block is examined; once the blank line
+// separating headers from body is seen the remainder is copied verbatim.
+//
+// Filtering is lazy and allocation-bounded: it reads one line-sized chunk at a
+// time and holds no goroutine, so an abandoned reader leaks nothing.
 func stripAuthResults(msg io.Reader, authservID string) io.Reader {
 	if authservID == "" {
 		return msg
 	}
-	authserv := strings.ToLower(authservID)
-	return &headerFilter{
+	return &authResultsFilter{
 		br:        bufio.NewReaderSize(msg, authResultsChunk),
+		authserv:  strings.ToLower(authservID),
 		inHeaders: true,
 		lineStart: true,
-		drop:      func(line []byte) bool { return isOwnAuthResults(line, authserv) },
 	}
 }
 
-// headerFilter removes whole header fields from a message as it is read,
-// including their folded continuation lines. Only the header block is examined;
-// once the blank line separating headers from body is seen the remainder is
-// copied verbatim.
-//
-// Which fields go is the caller's decision, supplied as drop -- it is called
-// once per field, with the line that starts it.
-//
-// Filtering is lazy and allocation-bounded: it reads one line-sized chunk at a
-// time and holds no goroutine, so an abandoned reader leaks nothing.
-type headerFilter struct {
-	br   *bufio.Reader
-	drop func(line []byte) bool
+type authResultsFilter struct {
+	br       *bufio.Reader
+	authserv string
 
 	buf     []byte // backing array for pending, reused between chunks
 	pending []byte // filtered bytes not yet returned to the caller
@@ -121,7 +81,7 @@ type headerFilter struct {
 	err       error
 }
 
-func (f *headerFilter) Read(p []byte) (int, error) {
+func (f *authResultsFilter) Read(p []byte) (int, error) {
 	for len(f.pending) == 0 {
 		if !f.inHeaders {
 			// Past the header block: hand the rest through untouched. Any
@@ -142,7 +102,7 @@ func (f *headerFilter) Read(p []byte) (int, error) {
 }
 
 // fill reads the next chunk and either buffers it for emission or discards it.
-func (f *headerFilter) fill() {
+func (f *authResultsFilter) fill() {
 	chunk, err := f.br.ReadSlice('\n')
 	// ErrBufferFull means the line is longer than the chunk size; the rest
 	// arrives on later calls and must inherit the current drop decision.
@@ -163,7 +123,7 @@ func (f *headerFilter) fill() {
 		f.inHeaders = false
 		f.dropping = false
 	case atLineStart && !isFoldedContinuation(chunk):
-		f.dropping = f.drop(chunk)
+		f.dropping = f.isOwnAuthResults(chunk)
 	}
 	// A folded continuation, or the tail of an over-long line, keeps whatever
 	// decision was made for the field it belongs to.
@@ -176,8 +136,8 @@ func (f *headerFilter) fill() {
 }
 
 // isOwnAuthResults reports whether a header line starts an Authentication-Results
-// field whose authserv-id equals authserv, which must already be lowercased.
-func isOwnAuthResults(line []byte, authserv string) bool {
+// field whose authserv-id is ours.
+func (f *authResultsFilter) isOwnAuthResults(line []byte) bool {
 	if len(line) < len(authResultsFieldName) {
 		return false
 	}
@@ -185,7 +145,7 @@ func isOwnAuthResults(line []byte, authserv string) bool {
 		return false
 	}
 	value := strings.TrimLeft(string(line[len(authResultsFieldName):]), " \t")
-	return strings.EqualFold(authservIDOf(value), authserv)
+	return strings.EqualFold(authservIDOf(value), f.authserv)
 }
 
 // authservIDOf returns the leading authserv-id token of an

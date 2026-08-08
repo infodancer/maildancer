@@ -152,12 +152,17 @@ func TestData_NoSpamHeadersWhenCheckFailed(t *testing.T) {
 	}
 }
 
-// TestData_StripsForgedSpamHeaders is the security case, and the reason these
-// headers are worth as much care as Authentication-Results. A message arriving
-// with its own X-Spam-Flag: NO must not keep it: unlike Authentication-Results
-// there is no authserv-id to tell ours from theirs, so a Sieve rule matching
-// X-Spam-Flag would otherwise be reading the sender's claim.
-func TestData_StripsForgedSpamHeaders(t *testing.T) {
+// TestData_KeepsInboundSpamHeaders pins the deliberate decision not to strip.
+// An inbound message may carry its own X-Spam-* -- forged by the sender, or set
+// by an upstream filter we sit behind -- and it is left alone. Ours goes above
+// it, so a reader taking the topmost field gets our verdict.
+//
+// This is why these headers are advisory only: a client-side rule matching any
+// field with that name can still see the sender's claim. Rewriting a message we
+// are about to store to close that would interact badly with ARC, S/MIME and
+// PGP protected-headers, and would paper over the forgeability rather than fix
+// it. The out-of-band verdict on the delivery channel is the fix.
+func TestData_KeepsInboundSpamHeaders(t *testing.T) {
 	mock := &combinedMockServer{}
 	s := newSpamStampingSession(t, mock, &fakeSpamChecker{
 		headers: flaggedHeaders(),
@@ -166,7 +171,6 @@ func TestData_StripsForgedSpamHeaders(t *testing.T) {
 
 	msg := "From: attacker@evil.example\r\n" +
 		"X-Spam-Flag: NO\r\n" +
-		"X-Spam-Value: 1\r\n" +
 		"X-Spam-Status: No, score=-99.00 required=15.00\r\n" +
 		"Subject: your account\r\n\r\nbody\r\n"
 	if err := s.Data(strings.NewReader(msg)); err != nil {
@@ -174,27 +178,23 @@ func TestData_StripsForgedSpamHeaders(t *testing.T) {
 	}
 
 	body := deliveredBody(t, mock)
-	if strings.Contains(body, "X-Spam-Flag: NO") {
-		t.Errorf("forged X-Spam-Flag survived:\n%s", body)
-	}
-	if strings.Contains(body, "score=-99.00") {
-		t.Errorf("forged X-Spam-Status survived:\n%s", body)
-	}
-	if n := strings.Count(body, "X-Spam-Flag:"); n != 1 {
-		t.Errorf("expected exactly 1 X-Spam-Flag, got %d:\n%s", n, body)
-	}
-	if n := strings.Count(body, "X-Spam-Value:"); n != 1 {
-		t.Errorf("expected exactly 1 X-Spam-Value, got %d:\n%s", n, body)
+	if !strings.Contains(body, "X-Spam-Flag: NO") {
+		t.Errorf("rewrote the stored message by dropping an inbound header:\n%s", body)
 	}
 	if !strings.Contains(body, "X-Spam-Flag: YES") {
 		t.Errorf("our own verdict is missing:\n%s", body)
 	}
+
+	// Ours must be the topmost of the two.
+	ours := strings.Index(body, "X-Spam-Flag: YES")
+	theirs := strings.Index(body, "X-Spam-Flag: NO")
+	if ours < 0 || theirs < 0 || ours > theirs {
+		t.Errorf("our verdict is not above the inbound one (ours=%d theirs=%d):\n%s", ours, theirs, body)
+	}
 }
 
-// TestData_KeepsUpstreamSpamHeadersWhenNotStamping: with stamping off there is
-// nothing of ours to confuse an upstream filter's headers with, and they may be
-// exactly what a user's rules match on. Destroying real data to defend against
-// an ambiguity that cannot arise would be the wrong trade.
+// TestData_KeepsUpstreamSpamHeadersWhenNotStamping: with stamping off nothing of
+// ours is added either, so an upstream filter's headers pass through untouched.
 func TestData_KeepsUpstreamSpamHeadersWhenNotStamping(t *testing.T) {
 	mock := &combinedMockServer{}
 	s := newSpamStampingSession(t, mock, &fakeSpamChecker{
@@ -235,29 +235,5 @@ func TestData_NoSpamHeadersOnOutboundRelay(t *testing.T) {
 	}
 	if body := mock.enqueues[0].body; strings.Contains(body, "X-Spam-") {
 		t.Errorf("disclosed our spam verdict on a relayed message:\n%s", body)
-	}
-}
-
-// TestData_StripsForgedSpamHeadersOnRelay: the strip applies outbound too, even
-// though nothing is stamped there -- a forged verdict must not leave our systems
-// looking like something we asserted.
-func TestData_StripsForgedSpamHeadersOnRelay(t *testing.T) {
-	mock := &combinedMockServer{validateLocal: map[string]bool{"remote@elsewhere.example": false}}
-	s := newSpamStampingSession(t, mock, &fakeSpamChecker{
-		headers: flaggedHeaders(),
-		action:  spamcheck.ActionFlag,
-	}, true)
-	s.recipients = nil
-	s.remoteRecipients = []string{"remote@elsewhere.example"}
-
-	msg := "X-Spam-Flag: NO\r\nSubject: hello\r\n\r\nbody\r\n"
-	if err := s.Data(strings.NewReader(msg)); err != nil {
-		t.Fatalf("Data: %v", err)
-	}
-
-	mock.mu.Lock()
-	defer mock.mu.Unlock()
-	if body := mock.enqueues[0].body; strings.Contains(body, "X-Spam-Flag: NO") {
-		t.Errorf("forged verdict left our systems on a relayed message:\n%s", body)
 	}
 }

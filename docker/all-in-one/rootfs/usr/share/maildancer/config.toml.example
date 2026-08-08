@@ -155,8 +155,29 @@ message_ttl = "168h"
 hostname = "mail.example.com"
 
 # --- spam check ---
+#
+# reject_threshold is deliberately unset, which leaves it at 0 and defers the
+# reject decision entirely to rspamd's own action. That is the intended split:
+# smtpd rejects what the checker is confident about ("reject early, never
+# bounce"), and everything below that is not a site decision at all -- where a
+# flagged-but-accepted message goes belongs to the user, via Sieve.
 [spamcheck]
 enabled = true
+
+# Stamp the verdict so delivery-time filtering can act on it. This is the only
+# channel between the scan and a Sieve script, which sees the message bytes and
+# nothing else -- with it off, a flagged message is indistinguishable from ham
+# on arrival and no rule, server- or client-side, can file it.
+#
+# Stamps X-Spam-Flag (YES/NO), X-Spam-Value, X-Spam-Score, X-Spam-Status and
+# X-Spam-Checker, and removes any inbound X-Spam-* so a sender cannot forge a
+# verdict past a rule. Left off, inbound X-Spam-* headers are passed through
+# untouched, for a deployment sitting behind another filter that sets them.
+#
+# Write threshold rules against X-Spam-Value, not X-Spam-Score: it is the
+# RFC 5235 0..10 integer, and Sieve's only numeric comparator
+# (i;ascii-numeric) cannot compare a decimal.
+add_headers = true
 
 [[spamcheck.checkers]]
 type = "rspamd"

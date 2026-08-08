@@ -63,7 +63,18 @@ path = "/metrics"
 #                                # reject = 5xx error if all checkers fail
 # reject_threshold = 15.0        # Score at or above which to reject (5xx)
 # tempfail_threshold = 0.0       # Score at or above which to defer (4xx), 0 = disabled
-# add_headers = false            # Add X-Spam-* headers to messages (default: false)
+# add_headers = false            # Stamp the verdict on accepted messages (default: false).
+#                                # Adds X-Spam-Flag (YES/NO), X-Spam-Value,
+#                                # X-Spam-Score, X-Spam-Status, X-Spam-Checker, and
+#                                # strips any inbound X-Spam-* so a sender cannot
+#                                # forge a verdict past a filtering rule. Off, inbound
+#                                # X-Spam-* is passed through for deployments behind
+#                                # another filter.
+#                                # This is the only channel from the scan to
+#                                # delivery-time Sieve filtering. Compare
+#                                # X-Spam-Value (the RFC 5235 0..10 integer), not
+#                                # X-Spam-Score -- Sieve's i;ascii-numeric
+#                                # comparator cannot compare a decimal.
 #
 # [[spamcheck.checkers]]
 # type = "rspamd"

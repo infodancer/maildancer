@@ -144,6 +144,55 @@ Items mail-session cannot answer -- `remote-host`, `remote-ip`, `domain` --
 report unsupported too. It runs privilege-dropped after the SMTP conversation
 has ended and never saw the client.
 
+## The system default script
+
+Filing has to work for users who have written no Sieve at all -- there is still
+no editor, so most never will. mail-session therefore falls back to a site-wide
+script when the recipient has none.
+
+**Location: the root of the mail data tree, `system.sieve`, mode 0644.** Not the
+config tree: by the time a script is read, mail-session has dropped to the
+recipient's uid and cannot reach the config tree at all (the same constraint
+that makes a domain `forwards` file unreadable there). The data root is
+traversable by every recipient and the script holds no secrets. The shipped copy
+lives at `/usr/share/maildancer/system.sieve` in the all-in-one image; installing
+it is a deliberate `cp`, so filing policy is never switched on by an upgrade.
+
+**User script replaces it; the two are never chained.** Partly because RFC 5228
+implicit keep and `fileinto` do not compose across independent scripts without
+inventing semantics the RFC does not define -- but mainly because a user who
+writes rules owns their policy. Re-applying the site default on top would
+quietly overrule a deliberate choice to leave flagged mail in the inbox.
+
+"Exists but is unusable" is distinct from "does not exist": a user whose script
+is unreadable or over the size cap gets *no* filtering, not the site default in
+its place. Falling back there would hand their policy back to the server without
+anything saying so.
+
+**The default keys on `spam-flag`, not a threshold.** rspamd already refuses what
+it is confident about at SMTP time; the default covers the band below that, and
+inventing a second number here would be a worse copy of a decision rspamd makes
+with far more context. The script documents the `spam-value` threshold form for
+operators who want to be stricter.
+
+A broken system script falls through to implicit keep, like any other script --
+which matters more here, because it fails for every account at once rather than
+one.
+
+### It does not train Bayes, and must not start
+
+Training fires on IMAP `MOVE`/`COPY` across the Junk boundary (`triggerLearn` in
+imapd's `storeops.go`). Delivery-time filing performs no IMAP operation, so it
+trains nothing -- correct by construction, and worth keeping that way.
+
+The distinction is what makes the corpus useful. Auto-filed mail is the
+classifier's *own* guess; training on it would reinforce whatever it already
+believes. The signal worth learning from is the user disagreeing: moving a
+message out of Junk (ham -- a false positive) or into it (spam -- a false
+negative). Enabling this default should, over time, start populating the ham
+side, which is otherwise starved because nothing lands in Junk to be dragged
+back out.
+
 ## Best practices retained (for the delivery-side phase)
 
 - **The MTA marks; the MDA files.** rspamd/smtpd only decide a verdict; the

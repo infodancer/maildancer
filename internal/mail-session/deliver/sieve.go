@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/mail"
 	"net/textproto"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -70,43 +72,35 @@ func (p sievePolicy) RedirectAllowed(_ context.Context, _ *interp.RuntimeData, a
 	return true, nil
 }
 
-// runSieve loads and executes the recipient's Sieve script.
+// systemSieveName is the site-wide fallback script, read from the root of the
+// mail data tree.
+//
+// The data tree and not the config tree, because by the time a script is read
+// mail-session has dropped to the recipient's uid and cannot reach the config
+// tree at all (see the domain forwards note in auth/domain/filesystem.go). The
+// data root is traversable by every recipient, and the script holds no secrets.
+const systemSieveName = "system.sieve"
+
+// runSieve loads and executes a Sieve script for this delivery: the recipient's
+// own if they have one, otherwise the site-wide default.
+//
+// The two are alternatives, never chained. A user script REPLACES the default
+// rather than layering under it -- partly because RFC 5228 implicit keep and
+// fileinto do not compose across independent scripts without inventing
+// semantics the RFC does not define, but mainly because a user who writes rules
+// owns their policy. Re-applying the site default on top would quietly overrule
+// a deliberate choice to leave flagged mail in the inbox.
 //
 // Returns (nil, false) when there is no script or when loading, parsing, or
 // execution fails -- the caller falls through to normal delivery (RFC 5228
-// section 2.10.6: implicit keep on error). Errors are logged, never fatal.
+// section 2.10.6: implicit keep on error). Errors are logged, never fatal. That
+// matters more for the system script than the user one: a syntax error there
+// would otherwise break delivery for every account on the server at once.
 func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req DeliverRequest, msg []byte) (*sieveOutcome, bool) {
-	provider, ok := dom.MessageStore.(msgstore.SieveScriptProvider)
-	if !ok {
-		return nil, false
-	}
-
 	mailbox := msgstore.ParseRecipient(req.Recipient).Address
-	rc, err := provider.SieveScript(ctx, mailbox)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			slog.Warn("opening sieve script",
-				slog.String("msgid", req.MsgID),
-				slog.String("mailbox", mailbox),
-				slog.String("error", err.Error()))
-		}
-		return nil, false
-	}
-	defer func() { _ = rc.Close() }()
 
-	raw, err := io.ReadAll(io.LimitReader(rc, maxSieveScriptSize+1))
-	if err != nil {
-		slog.Warn("reading sieve script",
-			slog.String("msgid", req.MsgID),
-			slog.String("mailbox", mailbox),
-			slog.String("error", err.Error()))
-		return nil, false
-	}
-	if len(raw) > maxSieveScriptSize {
-		slog.Warn("sieve script exceeds size cap, ignoring",
-			slog.String("msgid", req.MsgID),
-			slog.String("mailbox", mailbox),
-			slog.Int("cap_bytes", maxSieveScriptSize))
+	raw, source, ok := dlvr.loadSieveScript(ctx, dom, req, mailbox)
+	if !ok {
 		return nil, false
 	}
 
@@ -115,6 +109,7 @@ func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req Del
 		slog.Warn("parsing sieve script",
 			slog.String("msgid", req.MsgID),
 			slog.String("mailbox", mailbox),
+			slog.String("source", source),
 			slog.String("error", err.Error()))
 		return nil, false
 	}
@@ -151,11 +146,80 @@ func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req Del
 	slog.Debug("sieve script executed",
 		slog.String("msgid", req.MsgID),
 		slog.String("mailbox", mailbox),
+		slog.String("source", source),
 		slog.Int("fileinto", len(outcome.fileinto)),
 		slog.Int("redirects", len(outcome.redirects)),
 		slog.Bool("keep", outcome.keep),
 		slog.Bool("reject", outcome.rejectReason != ""))
 	return outcome, true
+}
+
+// loadSieveScript returns the script to run for this delivery, and a label
+// naming which one it was, for logs. It tries the recipient's own script first
+// and falls back to the site-wide default; the first one that exists wins,
+// whether or not it later parses.
+//
+// "Exists but is unusable" deliberately does not fall through to the next
+// candidate. A user whose script is too large or unreadable gets no filtering,
+// not the site default silently applied in its place -- falling back there would
+// mean a broken personal script quietly hands policy back to the server.
+func (dlvr *Deliverer) loadSieveScript(ctx context.Context, dom *domain.Domain, req DeliverRequest, mailbox string) ([]byte, string, bool) {
+	if provider, ok := dom.MessageStore.(msgstore.SieveScriptProvider); ok {
+		rc, err := provider.SieveScript(ctx, mailbox)
+		switch {
+		case err == nil:
+			defer func() { _ = rc.Close() }()
+			raw, ok := readSieveScript(rc, req.MsgID, mailbox, "user")
+			return raw, "user", ok
+		case !errors.Is(err, fs.ErrNotExist):
+			slog.Warn("opening sieve script",
+				slog.String("msgid", req.MsgID),
+				slog.String("mailbox", mailbox),
+				slog.String("error", err.Error()))
+			return nil, "", false
+		}
+	}
+
+	path := filepath.Join(dlvr.cfg.DataPath(), systemSieveName)
+	f, err := os.Open(path)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			// Not fatal, but worth saying out loud: an unreadable site script
+			// means every user without their own is silently unfiltered.
+			slog.Warn("opening system sieve script",
+				slog.String("msgid", req.MsgID),
+				slog.String("path", path),
+				slog.String("error", err.Error()))
+		}
+		return nil, "", false
+	}
+	defer func() { _ = f.Close() }()
+
+	raw, ok := readSieveScript(f, req.MsgID, mailbox, "system")
+	return raw, "system", ok
+}
+
+// readSieveScript reads a script subject to the size cap. Over-cap scripts are
+// ignored rather than truncated: half a script is not a safer script.
+func readSieveScript(r io.Reader, msgid, mailbox, source string) ([]byte, bool) {
+	raw, err := io.ReadAll(io.LimitReader(r, maxSieveScriptSize+1))
+	if err != nil {
+		slog.Warn("reading sieve script",
+			slog.String("msgid", msgid),
+			slog.String("mailbox", mailbox),
+			slog.String("source", source),
+			slog.String("error", err.Error()))
+		return nil, false
+	}
+	if len(raw) > maxSieveScriptSize {
+		slog.Warn("sieve script exceeds size cap, ignoring",
+			slog.String("msgid", msgid),
+			slog.String("mailbox", mailbox),
+			slog.String("source", source),
+			slog.Int("cap_bytes", maxSieveScriptSize))
+		return nil, false
+	}
+	return raw, true
 }
 
 // digestActions reduces the interpreter's run to a sieveOutcome. The

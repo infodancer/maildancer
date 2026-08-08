@@ -674,6 +674,19 @@ func (s *Session) Data(r io.Reader) error {
 		authResults = buildAuthResultsHeader(checkResult.AuthResults)
 	}
 
+	// The spam verdict, for the benefit of delivery-time filtering. smtpd
+	// rejects what the checker is confident about and stops there; where a
+	// flagged-but-accepted message goes is per-user policy, decided by Sieve at
+	// delivery (maildancer#133). These headers are the only channel to it.
+	//
+	// checkResult is nil when the check failed under fail_mode = open. Nothing
+	// is stamped then: "X-Spam-Flag: NO" would assert a clean verdict that was
+	// never reached.
+	var spamHeaders string
+	if checkResult != nil && s.backend.spamConfig.AddHeaders {
+		spamHeaders = buildSpamHeaders(checkResult.Headers)
+	}
+
 	tlsState, isTLS := sessionConnTLSState(s.conn)
 	received := buildReceivedHeader(ReceivedInfo{
 		Helo:           s.helo,
@@ -693,7 +706,7 @@ func (s *Session) Data(r io.Reader) error {
 		// rules are resolved by the mail-session delivery path, which signals a
 		// configured forward by returning a *RedirectError.
 		deliveredFolder, deliverErr := s.backend.smDelivery.Deliver(ctx,
-			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, s.messageBody(received+authResults, tmp))
+			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, s.messageBody(received+authResults+spamHeaders, tmp))
 
 		var redirectErr *RedirectError
 		redirected := errors.As(deliverErr, &redirectErr)

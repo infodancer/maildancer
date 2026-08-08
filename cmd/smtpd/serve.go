@@ -116,7 +116,6 @@ func createSpamChecker(cfg config.Config, logger *slog.Logger) (spamcheck.Checke
 		FailMode:          spamcheck.FailMode(cfg.SpamCheck.FailMode),
 		RejectThreshold:   cfg.SpamCheck.RejectThreshold,
 		TempFailThreshold: cfg.SpamCheck.TempFailThreshold,
-		AddHeaders:        cfg.SpamCheck.AddHeaders,
 	}
 	return spamcheck.NewMultiChecker(checkers, multiConfig), cfg.SpamCheck
 }

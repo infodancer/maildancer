@@ -674,6 +674,19 @@ func (s *Session) Data(r io.Reader) error {
 		authResults = buildAuthResultsHeader(checkResult.AuthResults)
 	}
 
+	// The spam verdict, as advisory headers for the recipient's own client-side
+	// filters. Server-side filing does not read these -- it acts on the verdict
+	// carried out of band on the delivery channel, since an in-band label rides
+	// in on data the sender chose (docs/spam-verdict-and-filing.md).
+	//
+	// checkResult is nil when the check failed under fail_mode = open. Nothing
+	// is stamped then: "X-Spam-Flag: NO" would assert a clean verdict that was
+	// never reached.
+	var spamHeaders string
+	if checkResult != nil && s.backend.spamConfig.AddHeaders {
+		spamHeaders = buildSpamHeaders(checkResult.Headers)
+	}
+
 	tlsState, isTLS := sessionConnTLSState(s.conn)
 	received := buildReceivedHeader(ReceivedInfo{
 		Helo:           s.helo,
@@ -693,7 +706,7 @@ func (s *Session) Data(r io.Reader) error {
 		// rules are resolved by the mail-session delivery path, which signals a
 		// configured forward by returning a *RedirectError.
 		deliveredFolder, deliverErr := s.backend.smDelivery.Deliver(ctx,
-			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, s.messageBody(received+authResults, tmp))
+			s.from, s.recipients[0], s.clientIP, s.helo, now, false, msgid, s.messageBody(received+authResults+spamHeaders, tmp))
 
 		var redirectErr *RedirectError
 		redirected := errors.As(deliverErr, &redirectErr)

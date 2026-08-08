@@ -63,7 +63,17 @@ path = "/metrics"
 #                                # reject = 5xx error if all checkers fail
 # reject_threshold = 15.0        # Score at or above which to reject (5xx)
 # tempfail_threshold = 0.0       # Score at or above which to defer (4xx), 0 = disabled
-# add_headers = false            # Add X-Spam-* headers to messages (default: false)
+# add_headers = false            # Stamp the verdict on accepted messages (default: false).
+#                                # Adds X-Spam-Flag (YES/NO), X-Spam-Value,
+#                                # X-Spam-Score, X-Spam-Status, X-Spam-Checker.
+#                                # ADVISORY only -- for the recipient's client-side
+#                                # filters, not for server-side policy, which acts on
+#                                # the verdict carried out of band on the delivery
+#                                # channel. Inbound X-Spam-* is left in place; ours is
+#                                # prepended above it and nothing is rewritten.
+#                                # Threshold rules want X-Spam-Value (the RFC 5235
+#                                # 0..10 integer), not X-Spam-Score -- i;ascii-numeric
+#                                # cannot compare a decimal.
 #
 # [[spamcheck.checkers]]
 # type = "rspamd"

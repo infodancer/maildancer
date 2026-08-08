@@ -155,8 +155,28 @@ message_ttl = "168h"
 hostname = "mail.example.com"
 
 # --- spam check ---
+#
+# reject_threshold is deliberately unset, which leaves it at 0 and defers the
+# reject decision entirely to rspamd's own action. That is the intended split:
+# smtpd rejects what the checker is confident about ("reject early, never
+# bounce"), and everything below that is not a site decision at all -- where a
+# flagged-but-accepted message goes belongs to the user, via Sieve.
 [spamcheck]
 enabled = true
+
+# Stamp the verdict on accepted messages as X-Spam-Flag (YES/NO), X-Spam-Value,
+# X-Spam-Score, X-Spam-Status and X-Spam-Checker.
+#
+# These are ADVISORY -- for the recipient's own client-side filters and for
+# reading by eye. Server-side filing does not use them: it acts on the verdict
+# carried out of band on the delivery channel, because a header rides in on data
+# the sender chose. An inbound message keeps any X-Spam-* it arrived with, ours
+# goes above it, and nothing is rewritten.
+#
+# Client-side rules comparing a threshold want X-Spam-Value, not X-Spam-Score:
+# it is the RFC 5235 0..10 integer, and a decimal cannot be compared by
+# Sieve's only numeric comparator (i;ascii-numeric, RFC 4790).
+add_headers = true
 
 [[spamcheck.checkers]]
 type = "rspamd"

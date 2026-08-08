@@ -30,8 +30,9 @@ type MultiConfig struct {
 	// TempFailThreshold is the score threshold for temp failure.
 	TempFailThreshold float64
 
-	// AddHeaders indicates whether to add headers from all checkers.
-	AddHeaders bool
+	// Headers reported by the checkers are always aggregated. Whether they
+	// reach the message is a delivery-side decision (SpamCheckConfig.AddHeaders),
+	// so there is deliberately no knob for it here.
 }
 
 // NewMultiChecker creates a new multi-checker with the given checkers.
@@ -86,11 +87,12 @@ func (m *MultiChecker) Check(ctx context.Context, message io.Reader, opts CheckO
 			authResults = result.AuthResults
 		}
 
-		// Collect headers from all checkers
-		if m.config.AddHeaders && result.Headers != nil {
-			for k, v := range result.Headers {
-				aggregatedHeaders[k] = v
-			}
+		// Collect headers from all checkers. Whether any of them are stamped on
+		// the message is decided at delivery, not here -- a checker reports what
+		// it found, and gating collection on that policy is what made
+		// add_headers unreachable for a single-checker deployment (#241).
+		for k, v := range result.Headers {
+			aggregatedHeaders[k] = v
 		}
 	}
 

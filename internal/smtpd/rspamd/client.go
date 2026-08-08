@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -206,6 +207,10 @@ func (c *Checker) buildHeaders(r *RspamdResult) map[string]string {
 
 	// X-Spam-Score
 	headers["X-Spam-Score"] = fmt.Sprintf("%.2f", r.Score)
+
+	// X-Spam-Value is the RFC 5235 0..10 normalization. It exists because
+	// X-Spam-Score cannot be compared from a Sieve script -- see spamValue.
+	headers["X-Spam-Value"] = strconv.Itoa(spamValue(r.Score, r.RequiredScore))
 
 	// X-Spam-Flag
 	if r.IsSpam {

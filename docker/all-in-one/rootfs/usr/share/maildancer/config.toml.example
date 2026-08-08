@@ -182,6 +182,23 @@ add_headers = true
 type = "rspamd"
 url = "http://rspamd:11333"
 
+# Filing flagged mail into Junk is NOT configured here -- it is a Sieve script,
+# so users can override it. mail-session runs the recipient's own .sieve if they
+# have one, and otherwise a site-wide default read from the root of the data
+# tree (domains_data_path below), as system.sieve.
+#
+# There is no key for it because the path is not configurable: mail-session has
+# dropped to the recipient's uid by then and can only read the data tree.
+# Install the shipped default to switch site-wide filing on:
+#
+#   cp /usr/share/maildancer/system.sieve /opt/infodancer/domains/system.sieve
+#
+# Delete it to switch filing off again.
+#
+# Filing does not depend on add_headers. It reads the verdict carried out of
+# band on the delivery channel, which travels whether or not the advisory
+# headers above are stamped.
+
 # --- queue manager (outbound delivery driver) ---
 [queue-manager]
 hostname = "mail.example.com"

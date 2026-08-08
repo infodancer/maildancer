@@ -133,6 +133,12 @@ func (dlvr *Deliverer) runSieve(ctx context.Context, dom *domain.Domain, req Del
 		interp.EnvelopeStatic{From: req.Sender, To: req.Recipient},
 		interp.MessageStatic{Size: len(msg), Header: hdr, RawMessage: msg})
 
+	// RFC 5183 environment items, and the only way a script can read the spam
+	// verdict: it is carried out of band so a sender cannot forge it, which also
+	// keeps it out of the message the script can see. Without a provider here,
+	// go-sieve treats every item as unsupported.
+	data.Env = newSieveEnv(req.Spam)
+
 	if err := script.Execute(ctx, data); err != nil {
 		slog.Warn("executing sieve script",
 			slog.String("msgid", req.MsgID),

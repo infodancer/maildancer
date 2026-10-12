@@ -20,7 +20,7 @@ require (
 	github.com/redis/go-redis/v9 v9.20.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/term v0.46.0
-	google.golang.org/grpc v1.82.1
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.51.0
 )

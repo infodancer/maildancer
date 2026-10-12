@@ -1,8 +1,16 @@
 #!/bin/bash
 #
-# Pre-push hook: secret scan (gitleaks) + all checks (build, lint, vulncheck,
-# test) before pushing.
-# Install with: task hooks:install
+# Pre-push hook: secret scan (gitleaks), then the checks that finish in
+# seconds (fmt, build). Install with: task hooks:install
+#
+# Lint, vulncheck and the race tests are deliberately NOT here. git opens the
+# connection to the remote before it runs this hook and only sends the pack
+# afterwards; with the full `task all` in between, the session sat idle for
+# minutes and GitHub closed it, so every push ended in "send-pack: unexpected
+# disconnect while reading sideband packet" right after the checks passed
+# (2026-10-12, reproduced over ssh and https). A hook that cannot let a push
+# through is no check at all. CI runs the same lint, vulncheck and tests on
+# every push and PR; `task all` is still there to run them by hand.
 #
 # Pushes that only delete remote branches carry no new code, so the checks
 # are skipped for them. Git reports a deletion as an all-zeros local sha on
@@ -42,6 +50,7 @@ else
     echo "  Install it with: task install:deps"
 fi
 
-task all
+task fmt
+task build
 
 echo "All pre-push checks passed!"

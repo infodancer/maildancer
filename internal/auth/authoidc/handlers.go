@@ -203,7 +203,7 @@ func (s *Server) serveDiscovery(w http.ResponseWriter, r *http.Request, de *doma
 		IDTokenSigningAlgValuesSupported:  algs,
 		ScopesSupported:                   []string{"openid", "email", "profile"},
 		TokenEndpointAuthMethodsSupported: []string{"none", "client_secret_post"},
-		ClaimsSupported:                   []string{"sub", "email", "name", "iss", "aud", "exp", "iat"},
+		ClaimsSupported:                   []string{"sub", "email", "email_verified", "name", "iss", "aud", "exp", "iat"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 	}
 	doc.RegistrationEndpoint = base + "/register"
@@ -490,6 +490,7 @@ func (s *Server) serveUserinfo(w http.ResponseWriter, r *http.Request, de *domai
 	}
 	if email, ok := tok.Get("email"); ok {
 		claims["email"] = email
+		claims["email_verified"] = true
 	}
 	if name, ok := tok.Get("name"); ok {
 		claims["name"] = name
@@ -708,6 +709,10 @@ func (s *Server) validateParams(de *domainEntry, params authorizeParams) error {
 	return nil
 }
 
+// Tokens carry email_verified = true: the email is the mailbox the user just
+// authenticated to with its own credentials, which is the strongest
+// verification an address can have. Relying parties that gate on the claim
+// (OIDC Core 5.1) would otherwise refuse the token.
 func issueJWT(k *loadedKey, issuer, audience, sub, email, name string, ttl time.Duration) (string, error) {
 	now := time.Now()
 	b := jwt.NewBuilder().
@@ -716,7 +721,8 @@ func issueJWT(k *loadedKey, issuer, audience, sub, email, name string, ttl time.
 		Audience([]string{audience}).
 		IssuedAt(now).
 		Expiration(now.Add(ttl)).
-		Claim("email", email)
+		Claim("email", email).
+		Claim("email_verified", true)
 	if name != "" {
 		b = b.Claim("name", name)
 	}
@@ -744,6 +750,7 @@ func issueIDToken(k *loadedKey, issuer, audience, sub, email, nonce string, ttl 
 		IssuedAt(now).
 		Expiration(now.Add(ttl)).
 		Claim("email", email).
+		Claim("email_verified", true).
 		Claim("auth_time", now.Unix())
 	if nonce != "" {
 		b = b.Claim("nonce", nonce)

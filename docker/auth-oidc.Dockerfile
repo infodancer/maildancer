@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/auth-oi
 # UID 65532 create oidc-state.db on first boot without a host-side chown.
 RUN mkdir -p /staging/var/lib/auth-oidc
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=builder /out/auth-oidc /auth-oidc
 COPY --from=builder --chown=nonroot:nonroot /staging/var/lib/auth-oidc /var/lib/auth-oidc
 ENTRYPOINT ["/auth-oidc"]
